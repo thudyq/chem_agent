@@ -19,6 +19,9 @@ AGENT.md
 .DS_Store
 Thumbs.db
 
+#其他配置文件
+.chktexrc
+
 # 环境变量与密钥（禁止提交；.env.example 仍被跟踪）
 .env
 .env.local

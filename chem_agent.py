@@ -4,9 +4,10 @@ chem_agent.py
 =============
 有机化学知识智能体 - 主入口脚本。
 
-Day 1   : validate_mol / get_molecular_formula —— RDKit 基础与分子式计算。
-Day 7-8 : ask_llm —— 接入 OpenAI 兼容大模型 API（DeepSeek / SiliconFlow），
-          temperature=0.2、重试 3 次、密钥从 .env 读取。
+Day 1    : validate_mol / get_molecular_formula —— RDKit 基础与分子式计算。
+Day 7-8  : ask_llm —— 接入 OpenAI 兼容大模型 API（DeepSeek / SiliconFlow），
+           temperature=0.2、重试 3 次、密钥从 .env 读取。
+Day 11-12: main_process —— 串联名称解析/知识库/结构渲染/LLM，RAG 主控流程。
 """
 
 import os
@@ -17,6 +18,10 @@ import requests
 from rdkit import Chem
 from rdkit.Chem import Descriptors
 from rdkit.Chem.rdMolDescriptors import CalcMolFormula
+
+from utils.name_resolver import name_to_smiles
+from utils.structure_render import smiles_to_tikz
+from utils.db_helper import query_property
 
 # === LLM 默认参数 ===
 DEFAULT_TEMPERATURE = 0.2   # 低温度保证事实性
@@ -172,6 +177,96 @@ def ask_llm(
 
 
 # --------------------------------------------------------------------------- #
+# Day 11-12：主控流程（RAG 基础）
+# --------------------------------------------------------------------------- #
+_SYSTEM_PROMPT = (
+    "你是一位严谨的有机化学知识助手。请用准确、流畅的中文回答用户的化学问题。"
+    "优先依据提供的化合物数据（分子式、分子量、SMILES、结构式代码）；"
+    "回答应涵盖关键结构特征、官能团、基本理化性质；结构式以 chemfig 代码块呈现。"
+    "若提供的数据缺失，可基于化学知识补充，但需明确标注为推测。"
+)
+
+
+def _build_prompt(user_input, smiles, props, chemfig):
+    """组装 RAG prompt：用户问题 + 知识库数据 + 结构式代码。"""
+    lines = [f"用户问题/输入：{user_input}", ""]
+
+    if props:
+        lines.append("已知化合物信息（来自本地知识库）：")
+        for key in ("name", "en_name", "iupac_name", "molecular_formula",
+                    "mol_weight", "xlogp", "melting_point", "boiling_point",
+                    "density", "cas"):
+            val = props.get(key)
+            if val not in (None, "", []):
+                lines.append(f"- {_FIELD_LABELS.get(key, key)}：{val}")
+    elif smiles:
+        lines.append("（该化合物不在本地知识库，以下为在线解析结果）")
+        lines.append(f"- SMILES：{smiles}")
+    else:
+        lines.append("（未能解析出明确化合物，请基于问题本身作答）")
+    lines.append("")
+
+    if chemfig:
+        lines.append("结构式代码（LaTeX chemfig，可复制到 Overleaf 编译）：")
+        lines.append(chemfig)
+        lines.append("")
+
+    lines.append("请综合以上信息用中文作答，并引用上面的结构式代码。")
+    return "\n".join(lines)
+
+
+_FIELD_LABELS = {
+    "name": "中文名", "en_name": "英文名", "iupac_name": "IUPAC名",
+    "molecular_formula": "分子式", "mol_weight": "分子量", "xlogp": "XLogP",
+    "melting_point": "熔点", "boiling_point": "沸点", "density": "密度",
+    "cas": "CAS号",
+}
+
+
+def main_process(user_input: str) -> dict:
+    """主控流程：名称/问题 -> SMILES + 性质数据 + 结构式代码 + 中文回答。
+
+    顺序：
+        1. 先查本地知识库（支持中/英/IUPAC 名）；命中即拿到 SMILES 与性质。
+        2. 库中无 SMILES 时，回退到 PubChem 在线解析（英文/IUPAC 名）。
+        3. SMILES -> chemfig 结构式代码。
+        4. 组装 RAG prompt 调用 LLM 生成中文回答。
+
+    任何子环节失败均降级处理，返回部分结果（对应字段为 None/""），绝不抛异常。
+
+    返回:
+        dict: {input, smiles, properties, chemfig, answer}
+    """
+    print(f"\n[main_process] 输入: {user_input!r}")
+
+    props = query_property(user_input)
+    smiles = props.get("smiles") if props else None
+    if smiles:
+        print(f"[main_process] 知识库命中: {props.get('name')} ({props.get('molecular_formula')})")
+
+    # 库中无 SMILES -> PubChem 在线解析（中文名 PubChem 无法识别，
+    # 主要服务于知识库外、英文/IUPAC 命名的化合物）
+    if not smiles:
+        smiles = name_to_smiles(user_input)
+
+    chemfig = smiles_to_tikz(smiles) if smiles else ""
+
+    print("[main_process] 调用 LLM 生成回答 ...")
+    prompt = _build_prompt(user_input, smiles, props, chemfig)
+    answer = ask_llm(prompt, system_prompt=_SYSTEM_PROMPT)
+
+    result = {
+        "input": user_input,
+        "smiles": smiles,
+        "properties": props,
+        "chemfig": chemfig,
+        "answer": answer,
+    }
+    print("[main_process] 完成。")
+    return result
+
+
+# --------------------------------------------------------------------------- #
 # 测试入口
 # --------------------------------------------------------------------------- #
 def _day1_smoke():
@@ -203,10 +298,38 @@ def _ask_llm_smoke():
         print("\n[结果] ask_llm 调用失败，请检查 API_KEY / BASE_URL / 网络。")
 
 
+def _main_process_smoke(query="苯酚"):
+    """Day 11-12 冒烟测试：跑通「名称 -> 结构式 + 性质 + 中文回答」全链路。"""
+    print("=" * 60)
+    print(f"Day 11-12 - main_process 端到端测试（{query}）")
+    print("=" * 60)
+    result = main_process(query)
+    print("\n" + "=" * 60)
+    print("[结果汇总]")
+    print(f"  输入: {result['input']}")
+    print(f"  SMILES: {result['smiles']}")
+    if result["properties"]:
+        p = result["properties"]
+        print(f"  知识库: {p.get('name')} | {p.get('molecular_formula')} | MW={p.get('mol_weight')}")
+    else:
+        print("  知识库: 未命中（走 PubChem 在线解析）")
+    print(f"  chemfig: {'已生成(' + str(len(result['chemfig'])) + '字符)' if result['chemfig'] else '空'}")
+    print("\n[模型回答]")
+    print(result["answer"] if result["answer"] else "（LLM 调用失败或未配置）")
+    print("=" * 60)
+
+
 if __name__ == "__main__":
-    # 用法: python chem_agent.py        运行 Day1 冒烟测试
-    #       python chem_agent.py --llm  额外运行 ask_llm 联调测试
+    # 用法: python chem_agent.py              运行 Day1 冒烟测试
+    #       python chem_agent.py --llm        额外运行 ask_llm 联调测试
+    #       python chem_agent.py --main 苯酚  运行 main_process 端到端测试
     import sys
-    _day1_smoke()
-    if "--llm" in sys.argv:
-        _ask_llm_smoke()
+    argv = sys.argv[1:]
+    if "--main" in argv:
+        idx = argv.index("--main")
+        query = argv[idx + 1] if idx + 1 < len(argv) else "苯酚"
+        _main_process_smoke(query)
+    else:
+        _day1_smoke()
+        if "--llm" in argv:
+            _ask_llm_smoke()
