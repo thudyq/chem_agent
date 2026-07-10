@@ -3,6 +3,7 @@ build/
 *.o
 *.exe
 *.out
+latex_tests/
 
 # VS Code 本地配置
 .vscode/
