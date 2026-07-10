@@ -71,19 +71,14 @@ result = st.session_state.result
 if result is not None:
     st.divider()
 
-    # ---- 中文解答 ----
-    st.markdown("### 📝 解答")
-    if result["answer"]:
-        st.markdown(result["answer"])
-    else:
-        st.error("LLM 调用失败。请检查 .env 中的 API_KEY / BASE_URL / MODEL 配置与网络。")
-
     # ---- 结构式：PNG 缩略图 + chemfig 代码 ----
     if result["smiles"]:
         st.markdown("### 🧬 结构式")
         png = render_png(result["smiles"])
         if png:
             st.image(png, caption="结构式预览（RDKit 渲染）")
+        else:
+            st.caption("（RDKit 图像不可用，请参考下方 chemfig 代码）")
 
     if result["chemfig"]:
         st.markdown(
@@ -91,6 +86,13 @@ if result is not None:
             "（需在导言区加 `\\usepackage{chemfig}` 与 `\\usepackage{mol2chemfig}`）"
         )
         st.code(result["chemfig"], language="latex")
+
+    # ---- 文字说明 ----
+    st.markdown("### 📝 说明")
+    if result["answer"]:
+        st.markdown(result["answer"])
+    else:
+        st.error("LLM 调用失败。请检查 .env 中的 API_KEY / BASE_URL / MODEL 配置与网络。")
 
     # ---- 详细信息 ----
     with st.expander("🔧 详细信息"):

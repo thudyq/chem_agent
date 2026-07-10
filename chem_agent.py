@@ -181,14 +181,15 @@ def ask_llm(
 # --------------------------------------------------------------------------- #
 _SYSTEM_PROMPT = (
     "你是一位严谨的有机化学知识助手。请用准确、流畅的中文回答用户的化学问题。"
-    "优先依据提供的化合物数据（分子式、分子量、SMILES、结构式代码）；"
-    "回答应涵盖关键结构特征、官能团、基本理化性质；结构式以 chemfig 代码块呈现。"
+    "优先依据提供的化合物数据（分子式、分子量、SMILES 等）；"
+    "回答应涵盖关键结构特征、官能团、基本理化性质，并对结构式做文字描述。"
+    "注意：结构式的 chemfig 代码与图像已由界面单独展示，你无需在回答中输出 chemfig 代码或任何 LaTeX，请专注于文字说明。"
     "若提供的数据缺失，可基于化学知识补充，但需明确标注为推测。"
 )
 
 
-def _build_prompt(user_input, smiles, props, chemfig):
-    """组装 RAG prompt：用户问题 + 知识库数据 + 结构式代码。"""
+def _build_prompt(user_input, smiles, props):
+    """组装 RAG prompt：用户问题 + 知识库数据（不含 chemfig 代码，避免 LLM 重复输出）。"""
     lines = [f"用户问题/输入：{user_input}", ""]
 
     if props:
@@ -199,6 +200,8 @@ def _build_prompt(user_input, smiles, props, chemfig):
             val = props.get(key)
             if val not in (None, "", []):
                 lines.append(f"- {_FIELD_LABELS.get(key, key)}：{val}")
+        if smiles:
+            lines.append(f"- SMILES：{smiles}")
     elif smiles:
         lines.append("（该化合物不在本地知识库，以下为在线解析结果）")
         lines.append(f"- SMILES：{smiles}")
@@ -206,12 +209,7 @@ def _build_prompt(user_input, smiles, props, chemfig):
         lines.append("（未能解析出明确化合物，请基于问题本身作答）")
     lines.append("")
 
-    if chemfig:
-        lines.append("结构式代码（LaTeX chemfig，可复制到 Overleaf 编译）：")
-        lines.append(chemfig)
-        lines.append("")
-
-    lines.append("请综合以上信息用中文作答，并引用上面的结构式代码。")
+    lines.append("请综合以上信息用中文作答，对分子的结构特征、官能团、理化性质做文字说明。")
     return "\n".join(lines)
 
 
@@ -252,7 +250,7 @@ def main_process(user_input: str) -> dict:
     chemfig = smiles_to_tikz(smiles) if smiles else ""
 
     print("[main_process] 调用 LLM 生成回答 ...")
-    prompt = _build_prompt(user_input, smiles, props, chemfig)
+    prompt = _build_prompt(user_input, smiles, props)
     answer = ask_llm(prompt, system_prompt=_SYSTEM_PROMPT)
 
     result = {
