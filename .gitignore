@@ -13,5 +13,6 @@ AGENT.md
 # 其他常见的临时文件
 *.tmp
 *.log
+*.txt
 .DS_Store
 Thumbs.db
