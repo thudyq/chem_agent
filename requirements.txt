@@ -11,9 +11,10 @@ pyopsin                        # IUPAC 名称本地解析（PubChem 失败时的
 # === 结构式渲染（Day 4-5 使用）===
 mol2chemfigPy3                 # SMILES -> chemfig/TikZ 代码
 
-# === 大模型接入（Day 7-8 使用，提前列出便于一次性安装）===
-openai                         # 兼容 DeepSeek/SiliconFlow 的 OpenAI 格式 SDK
-python-dotenv                  # 读取 .env 中的 API_KEY
+# === 大模型接入（Day 7-8）===
+# 注意：ask_llm 直接用 requests 调 OpenAI 兼容的 /chat/completions 端点，
+#       无需 openai SDK，DeepSeek/SiliconFlow 均兼容。
+python-dotenv                # 读取 .env 中的 API_KEY（可选：缺失时程序有内置兜底解析器）
 
 # === Web 界面（Day 13-14 使用）===
 streamlit                      # 前端交互界面

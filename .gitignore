@@ -10,6 +10,7 @@ latex_tests/
 
 # 内部工作文档（AI 指令）
 AGENT.md
+.omo/
 
 # 其他常见的临时文件
 *.tmp
@@ -17,3 +18,7 @@ AGENT.md
 *.txt
 .DS_Store
 Thumbs.db
+
+# 环境变量与密钥（禁止提交；.env.example 仍被跟踪）
+.env
+.env.local
