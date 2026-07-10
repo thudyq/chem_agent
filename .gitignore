@@ -1,0 +1,17 @@
+# 编译产物
+build/
+*.o
+*.exe
+*.out
+
+# VS Code 本地配置
+.vscode/
+
+# 内部工作文档（AI 指令）
+AGENT.md
+
+# 其他常见的临时文件
+*.tmp
+*.log
+.DS_Store
+Thumbs.db

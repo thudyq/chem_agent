@@ -1,0 +1,19 @@
+# 有机化学知识智能体 - 依赖清单
+# Python 3.9+
+
+# === 核心化学处理 ===
+rdkit                          # 分子结构校验、描述符、绘图
+
+# === 名称解析 ===
+requests                       # 调用 PubChem REST API（HTTP 客户端）
+pyopsin                        # IUPAC 名称本地解析（PubChem 失败时的备选路径，可选）
+
+# === 结构式渲染（Day 4-5 使用）===
+mol2chemfigPy3                 # SMILES -> chemfig/TikZ 代码
+
+# === 大模型接入（Day 7-8 使用，提前列出便于一次性安装）===
+openai                         # 兼容 DeepSeek/SiliconFlow 的 OpenAI 格式 SDK
+python-dotenv                  # 读取 .env 中的 API_KEY
+
+# === Web 界面（Day 13-14 使用）===
+streamlit                      # 前端交互界面
