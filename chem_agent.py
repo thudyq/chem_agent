@@ -181,36 +181,44 @@ def ask_llm(
 # Day 11-12：主控流程（RAG 基础）
 # --------------------------------------------------------------------------- #
 _SYSTEM_PROMPT = (
-    "你是一位严谨的有机化学知识助手。请用准确、流畅的中文回答用户的化学问题。"
-    "优先依据提供的化合物数据（分子式、分子量、SMILES 等）；"
-    "回答应涵盖关键结构特征、官能团、基本理化性质，并对结构式做文字描述。"
-    "注意：结构式的 chemfig 代码与图像已由界面单独展示，你无需在回答中输出 chemfig 代码或任何 LaTeX，请专注于文字说明。"
-    "若提供的数据缺失，可基于化学知识补充，但需明确标注为推测。"
+    "你是一位严谨的有机化学知识助手。请聚焦回答用户提出的具体问题，有的放矢、深入分析。"
+    "回答应条理清晰，复杂问题可分点论述并给出结论。"
+    "重要：不要主动罗列熔点、沸点、密度、分子量等基本理化性质——这些已在界面'详细信息'区展示，"
+    "除非用户问题直接询问某项性质（如'熔点是多少'）才引用对应数值。"
+    "优先基于分子式与 SMILES 做结构、官能团、电子效应、反应性等深入分析。"
+    "结构式的 chemfig 代码与图像已由界面单独展示，无需输出任何 LaTeX。"
+    "若数据缺失可基于化学知识补充，但需标注为推测。"
 )
 
 
 def _build_prompt(user_input, smiles, props):
-    """组装 RAG prompt：用户问题 + 知识库数据（不含 chemfig 代码，避免 LLM 重复输出）。"""
-    lines = [f"用户问题/输入：{user_input}", ""]
+    lines = [f"用户问题：{user_input}", ""]
 
     if props:
-        lines.append("已知化合物信息（来自本地知识库）：")
-        for key in ("name", "en_name", "iupac_name", "molecular_formula",
-                    "mol_weight", "xlogp", "melting_point", "boiling_point",
-                    "density", "cas"):
-            val = props.get(key)
-            if val not in (None, "", []):
-                lines.append(f"- {_FIELD_LABELS.get(key, key)}：{val}")
-        if smiles:
-            lines.append(f"- SMILES：{smiles}")
+        lines.append(f"化合物：{props.get('name', '')}（{props.get('en_name', '')}）")
+        if props.get("molecular_formula"):
+            lines.append(f"分子式：{props['molecular_formula']}")
     elif smiles:
-        lines.append("（该化合物不在本地知识库，以下为在线解析结果）")
-        lines.append(f"- SMILES：{smiles}")
+        lines.append("化合物（在线解析，不在本地知识库）")
     else:
         lines.append("（未能解析出明确化合物，请基于问题本身作答）")
+    if smiles:
+        lines.append(f"SMILES：{smiles}")
     lines.append("")
 
-    lines.append("请综合以上信息用中文作答，对分子的结构特征、官能团、理化性质做文字说明。")
+    # 性质数据压缩为单行上下文，标注"按需引用"避免 LLM 主动罗列
+    if props:
+        prop_parts = []
+        for key in ("mol_weight", "xlogp", "melting_point", "boiling_point", "density", "cas"):
+            val = props.get(key)
+            if val not in (None, "", []):
+                prop_parts.append(f"{_FIELD_LABELS.get(key, key)}={val}")
+        if prop_parts:
+            lines.append("可用性质数据（仅在问题直接涉及时引用，勿主动罗列）：")
+            lines.append("  " + "；".join(prop_parts))
+        lines.append("")
+
+    lines.append("请聚焦回答上面的用户问题，深入分析而非泛泛介绍。")
     return "\n".join(lines)
 
 
@@ -235,18 +243,55 @@ def _is_chinese(text: str) -> bool:
     return bool(_CN_CHAR_RE.search(text or ""))
 
 
-def _translate_compound_name(cn_name: str):
-    prompt = f"中文化合物名称：{cn_name}\n\n请输出对应的英文或 IUPAC 名称。"
-    answer = ask_llm(prompt, system_prompt=_TRANSLATE_SYSTEM, max_tokens=256)
+def _clean_llm_line(answer, none_token=None):
+    # 剥离 <think> 思考链、取末非空行、去首尾标点；命中 none_token 视为空
     if not answer:
         return None
-    # 剥离可能的 <think> 思考链，取最后一个非空行（兼容 reasoning 模型先思考后作答）
     cleaned = re.sub(r"<think>.*?</think>", "", answer, flags=re.DOTALL).strip()
     lines = [ln.strip() for ln in cleaned.splitlines() if ln.strip()]
     if not lines:
         return None
     name = lines[-1].strip("\"'.,;: ()（）")
-    return name or None
+    if not name or (none_token and name.upper() == none_token.upper()):
+        return None
+    return name
+
+
+def _translate_compound_name(cn_name: str):
+    prompt = f"中文化合物名称：{cn_name}\n\n请输出对应的英文或 IUPAC 名称。"
+    answer = ask_llm(prompt, system_prompt=_TRANSLATE_SYSTEM, max_tokens=256)
+    return _clean_llm_line(answer)
+
+
+_QUESTION_MARKERS = (
+    "为什么", "是什么", "是多少", "多少", "怎么", "哪些", "哪种", "吗", "呢",
+    "？", "?", "作用", "性质", "结构", "用途", "熔点", "沸点", "密度",
+    "酸性", "碱性", "官能团", "极性", "溶解度", "毒性", "合成", "制备",
+    "反应", "介绍", "说明", "解释", "比较", "区别",
+)
+
+_EXTRACT_SYSTEM = (
+    "你是一名化学实体识别器。从用户输入中提取化学化合物名称（中文或英文均可）。"
+    "只输出名称本身；若无法识别出化合物名则输出 NONE。"
+)
+
+
+def _looks_like_question(text: str) -> bool:
+    if not text:
+        return False
+    if any(m in text for m in _QUESTION_MARKERS):
+        return True
+    # 无标记时，中文长句兜底判为问题
+    return _is_chinese(text) and len(text) > 12
+
+
+def _extract_compound_name(text: str):
+    prompt = (
+        f"用户输入：{text}\n\n请提取其中的化学化合物名称（中文或英文均可），"
+        f"只输出名称本身。若不含化合物名则输出 NONE。"
+    )
+    answer = ask_llm(prompt, system_prompt=_EXTRACT_SYSTEM, max_tokens=64)
+    return _clean_llm_line(answer, none_token="NONE")
 
 
 def main_process(user_input: str) -> dict:
@@ -261,7 +306,7 @@ def main_process(user_input: str) -> dict:
     任何子环节失败均降级处理，返回部分结果（对应字段为 None/""），绝不抛异常。
 
     返回:
-        dict: {input, smiles, properties, chemfig, answer}
+        dict: {input, is_question, smiles, properties, chemfig, answer}
     """
     print(f"\n[main_process] 输入: {user_input!r}")
 
@@ -270,13 +315,24 @@ def main_process(user_input: str) -> dict:
     if smiles:
         print(f"[main_process] 知识库命中: {props.get('name')} ({props.get('molecular_formula')})")
 
-    # 库中无 SMILES -> 在线解析。中文名 PubChem 无法识别，先用 LLM 译为英文/IUPAC 名
+    resolved = user_input
+    # 库未命中且输入是问题型：先抽取化合物名，再用抽取结果重查知识库
+    if not smiles and _looks_like_question(user_input):
+        extracted = _extract_compound_name(user_input)
+        if extracted and extracted != user_input:
+            print(f"[main_process] 实体抽取: {user_input!r} -> {extracted!r}")
+            resolved = extracted
+            props = query_property(resolved)
+            smiles = props.get("smiles") if props else None
+            if smiles:
+                print(f"[main_process] 知识库命中(抽取后): {props.get('name')}")
+
+    # 仍无 SMILES -> 在线解析。中文名 PubChem 无法识别，先用 LLM 译为英文/IUPAC 名
     if not smiles:
-        resolved = user_input
-        if _is_chinese(user_input):
-            en = _translate_compound_name(user_input)
+        if _is_chinese(resolved):
+            en = _translate_compound_name(resolved)
             if en:
-                print(f"[main_process] 中文名翻译: {user_input!r} -> {en!r}")
+                print(f"[main_process] 中文名翻译: {resolved!r} -> {en!r}")
                 resolved = en
         smiles = name_to_smiles(resolved)
 
@@ -288,6 +344,7 @@ def main_process(user_input: str) -> dict:
 
     result = {
         "input": user_input,
+        "is_question": _looks_like_question(user_input),
         "smiles": smiles,
         "properties": props,
         "chemfig": chemfig,

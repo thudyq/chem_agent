@@ -71,28 +71,38 @@ result = st.session_state.result
 if result is not None:
     st.divider()
 
-    # ---- 结构式：PNG 缩略图 + chemfig 代码 ----
-    if result["smiles"]:
-        st.markdown("### 🧬 结构式")
-        png = render_png(result["smiles"])
-        if png:
-            st.image(png, caption="结构式预览（RDKit 渲染）")
+    is_question = result.get("is_question", False)
+
+    def render_structure():
+        if result["smiles"]:
+            st.markdown("### 🧬 结构式")
+            png = render_png(result["smiles"])
+            if png:
+                st.image(png, caption="结构式预览（RDKit 渲染）")
+            else:
+                st.caption("（RDKit 图像不可用，请参考下方 chemfig 代码）")
+        if result["chemfig"]:
+            st.markdown(
+                "复制下方代码到 [Overleaf](https://www.overleaf.com) 编译"
+                "（需在导言区加 `\\usepackage{chemfig}` 与 `\\usepackage{mol2chemfig}`）"
+            )
+            st.code(result["chemfig"], language="latex")
+
+    def render_answer():
+        # 问题型用"解答"（回答是主体），裸名型用"说明"（结构是主体）
+        st.markdown(f"### {'📝 解答' if is_question else '📝 说明'}")
+        if result["answer"]:
+            st.markdown(result["answer"])
         else:
-            st.caption("（RDKit 图像不可用，请参考下方 chemfig 代码）")
+            st.error("LLM 调用失败。请检查 .env 中的 API_KEY / BASE_URL / MODEL 配置与网络。")
 
-    if result["chemfig"]:
-        st.markdown(
-            "复制下方代码到 [Overleaf](https://www.overleaf.com) 编译"
-            "（需在导言区加 `\\usepackage{chemfig}` 与 `\\usepackage{mol2chemfig}`）"
-        )
-        st.code(result["chemfig"], language="latex")
-
-    # ---- 文字说明 ----
-    st.markdown("### 📝 说明")
-    if result["answer"]:
-        st.markdown(result["answer"])
+    # 问题型：解答在前、结构在后；裸名型：结构在前、说明在后
+    if is_question:
+        render_answer()
+        render_structure()
     else:
-        st.error("LLM 调用失败。请检查 .env 中的 API_KEY / BASE_URL / MODEL 配置与网络。")
+        render_structure()
+        render_answer()
 
     # ---- 详细信息 ----
     with st.expander("🔧 详细信息"):
@@ -105,7 +115,10 @@ if result is not None:
             st.write(f"- **分子量**：{props.get('mol_weight', '—')}")
             if props.get("iupac_name"):
                 st.write(f"- **IUPAC 名**：{props.get('iupac_name')}")
-            if props.get("cas"):
-                st.write(f"- **CAS 号**：{props.get('cas')}")
+            st.write(f"- **熔点**：{props.get('melting_point') or '—'}")
+            st.write(f"- **沸点**：{props.get('boiling_point') or '—'}")
+            st.write(f"- **密度**：{props.get('density') or '—'}")
+            st.write(f"- **XLogP**：{props.get('xlogp') or '—'}")
+            st.write(f"- **CAS 号**：{props.get('cas') or '—'}")
         else:
             st.write("- **数据来源**：PubChem 在线解析（不在本地知识库）")
