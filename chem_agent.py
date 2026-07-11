@@ -11,6 +11,7 @@ Day 11-12: main_process —— 串联名称解析/知识库/结构渲染/LLM，R
 """
 
 import os
+import re
 import time
 from pathlib import Path
 
@@ -221,6 +222,33 @@ _FIELD_LABELS = {
 }
 
 
+# CJK 统一汉字范围，用于判断输入是否含中文
+_CN_CHAR_RE = re.compile(r"[\u4e00-\u9fff]")
+
+_TRANSLATE_SYSTEM = (
+    "你是一名化学命名翻译器。将用户给出的中文化合物名称翻译为英文或 IUPAC 名称，"
+    "供 PubChem 检索使用。只输出名称本身，不要解释、标点或多余文字。"
+)
+
+
+def _is_chinese(text: str) -> bool:
+    return bool(_CN_CHAR_RE.search(text or ""))
+
+
+def _translate_compound_name(cn_name: str):
+    prompt = f"中文化合物名称：{cn_name}\n\n请输出对应的英文或 IUPAC 名称。"
+    answer = ask_llm(prompt, system_prompt=_TRANSLATE_SYSTEM, max_tokens=256)
+    if not answer:
+        return None
+    # 剥离可能的 <think> 思考链，取最后一个非空行（兼容 reasoning 模型先思考后作答）
+    cleaned = re.sub(r"<think>.*?</think>", "", answer, flags=re.DOTALL).strip()
+    lines = [ln.strip() for ln in cleaned.splitlines() if ln.strip()]
+    if not lines:
+        return None
+    name = lines[-1].strip("\"'.,;: ()（）")
+    return name or None
+
+
 def main_process(user_input: str) -> dict:
     """主控流程：名称/问题 -> SMILES + 性质数据 + 结构式代码 + 中文回答。
 
@@ -242,10 +270,15 @@ def main_process(user_input: str) -> dict:
     if smiles:
         print(f"[main_process] 知识库命中: {props.get('name')} ({props.get('molecular_formula')})")
 
-    # 库中无 SMILES -> PubChem 在线解析（中文名 PubChem 无法识别，
-    # 主要服务于知识库外、英文/IUPAC 命名的化合物）
+    # 库中无 SMILES -> 在线解析。中文名 PubChem 无法识别，先用 LLM 译为英文/IUPAC 名
     if not smiles:
-        smiles = name_to_smiles(user_input)
+        resolved = user_input
+        if _is_chinese(user_input):
+            en = _translate_compound_name(user_input)
+            if en:
+                print(f"[main_process] 中文名翻译: {user_input!r} -> {en!r}")
+                resolved = en
+        smiles = name_to_smiles(resolved)
 
     chemfig = smiles_to_tikz(smiles) if smiles else ""
 
