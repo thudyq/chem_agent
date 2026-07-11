@@ -16,6 +16,7 @@ Day 9-10 任务：
 """
 
 import sqlite3
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -24,6 +25,12 @@ import requests
 
 # 项目根目录 / data 目录
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# 允许 `python utils/db_helper.py` 直接运行时导入 utils 包内兄弟模块
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from utils.curated_data import get_experimental
+
 _DATA_DIR = _PROJECT_ROOT / "data"
 _DEFAULT_DB = _DATA_DIR / "compounds.db"
 
@@ -261,8 +268,8 @@ def populate_database(db_path: Path = _DEFAULT_DB, compounds=None):
             time.sleep(_RATE_LIMIT_SEC)
             continue
 
-        # 实验数据 best-effort：失败不影响入库，仅相应字段为 NULL
-        experimental = _fetch_experimental(core.get("cid"))
+        # 实验数据：curated 优先（可靠），PUG-View 作为库外化合物 best-effort 回退
+        experimental = get_experimental(en_name) or _fetch_experimental(core.get("cid")) or {}
         if experimental:
             print(f"[populate_database] 实验数据: 熔点={experimental.get('melting_point') or 'NULL'}"
                   f" 密度={experimental.get('density') or 'NULL'}")
@@ -307,6 +314,34 @@ def _upsert(db_path: Path, row: dict):
     print(f"[populate_database] 已入库: {row['name']} ({row['molecular_formula']}, MW={row['mol_weight']})")
 
 
+def update_experimental(db_path: Path = _DEFAULT_DB):
+    """用 curated 数据更新现有 DB 记录的实验字段（不重新抓取核心数据）。
+
+    用于已 populate 过的库补充实验数据，避免重打 PubChem。仅更新 curated 命中的化合物。
+    返回更新的记录数。
+    """
+    init_db(db_path)
+    updated = 0
+    with _connect(db_path) as conn:
+        for row in conn.execute("SELECT id, en_name, name FROM compounds"):
+            exp = get_experimental(row["en_name"])
+            if not exp:
+                continue
+            conn.execute(
+                "UPDATE compounds SET melting_point=?, boiling_point=?, density=?, cas=?, updated_at=? "
+                "WHERE id=?",
+                (exp.get("melting_point"), exp.get("boiling_point"),
+                 exp.get("density"), exp.get("cas"),
+                 datetime.now().isoformat(timespec="seconds"), row["id"]),
+            )
+            updated += 1
+            print(f"[update_experimental] {row['name']}: mp={exp.get('melting_point')} "
+                  f"bp={exp.get('boiling_point')} d={exp.get('density')} CAS={exp.get('cas')}")
+        conn.commit()
+    print(f"[update_experimental] 共更新 {updated} 条记录的实验字段。")
+    return updated
+
+
 # --------------------------------------------------------------------------- #
 # 测试入口
 # --------------------------------------------------------------------------- #
@@ -319,7 +354,16 @@ if __name__ == "__main__":
 
     db = init_db()
 
-    if "--query" in sys.argv:
+    if "--refresh-exp" in sys.argv:
+        # 刷新实验字段：python db_helper.py --refresh-exp
+        print("\n[模式] 用 curated 数据刷新实验字段 ...")
+        update_experimental(db)
+        print("\n[查询测试] 阿司匹林")
+        result = query_property("阿司匹林", db)
+        if result:
+            for k, v in result.items():
+                print(f"  {k}: {v}")
+    elif "--query" in sys.argv:
         # 查询模式：python db_helper.py --query 阿司匹林
         idx = sys.argv.index("--query")
         target = sys.argv[idx + 1] if idx + 1 < len(sys.argv) else "阿司匹林"
