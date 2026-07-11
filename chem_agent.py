@@ -23,6 +23,7 @@ from rdkit.Chem.rdMolDescriptors import CalcMolFormula
 from utils.name_resolver import name_to_smiles
 from utils.structure_render import smiles_to_tikz
 from utils.db_helper import query_property
+from utils.reaction_render import is_reaction_input, parse_reaction, render_reaction_chemfig
 
 # === LLM 默认参数 ===
 DEFAULT_TEMPERATURE = 0.2   # 低温度保证事实性
@@ -161,7 +162,12 @@ def ask_llm(
         else:
             if resp.status_code == 200:
                 data = resp.json()
-                content = data["choices"][0]["message"]["content"]
+                msg = data["choices"][0]["message"]
+                # reasoning 模型（如 deepseek-reasoner）可能把输出放 reasoning_content，content 为空
+                content = msg.get("content") or ""
+                if not content and msg.get("reasoning_content"):
+                    content = msg["reasoning_content"]
+                    print("[ask_llm] content 为空，回退 reasoning_content")
                 usage = data.get("usage", {})
                 print(f"[ask_llm] 成功（tokens: {usage.get('total_tokens', '?')}）")
                 return content
@@ -275,6 +281,12 @@ _EXTRACT_SYSTEM = (
     "只输出名称本身；若无法识别出化合物名则输出 NONE。"
 )
 
+_THERMO_SYSTEM = (
+    "你是一名化学热力学顾问。根据反应信息估算热力学参数。"
+    "只输出键值对，每行一个，格式严格为 'pK: 值'、'ΔH: 值 kJ/mol'、'ΔS: 值 J/(mol·K)'、'ΔG: 值 kJ/mol'。"
+    "无法估算的项输出 '未知'。不要任何解释或多余文字。"
+)
+
 
 def _looks_like_question(text: str) -> bool:
     if not text:
@@ -295,18 +307,26 @@ def _extract_compound_name(text: str):
 
 
 def main_process(user_input: str) -> dict:
-    """主控流程：名称/问题 -> SMILES + 性质数据 + 结构式代码 + 中文回答。
+    """主控入口：按输入类型分派——reaction SMILES 走反应处理，其余走化合物处理。"""
+    if is_reaction_input(user_input):
+        return _process_reaction(user_input)
+    return _process_compound(user_input)
+
+
+def _process_compound(user_input: str) -> dict:
+    """化合物处理：名称/问题 -> SMILES + 性质 + 结构式 + 中文回答。
 
     顺序：
         1. 先查本地知识库（支持中/英/IUPAC 名）；命中即拿到 SMILES 与性质。
-        2. 库中无 SMILES 时，回退到 PubChem 在线解析（英文/IUPAC 名）。
-        3. SMILES -> chemfig 结构式代码。
-        4. 组装 RAG prompt 调用 LLM 生成中文回答。
+        2. 库中无 SMILES 时，问题型输入先抽取化合物名重查。
+        3. 仍无 SMILES -> PubChem 在线解析（中文名先 LLM 译为英文）。
+        4. SMILES -> chemfig 结构式代码。
+        5. 组装 RAG prompt 调用 LLM 生成中文回答。
 
-    任何子环节失败均降级处理，返回部分结果（对应字段为 None/""），绝不抛异常。
+    任何子环节失败均降级处理，返回部分结果，绝不抛异常。
 
     返回:
-        dict: {input, is_question, smiles, properties, chemfig, answer}
+        dict: {type, input, is_question, smiles, properties, chemfig, answer}
     """
     print(f"\n[main_process] 输入: {user_input!r}")
 
@@ -343,6 +363,7 @@ def main_process(user_input: str) -> dict:
     answer = ask_llm(prompt, system_prompt=_SYSTEM_PROMPT)
 
     result = {
+        "type": "compound",
         "input": user_input,
         "is_question": _looks_like_question(user_input),
         "smiles": smiles,
@@ -352,6 +373,90 @@ def main_process(user_input: str) -> dict:
     }
     print("[main_process] 完成。")
     return result
+
+
+def _fetch_reaction_thermo(rxn):
+    """用 LLM 估算反应的热力学参数（pK/ΔH/ΔS/ΔG）。
+
+    返回:
+        dict | None: 解析到的键值对（可能为空 dict 表示全未知）；LLM 调用失败返回 None。
+        数值为 LLM 估算，仅供参考。
+    """
+    prompt = (
+        f"反应物 SMILES：{', '.join(rxn['reactants'])}\n"
+        f"产物 SMILES：{', '.join(rxn['products'])}\n"
+        f"条件：{rxn['conditions'] or '未标注'}\n\n"
+        f"请估算该反应的平衡常数相关 pK（即 -log K）、焓变 ΔH、熵变 ΔS、吉布斯自由能变 ΔG。"
+    )
+    answer = ask_llm(prompt, system_prompt=_THERMO_SYSTEM, max_tokens=512)
+    if not answer:
+        return None
+    # 剥离 reasoning 模型的 <think> 思考链，只解析正式作答部分
+    cleaned = re.sub(r"<think>.*?</think>", "", answer, flags=re.DOTALL).strip()
+    thermo = {}
+    for line in cleaned.splitlines():
+        # 兼容全角冒号 ：
+        if "：" in line:
+            line = line.replace("：", ":", 1)
+        if ":" not in line:
+            continue
+        key, _, val = line.partition(":")
+        # 去 markdown 粗体/斜体标记
+        key = key.strip().strip("*_` ")
+        val = val.strip().strip("*_` ")
+        if val and val != "未知":
+            thermo[key] = val
+    if not thermo and cleaned:
+        print(f"[_fetch_reaction_thermo] 未解析到键值对，原始返回: {cleaned[:300]!r}")
+    return thermo
+
+
+def _process_reaction(user_input: str) -> dict:
+    """反应处理：解析 reaction SMILES，渲染方程式，LLM 分析反应。
+
+    返回:
+        dict: {type, input, reactants, products, conditions, reversible, equation_chemfig, answer}
+    """
+    print(f"\n[main_process] 检测到反应输入: {user_input!r}")
+    rxn = parse_reaction(user_input)
+    if rxn is None:
+        # 解析失败，退化为普通化合物处理
+        print("[main_process] 反应解析失败，退化为化合物处理")
+        return _process_compound(user_input)
+
+    print(f"[main_process] 反应物: {rxn['reactants']}")
+    print(f"[main_process] 产物: {rxn['products']}")
+
+    equation_chemfig = render_reaction_chemfig(rxn)
+
+    r_list = ", ".join(rxn["reactants"])
+    p_list = ", ".join(rxn["products"])
+    cond = rxn["conditions"] or "未标注"
+    prompt = (
+        f"用户输入了一个化学反应（reaction SMILES）：{user_input}\n\n"
+        f"反应物 SMILES：{r_list}\n"
+        f"产物 SMILES：{p_list}\n"
+        f"反应条件：{cond}\n"
+        f"反应方向：{'可逆' if rxn['reversible'] else '正向'}\n\n"
+        f"请分析这个反应：判断反应类型、说明关键结构变化、概述机理要点、提示注意事项。条理清晰，分点论述。"
+    )
+    print("[main_process] 调用 LLM 分析反应 ...")
+    answer = ask_llm(prompt, system_prompt=_SYSTEM_PROMPT)
+
+    print("[main_process] 估算热力学参数 ...")
+    thermo = _fetch_reaction_thermo(rxn)
+
+    return {
+        "type": "reaction",
+        "input": user_input,
+        "reactants": rxn["reactants"],
+        "products": rxn["products"],
+        "conditions": rxn["conditions"],
+        "reversible": rxn["reversible"],
+        "equation_chemfig": equation_chemfig,
+        "thermo": thermo,
+        "answer": answer,
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -387,30 +492,41 @@ def _ask_llm_smoke():
 
 
 def _main_process_smoke(query="苯酚"):
-    """Day 11-12 冒烟测试：跑通「名称 -> 结构式 + 性质 + 中文回答」全链路。"""
+    """端到端冒烟测试：支持化合物与反应两类输入。"""
     print("=" * 60)
-    print(f"Day 11-12 - main_process 端到端测试（{query}）")
+    print(f"main_process 端到端测试（{query}）")
     print("=" * 60)
     result = main_process(query)
     print("\n" + "=" * 60)
     print("[结果汇总]")
     print(f"  输入: {result['input']}")
-    print(f"  SMILES: {result['smiles']}")
-    if result["properties"]:
-        p = result["properties"]
-        print(f"  知识库: {p.get('name')} | {p.get('molecular_formula')} | MW={p.get('mol_weight')}")
+    if result.get("type") == "reaction":
+        print(f"  类型: 反应")
+        print(f"  反应物: {result['reactants']}")
+        print(f"  产物: {result['products']}")
+        print(f"  条件: {result.get('conditions') or '未标注'}, 可逆: {result.get('reversible')}")
+        eq = result.get("equation_chemfig", "")
+        print(f"  方程式 chemfig: {'已生成(' + str(len(eq)) + '字符)' if eq else '空'}")
     else:
-        print("  知识库: 未命中（走 PubChem 在线解析）")
-    print(f"  chemfig: {'已生成(' + str(len(result['chemfig'])) + '字符)' if result['chemfig'] else '空'}")
+        print(f"  类型: 化合物")
+        print(f"  SMILES: {result.get('smiles')}")
+        if result.get("properties"):
+            p = result["properties"]
+            print(f"  知识库: {p.get('name')} | {p.get('molecular_formula')} | MW={p.get('mol_weight')}")
+        else:
+            print("  知识库: 未命中（走 PubChem 在线解析）")
+        cf = result.get("chemfig", "")
+        print(f"  chemfig: {'已生成(' + str(len(cf)) + '字符)' if cf else '空'}")
     print("\n[模型回答]")
-    print(result["answer"] if result["answer"] else "（LLM 调用失败或未配置）")
+    print(result["answer"] if result.get("answer") else "（LLM 调用失败或未配置）")
     print("=" * 60)
 
 
 if __name__ == "__main__":
-    # 用法: python chem_agent.py              运行 Day1 冒烟测试
-    #       python chem_agent.py --llm        额外运行 ask_llm 联调测试
-    #       python chem_agent.py --main 苯酚  运行 main_process 端到端测试
+    # 用法: python chem_agent.py                          运行 Day1 冒烟测试
+    #       python chem_agent.py --llm                    额外运行 ask_llm 联调测试
+    #       python chem_agent.py --main 苯酚              运行化合物端到端测试
+    #       python chem_agent.py --main "A.B>>C.D"        运行反应方程式测试
     import sys
     argv = sys.argv[1:]
     if "--main" in argv:
