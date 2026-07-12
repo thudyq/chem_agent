@@ -6,10 +6,11 @@
 """
 
 from renderers.structure import render_structure
+from renderers.arrow import render_arrow
 
 RENDERER_REGISTRY = {
     "STRUCT": render_structure,
-    # "ARROW": render_arrow,    # Day 10-11 实现
+    "ARROW": render_arrow,
     # "NEWMAN": render_newman,  # Day 15-16 实现（可选）
     # "ENERGY": render_energy,  # 后续实现
 }

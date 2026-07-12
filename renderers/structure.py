@@ -7,53 +7,48 @@
 """
 
 
-def render_structure(smiles: str, label: str = None) -> str:
-    """SMILES → \\chemfig{...} 代码；可选 label 置于结构下方。
+def smiles_to_chemfig(smiles: str):
+    """SMILES → \\chemfig{...} 代码字符串；任何失败返回 None。
 
-    无效 SMILES 或渲染失败时返回可读的错误提示字符串（非空、非异常），
-    便于在最终图文输出中就地显示失败原因。
-
-    参数:
-        smiles: 合法 SMILES，如 "c1ccccc1"。
-        label: 可选结构标注，置于结构下方。
-
-    返回:
-        chemfig/TikZ 代码字符串；失败时返回 "（结构渲染失败：...）" 提示串。
+    RDKit 预验证（不可用时跳过）+ mol2chemfigPy3 渲染。供 render_structure
+    及其他渲染器（arrow/newman 等）复用。
     """
     if not smiles or not isinstance(smiles, str):
-        return "（结构渲染失败：SMILES 为空）"
-
-    # RDKit 预验证拦截无效输入；rdkit 不可用时跳过（由 mol2chemfig 兜底）
+        return None
     try:
         from utils.rdkit_utils import validate_smiles
         if not validate_smiles(smiles):
-            return f"（结构渲染失败：无效 SMILES「{smiles}」）"
+            return None
     except ImportError:
         pass
-
     try:
         from mol2chemfigPy3 import mol2chemfig
-    except ImportError:
-        return "（结构渲染失败：mol2chemfigPy3 未安装）"
-
-    try:
-        # inline=True 才返回字符串；默认 inline=False 只打印到 stdout 返回 None
         result = mol2chemfig(smiles, inline=True)
-    except Exception as e:
-        return f"（结构渲染失败：mol2chemfig 调用异常 {e}）"
-
+    except Exception:
+        return None
     if not isinstance(result, str) or not result.startswith("\\chemfig"):
-        return f"（结构渲染失败：mol2chemfig 未返回 chemfig 代码）"
+        return None
+    return result
 
-    # label：tikzpicture 包裹结构为命名节点，label 置于其正下方（tikz 核心 anchor/yshift，无需额外宏包）
+
+def render_structure(smiles: str, label: str = None) -> str:
+    """[STRUCT] 渲染：SMILES → chemfig 代码；可选 label 置于结构下方。
+
+    失败时返回可读的错误提示字符串（非空、非异常）。
+    """
+    chemfig = smiles_to_chemfig(smiles)
+    if chemfig is None:
+        return f"（结构渲染失败：无法为「{smiles}」生成结构式，请检查 SMILES 与 mol2chemfigPy3 安装）"
+
+    # label：tikzpicture 包裹结构为命名节点，label 置于其正下方（tikz 核心 anchor/yshift）
     if label:
         return (
             "\\begin{tikzpicture}\n"
-            f"  \\node (mol) {{{result}}};\n"
+            f"  \\node (mol) {{{chemfig}}};\n"
             f"  \\node[anchor=north] at ([yshift=-2mm]mol.south) {{{label}}};\n"
             "\\end{tikzpicture}"
         )
-    return result
+    return chemfig
 
 
 if __name__ == "__main__":
