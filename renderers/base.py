@@ -7,11 +7,12 @@
 
 from renderers.structure import render_structure
 from renderers.arrow import render_arrow
+from renderers.newman import render_newman
 
 RENDERER_REGISTRY = {
     "STRUCT": render_structure,
     "ARROW": render_arrow,
-    # "NEWMAN": render_newman,  # Day 15-16 实现（可选）
+    "NEWMAN": render_newman,
     # "ENERGY": render_energy,  # 后续实现
 }
 
