@@ -281,12 +281,6 @@ _EXTRACT_SYSTEM = (
     "只输出名称本身；若无法识别出化合物名则输出 NONE。"
 )
 
-_THERMO_SYSTEM = (
-    "你是一名化学热力学顾问。根据反应信息估算热力学参数。"
-    "只输出键值对，每行一个，格式严格为 'pK: 值'、'ΔH: 值 kJ/mol'、'ΔS: 值 J/(mol·K)'、'ΔG: 值 kJ/mol'。"
-    "无法估算的项输出 '未知'。不要任何解释或多余文字。"
-)
-
 
 def _looks_like_question(text: str) -> bool:
     if not text:
@@ -375,42 +369,6 @@ def _process_compound(user_input: str) -> dict:
     return result
 
 
-def _fetch_reaction_thermo(rxn):
-    """用 LLM 估算反应的热力学参数（pK/ΔH/ΔS/ΔG）。
-
-    返回:
-        dict | None: 解析到的键值对（可能为空 dict 表示全未知）；LLM 调用失败返回 None。
-        数值为 LLM 估算，仅供参考。
-    """
-    prompt = (
-        f"反应物 SMILES：{', '.join(rxn['reactants'])}\n"
-        f"产物 SMILES：{', '.join(rxn['products'])}\n"
-        f"条件：{rxn['conditions'] or '未标注'}\n\n"
-        f"请估算该反应的平衡常数相关 pK（即 -log K）、焓变 ΔH、熵变 ΔS、吉布斯自由能变 ΔG。"
-    )
-    answer = ask_llm(prompt, system_prompt=_THERMO_SYSTEM, max_tokens=512)
-    if not answer:
-        return None
-    # 剥离 reasoning 模型的 <think> 思考链，只解析正式作答部分
-    cleaned = re.sub(r"<think>.*?</think>", "", answer, flags=re.DOTALL).strip()
-    thermo = {}
-    for line in cleaned.splitlines():
-        # 兼容全角冒号 ：
-        if "：" in line:
-            line = line.replace("：", ":", 1)
-        if ":" not in line:
-            continue
-        key, _, val = line.partition(":")
-        # 去 markdown 粗体/斜体标记
-        key = key.strip().strip("*_` ")
-        val = val.strip().strip("*_` ")
-        if val and val != "未知":
-            thermo[key] = val
-    if not thermo and cleaned:
-        print(f"[_fetch_reaction_thermo] 未解析到键值对，原始返回: {cleaned[:300]!r}")
-    return thermo
-
-
 def _process_reaction(user_input: str) -> dict:
     """反应处理：解析 reaction SMILES，渲染方程式，LLM 分析反应。
 
@@ -443,9 +401,6 @@ def _process_reaction(user_input: str) -> dict:
     print("[main_process] 调用 LLM 分析反应 ...")
     answer = ask_llm(prompt, system_prompt=_SYSTEM_PROMPT)
 
-    print("[main_process] 估算热力学参数 ...")
-    thermo = _fetch_reaction_thermo(rxn)
-
     return {
         "type": "reaction",
         "input": user_input,
@@ -454,7 +409,6 @@ def _process_reaction(user_input: str) -> dict:
         "conditions": rxn["conditions"],
         "reversible": rxn["reversible"],
         "equation_chemfig": equation_chemfig,
-        "thermo": thermo,
         "answer": answer,
     }
 

@@ -110,15 +110,6 @@ def render_reaction_view(result):
         st.write(f"- **反应物**：{', '.join(reactants)}")
         st.write(f"- **产物**：{', '.join(products)}")
         st.write(f"- **条件**：{result.get('conditions') or '未标注'}")
-        thermo = result.get("thermo")
-        if thermo is None:
-            st.write("- **热力学参数**：调用失败")
-        elif thermo:
-            st.write("- **热力学参数（LLM 估算，仅供参考）**：")
-            for k, v in thermo.items():
-                st.write(f"  - {k}：{v}")
-        else:
-            st.write("- **热力学参数**：数据不足（LLM 无法估算）")
 
 
 st.set_page_config(page_title="有机化学知识智能体", page_icon="🧪", layout="centered")
