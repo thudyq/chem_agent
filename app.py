@@ -99,6 +99,10 @@ def render_reaction_view(result):
         )
         st.code(result["equation_chemfig"], language="latex")
 
+    if result.get("energy_plot"):
+        st.markdown("### 📈 能量剖面图（LLM 估算，仅供参考）")
+        st.image(result["energy_plot"])
+
     st.markdown("### 📝 反应分析")
     if result["answer"]:
         st.markdown(result["answer"])

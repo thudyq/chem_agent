@@ -24,6 +24,7 @@ from utils.name_resolver import name_to_smiles
 from utils.structure_render import smiles_to_tikz
 from utils.db_helper import query_property
 from utils.reaction_render import is_reaction_input, parse_reaction, render_reaction_chemfig
+from utils.energy_profile import parse_energy_points, plot_energy_profile
 
 # === LLM 默认参数 ===
 DEFAULT_TEMPERATURE = 0.2   # 低温度保证事实性
@@ -281,6 +282,13 @@ _EXTRACT_SYSTEM = (
     "只输出名称本身；若无法识别出化合物名则输出 NONE。"
 )
 
+_ENERGY_SYSTEM = (
+    "你是一名化学动力学顾问。根据反应估算各驻点（反应物/过渡态/中间体/产物）的相对能量，"
+    "以反应物为 0 参考，单位 kJ/mol。只输出 JSON，不要任何其他文字。"
+    "格式严格为：{\"points\":[{\"label\":\"反应物\",\"energy\":0},{\"label\":\"过渡态\",\"energy\":80},{\"label\":\"产物\",\"energy\":-20}]}。"
+    "单步反应输出 3 点，多步反应可加中间体。能量为估算近似值。"
+)
+
 
 def _looks_like_question(text: str) -> bool:
     if not text:
@@ -369,6 +377,38 @@ def _process_compound(user_input: str) -> dict:
     return result
 
 
+def _fetch_energy_points(rxn):
+    """用 LLM 估算反应驻点能量并解析为点列表；失败返回 None。"""
+    prompt = (
+        f"反应物 SMILES：{', '.join(rxn['reactants'])}\n"
+        f"产物 SMILES：{', '.join(rxn['products'])}\n"
+        f"条件：{rxn['conditions'] or '未标注'}\n\n"
+        f"请估算该反应各驻点的相对能量（反应物=0，kJ/mol），只输出 JSON。"
+    )
+    answer = ask_llm(prompt, system_prompt=_ENERGY_SYSTEM, max_tokens=512)
+    return parse_energy_points(answer)
+
+
+def _smiles_to_formula(smiles):
+    """SMILES -> 分子式（如 'CH3Cl'），供 LLM 用可读形式书写反应；失败返回 None。"""
+    try:
+        mol = Chem.MolFromSmiles(smiles)
+        if mol is None:
+            return None
+        return CalcMolFormula(mol)
+    except Exception:
+        return None
+
+
+def _format_components(smiles_list):
+    """把一组 SMILES 格式化为 'SMILES（分子式）' 的可读串。"""
+    parts = []
+    for smi in smiles_list:
+        formula = _smiles_to_formula(smi)
+        parts.append(f"{smi}（{formula}）" if formula else smi)
+    return "、".join(parts)
+
+
 def _process_reaction(user_input: str) -> dict:
     """反应处理：解析 reaction SMILES，渲染方程式，LLM 分析反应。
 
@@ -387,19 +427,29 @@ def _process_reaction(user_input: str) -> dict:
 
     equation_chemfig = render_reaction_chemfig(rxn)
 
-    r_list = ", ".join(rxn["reactants"])
-    p_list = ", ".join(rxn["products"])
+    r_readable = _format_components(rxn["reactants"])
+    p_readable = _format_components(rxn["products"])
     cond = rxn["conditions"] or "未标注"
     prompt = (
         f"用户输入了一个化学反应（reaction SMILES）：{user_input}\n\n"
-        f"反应物 SMILES：{r_list}\n"
-        f"产物 SMILES：{p_list}\n"
+        f"反应物：{r_readable}\n"
+        f"产物：{p_readable}\n"
         f"反应条件：{cond}\n"
         f"反应方向：{'可逆' if rxn['reversible'] else '正向'}\n\n"
-        f"请分析这个反应：判断反应类型、说明关键结构变化、概述机理要点、提示注意事项。条理清晰，分点论述。"
+        f"请分析这个反应：判断反应类型、说明关键结构变化、概述机理要点、提示注意事项。"
+        f"书写方程式时请用化合物的中文名或分子式（如 CH₃Cl、甲醇、OH⁻），不要直接照搬原始 SMILES。"
+        f"条理清晰，分点论述。"
     )
     print("[main_process] 调用 LLM 分析反应 ...")
-    answer = ask_llm(prompt, system_prompt=_SYSTEM_PROMPT)
+    answer = ask_llm(prompt, system_prompt=_SYSTEM_PROMPT, max_tokens=2048)
+
+    # 能量剖面图（best-effort）：LLM 估算驻点能量 -> matplotlib 渲染
+    energy_plot = None
+    points = _fetch_energy_points(rxn)
+    if points:
+        energy_plot = plot_energy_profile(points)
+        if energy_plot:
+            print(f"[main_process] 能量剖面图已生成（{len(points)} 个驻点）")
 
     return {
         "type": "reaction",
@@ -409,6 +459,7 @@ def _process_reaction(user_input: str) -> dict:
         "conditions": rxn["conditions"],
         "reversible": rxn["reversible"],
         "equation_chemfig": equation_chemfig,
+        "energy_plot": energy_plot,
         "answer": answer,
     }
 
