@@ -103,3 +103,24 @@ def test_end_pos_correctness():
     assert t.start_pos == 1
     assert t.end_pos == 1 + len(t.raw)
     assert text[t.start_pos:t.end_pos] == t.raw
+
+
+def test_struct_bracket_atoms():
+    """补充：SMILES 含括号原子（[N+]/[O-]），验证括号平衡扫描器。"""
+    tags = parse_tags("[STRUCT:O=[N+]([O-])c1ccccc1]")
+    assert len(tags) == 1
+    assert tags[0].args[0] == "O=[N+]([O-])c1ccccc1"
+
+
+def test_struct_chiral_brackets():
+    """补充：手性 SMILES [C@@H] 等含括号。"""
+    tags = parse_tags("[STRUCT:[C@@H](N)(C)O]")
+    assert len(tags) == 1
+    assert tags[0].args[0] == "[C@@H](N)(C)O"
+
+
+def test_arrow_bracket_smiles():
+    """补充：ARROW 反应物/产物含括号原子。"""
+    tags = parse_tags("[ARROW:O=[N+]([O-])c1ccccc1,c1ccccc1N,a]")
+    assert tags[0].args[0] == "O=[N+]([O-])c1ccccc1"
+    assert tags[0].args[1] == "c1ccccc1N"

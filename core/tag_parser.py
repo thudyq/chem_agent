@@ -26,50 +26,98 @@ class RenderTag:
     end_pos: int     # 结束下标（ exclusive）
 
 
-# 各标记的编译正则。STRUCT 的 SMILES 组用 [^,\]] 排除逗号与 ]，
-# 避免贪婪吞掉 ,label= 部分（TRANSITION 原始正则的 bug 修正）。
-_PATTERNS = [
-    ("STRUCT", re.compile(r"\[STRUCT:([^,\]]+)(?:,label=([^\]]+))?\]")),
-    ("ARROW", re.compile(r"\[ARROW:([^,]+),([^,]+),([^\]]+)\]")),
-    ("NEWMAN", re.compile(r"\[NEWMAN:([^,]+),([^\]]+)\]")),
-    ("ENERGY", re.compile(r"\[ENERGY:([^\]]+)\]")),
-    # REASONING 配对，DOTALL 允许内容跨行
-    ("REASONING", re.compile(r"\[REASONING\](.*?)\[/REASONING\]", re.DOTALL)),
-]
+# 单标记类型的开启串
+_OPENERS = {
+    "STRUCT": "[STRUCT:",
+    "ARROW": "[ARROW:",
+    "NEWMAN": "[NEWMAN:",
+    "ENERGY": "[ENERGY:",
+}
+
+# REASONING 配对正则（内容不与括号冲突，可用正则）
+_REASONING_RE = re.compile(r"\[REASONING\](.*?)\[/REASONING\]", re.DOTALL)
+
+
+def _find_tag_end(text: str, start: int) -> int:
+    """从 start（指向 opener 的 [）用括号深度平衡扫描，返回配对 ] 下标；未闭合返回 -1。
+
+    兼容 SMILES 括号原子 [N+]/[O-]/[C@@H]：其内部 ] 不会提前闭合标记。
+    """
+    depth = 0
+    i = start
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c == "[":
+            depth += 1
+        elif c == "]":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return -1
+
+
+def _parse_content(tag_type: str, content: str) -> list:
+    """把标记内部内容拆为参数列表。SMILES 不含逗号，按逗号切分安全。"""
+    if tag_type == "STRUCT":
+        if ",label=" in content:
+            smi, _, label = content.partition(",label=")
+            return [smi, label]
+        return [content, None]
+    if tag_type == "ARROW":
+        parts = content.split(",", 2)
+        while len(parts) < 3:
+            parts.append("")
+        return parts
+    if tag_type == "NEWMAN":
+        parts = content.split(",", 1)
+        if len(parts) == 1:
+            parts.append("")
+        return parts
+    return [content]  # ENERGY / 其他
 
 
 def parse_tags(text: str) -> List[RenderTag]:
-    """提取文本中所有渲染标记，按 start_pos 升序返回。
-
-    参数:
-        text: LLM 输出的原始文本。
-
-    返回:
-        List[RenderTag]：无标记时返回空列表。
-    """
+    """提取文本中所有渲染标记，按 start_pos 升序返回。无标记返回空列表。"""
     if not text:
         return []
     tags = []
-    for tag_type, pattern in _PATTERNS:
-        for m in pattern.finditer(text):
-            # 捕获组转为 list，未命中的可选组保留为 None
-            args = [g if g is not None else None for g in m.groups()]
+    for tag_type, opener in _OPENERS.items():
+        search_from = 0
+        while True:
+            idx = text.find(opener, search_from)
+            if idx == -1:
+                break
+            end = _find_tag_end(text, idx)
+            if end == -1:
+                search_from = idx + len(opener)
+                continue
+            raw = text[idx:end + 1]
+            content = raw[len(opener):-1]  # 去掉 "[TAG:" 与 "]"
             tags.append(RenderTag(
                 type=tag_type,
-                args=args,
-                raw=m.group(0),
-                start_pos=m.start(),
-                end_pos=m.end(),
+                args=_parse_content(tag_type, content),
+                raw=raw,
+                start_pos=idx,
+                end_pos=end + 1,
             ))
+            search_from = end + 1
+    for m in _REASONING_RE.finditer(text):
+        tags.append(RenderTag(
+            type="REASONING",
+            args=[m.group(1)],
+            raw=m.group(0),
+            start_pos=m.start(),
+            end_pos=m.end(),
+        ))
     tags.sort(key=lambda t: t.start_pos)
     return tags
 
 
 if __name__ == "__main__":
-    # 快速自测：python core/tag_parser.py
-    demo = "[STRUCT:c1ccccc1] 和 [ARROW:c1ccccc1,c1ccccc1N,amination]"
+    demo = "[STRUCT:c1ccccc1] 和 [STRUCT:O=[N+]([O-])c1ccccc1] 然后 [ARROW:c1ccccc1,c1ccccc1N,amination]"
     tags = parse_tags(demo)
-    print(f"输入: {demo}")
     print(f"解析到 {len(tags)} 个标记:")
     for t in tags:
-        print(f"  {t.type}: args={t.args} raw={t.raw!r} pos=[{t.start_pos},{t.end_pos})")
+        print(f"  {t.type}: args={t.args}")
