@@ -10,6 +10,7 @@ Day 7-8  : ask_llm —— 接入 OpenAI 兼容大模型 API（DeepSeek / Silicon
 Day 11-12: main_process —— 串联名称解析/知识库/结构渲染/LLM，RAG 主控流程。
 """
 
+import json
 import os
 import re
 import time
@@ -25,6 +26,7 @@ from utils.structure_render import smiles_to_tikz
 from utils.db_helper import query_property
 from utils.reaction_render import is_reaction_input, parse_reaction, render_reaction_chemfig
 from utils.energy_profile import parse_energy_points, plot_energy_profile
+from utils.mechanism_render import draw_mechanism, SUPPORTED as SUPPORTED_MECH
 
 # === LLM 默认参数 ===
 DEFAULT_TEMPERATURE = 0.2   # 低温度保证事实性
@@ -289,6 +291,14 @@ _ENERGY_SYSTEM = (
     "单步反应输出 3 点，多步反应可加中间体。能量为估算近似值。"
 )
 
+_MECH_SYSTEM = (
+    "你是一名有机反应机理专家。判断给定反应的主要机理类型并识别关键角色。"
+    "只输出 JSON，不要其他文字。格式："
+    "{\"type\":\"SN2\",\"nucleophile\":\"OH⁻\",\"substrate\":\"CH₃Cl\",\"leaving_group\":\"Cl⁻\",\"product\":\"CH₃OH\",\"base\":\"\"}。"
+    "type 取值：SN1/SN2/E1/E2/亲电取代/亲核加成/其他；只填该机理涉及的角色，其余留空。"
+    "角色值用中文名或分子式（如 OH⁻、CH₃Cl），不要用 SMILES。"
+)
+
 
 def _looks_like_question(text: str) -> bool:
     if not text:
@@ -309,9 +319,11 @@ def _extract_compound_name(text: str):
 
 
 def main_process(user_input: str) -> dict:
-    """主控入口：按输入类型分派——reaction SMILES 走反应处理，其余走化合物处理。"""
+    """主控入口：按输入类型分派——反应 SMILES / 机理名查询 / 化合物或问题。"""
     if is_reaction_input(user_input):
         return _process_reaction(user_input)
+    if _is_mechanism_query(user_input):
+        return _process_mechanism(user_input)
     return _process_compound(user_input)
 
 
@@ -409,6 +421,70 @@ def _format_components(smiles_list):
     return "、".join(parts)
 
 
+def _extract_json(text):
+    """从 LLM 输出提取首个 JSON 对象；失败返回 None。兼容 think 链/代码围栏。"""
+    if not text:
+        return None
+    cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    cleaned = re.sub(r"```(?:json)?", "", cleaned).strip()
+    m = re.search(r"\{.*\}", cleaned, re.DOTALL)
+    if not m:
+        return None
+    try:
+        return json.loads(m.group(0))
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
+def _identify_mechanism(rxn):
+    """LLM 识别反应机理类型 + 关键角色；失败返回 None。"""
+    prompt = (
+        f"反应物：{_format_components(rxn['reactants'])}\n"
+        f"产物：{_format_components(rxn['products'])}\n"
+        f"条件：{rxn['conditions'] or '未标注'}\n\n"
+        f"请判断该反应的主要机理类型并识别角色，只输出 JSON。"
+    )
+    answer = ask_llm(prompt, system_prompt=_MECH_SYSTEM, max_tokens=300)
+    return _extract_json(answer)
+
+
+_MECH_SUFFIXES = ("机理", "机制", "反应", "历程", "MECHANISM", "Mechanism")
+
+
+def _is_mechanism_query(text: str) -> bool:
+    """检测输入是否为机理名查询（如 'SN2'、'E2机理'、'sn2反应'）。"""
+    t = text.strip().upper().replace(" ", "")
+    for s in _MECH_SUFFIXES:
+        t = t.replace(s.upper(), "")
+    return t in SUPPORTED_MECH
+
+
+def _process_mechanism(user_input: str) -> dict:
+    """机理名查询：展示该机理的标准示意图 + LLM 讲解。"""
+    t = user_input.strip().upper().replace(" ", "")
+    for s in _MECH_SUFFIXES:
+        t = t.replace(s.upper(), "")
+    mech_type = t if t in SUPPORTED_MECH else None
+    if mech_type is None:
+        return _process_compound(user_input)
+
+    print(f"[main_process] 机理查询: {mech_type}")
+    mechanism_plot = draw_mechanism(mech_type, {})
+    prompt = (
+        f"请讲解 {mech_type} 反应机理：定义与适用条件、关键步骤与电子流向、"
+        f"立体化学特征、动力学特征、典型例子。条理清晰，分点论述。"
+    )
+    print("[main_process] 调用 LLM 讲解机理 ...")
+    answer = ask_llm(prompt, system_prompt=_SYSTEM_PROMPT, max_tokens=4096)
+    return {
+        "type": "mechanism",
+        "input": user_input,
+        "mechanism_type": mech_type,
+        "mechanism_plot": mechanism_plot,
+        "answer": answer,
+    }
+
+
 def _process_reaction(user_input: str) -> dict:
     """反应处理：解析 reaction SMILES，渲染方程式，LLM 分析反应。
 
@@ -451,6 +527,14 @@ def _process_reaction(user_input: str) -> dict:
         if energy_plot:
             print(f"[main_process] 能量剖面图已生成（{len(points)} 个驻点）")
 
+    # 机理示意图（best-effort）：LLM 识别机理类型 + 角色 -> matplotlib 渲染
+    mechanism_plot = None
+    mech = _identify_mechanism(rxn)
+    if mech and mech.get("type"):
+        mechanism_plot = draw_mechanism(mech["type"], mech)
+        if mechanism_plot:
+            print(f"[main_process] 机理示意图已生成（{mech['type']}）")
+
     return {
         "type": "reaction",
         "input": user_input,
@@ -460,6 +544,7 @@ def _process_reaction(user_input: str) -> dict:
         "reversible": rxn["reversible"],
         "equation_chemfig": equation_chemfig,
         "energy_plot": energy_plot,
+        "mechanism_plot": mechanism_plot,
         "answer": answer,
     }
 
@@ -497,7 +582,7 @@ def _ask_llm_smoke():
 
 
 def _main_process_smoke(query="苯酚"):
-    """端到端冒烟测试：支持化合物与反应两类输入。"""
+    """端到端冒烟测试：支持化合物、反应、机理名三类输入。"""
     print("=" * 60)
     print(f"main_process 端到端测试（{query}）")
     print("=" * 60)
@@ -505,13 +590,19 @@ def _main_process_smoke(query="苯酚"):
     print("\n" + "=" * 60)
     print("[结果汇总]")
     print(f"  输入: {result['input']}")
-    if result.get("type") == "reaction":
+    rtype = result.get("type", "compound")
+    if rtype == "reaction":
         print(f"  类型: 反应")
         print(f"  反应物: {result['reactants']}")
         print(f"  产物: {result['products']}")
         print(f"  条件: {result.get('conditions') or '未标注'}, 可逆: {result.get('reversible')}")
         eq = result.get("equation_chemfig", "")
         print(f"  方程式 chemfig: {'已生成(' + str(len(eq)) + '字符)' if eq else '空'}")
+        print(f"  能量剖面图: {'已生成' if result.get('energy_plot') else '无'}")
+        print(f"  机理示意图: {'已生成' if result.get('mechanism_plot') else '无'}")
+    elif rtype == "mechanism":
+        print(f"  类型: 机理查询 ({result.get('mechanism_type')})")
+        print(f"  机理示意图: {'已生成' if result.get('mechanism_plot') else '无'}")
     else:
         print(f"  类型: 化合物")
         print(f"  SMILES: {result.get('smiles')}")
@@ -532,6 +623,7 @@ if __name__ == "__main__":
     #       python chem_agent.py --llm                    额外运行 ask_llm 联调测试
     #       python chem_agent.py --main 苯酚              运行化合物端到端测试
     #       python chem_agent.py --main "A.B>>C.D"        运行反应方程式测试
+    #       python chem_agent.py --main SN2              运行机理名查询测试
     import sys
     argv = sys.argv[1:]
     if "--main" in argv:

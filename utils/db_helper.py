@@ -30,6 +30,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from utils.curated_data import get_experimental
+from utils.comptox_helper import get_experimental_by_name as comptox_get_experimental
 
 _DATA_DIR = _PROJECT_ROOT / "data"
 _DEFAULT_DB = _DATA_DIR / "compounds.db"
@@ -268,8 +269,13 @@ def populate_database(db_path: Path = _DEFAULT_DB, compounds=None):
             time.sleep(_RATE_LIMIT_SEC)
             continue
 
-        # 实验数据：curated 优先（可靠），PUG-View 作为库外化合物 best-effort 回退
-        experimental = get_experimental(en_name) or _fetch_experimental(core.get("cid")) or {}
+        # 实验数据：CompTox 优先（有 key 时，权威实验值）→ curated 回退 → PUG-View 末选
+        experimental = (
+            comptox_get_experimental(en_name)
+            or get_experimental(en_name)
+            or _fetch_experimental(core.get("cid"))
+            or {}
+        )
         if experimental:
             print(f"[populate_database] 实验数据: 熔点={experimental.get('melting_point') or 'NULL'}"
                   f" 密度={experimental.get('density') or 'NULL'}")
@@ -342,6 +348,33 @@ def update_experimental(db_path: Path = _DEFAULT_DB):
     return updated
 
 
+def update_experimental_from_comptox(db_path: Path = _DEFAULT_DB):
+    """用 CompTox API 更新现有 DB 记录的实验字段（权威实验值，需 COMPTOX_API_KEY）。
+
+    返回更新的记录数；无 key 或全部未命中返回 0。
+    """
+    init_db(db_path)
+    updated = 0
+    with _connect(db_path) as conn:
+        for row in conn.execute("SELECT id, en_name, name FROM compounds"):
+            exp = comptox_get_experimental(row["en_name"])
+            if not exp:
+                continue
+            conn.execute(
+                "UPDATE compounds SET melting_point=?, boiling_point=?, density=?, "
+                "xlogp=?, updated_at=? WHERE id=?",
+                (exp.get("melting_point"), exp.get("boiling_point"), exp.get("density"),
+                 exp.get("xlogp"), datetime.now().isoformat(timespec="seconds"), row["id"]),
+            )
+            updated += 1
+            print(f"[update_experimental_from_comptox] {row['name']}: "
+                  f"mp={exp.get('melting_point')} bp={exp.get('boiling_point')} "
+                  f"d={exp.get('density')} xlogp={exp.get('xlogp')}")
+        conn.commit()
+    print(f"[update_experimental_from_comptox] 共更新 {updated} 条（CompTox）。")
+    return updated
+
+
 # --------------------------------------------------------------------------- #
 # 测试入口
 # --------------------------------------------------------------------------- #
@@ -354,7 +387,16 @@ if __name__ == "__main__":
 
     db = init_db()
 
-    if "--refresh-exp" in sys.argv:
+    if "--refresh-comptox" in sys.argv:
+        # 用 CompTox API 刷新实验字段：python db_helper.py --refresh-comptox
+        print("\n[模式] 用 CompTox API 刷新实验字段（需 COMPTOX_API_KEY） ...")
+        update_experimental_from_comptox(db)
+        print("\n[查询测试] 阿司匹林")
+        result = query_property("阿司匹林", db)
+        if result:
+            for k, v in result.items():
+                print(f"  {k}: {v}")
+    elif "--refresh-exp" in sys.argv:
         # 刷新实验字段：python db_helper.py --refresh-exp
         print("\n[模式] 用 curated 数据刷新实验字段 ...")
         update_experimental(db)

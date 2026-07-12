@@ -103,6 +103,10 @@ def render_reaction_view(result):
         st.markdown("### 📈 能量剖面图（LLM 估算，仅供参考）")
         st.image(result["energy_plot"])
 
+    if result.get("mechanism_plot"):
+        st.markdown("### ⚛️ 反应机理示意图（曲线箭头表示电子对转移）")
+        st.image(result["mechanism_plot"])
+
     st.markdown("### 📝 反应分析")
     if result["answer"]:
         st.markdown(result["answer"])
@@ -116,10 +120,26 @@ def render_reaction_view(result):
         st.write(f"- **条件**：{result.get('conditions') or '未标注'}")
 
 
+def render_mechanism_view(result):
+    """渲染机理名查询视图：示意图 + LLM 讲解。"""
+    st.markdown(f"### ⚛️ {result.get('mechanism_type', '')} 机理示意图")
+    if result.get("mechanism_plot"):
+        st.image(result["mechanism_plot"])
+        st.caption("曲线箭头表示电子对转移（成键/断键）")
+    else:
+        st.caption("（该机理示意图暂未内置，或 matplotlib 不可用）")
+
+    st.markdown("### 📝 机理讲解")
+    if result["answer"]:
+        st.markdown(result["answer"])
+    else:
+        st.error("LLM 调用失败。请检查 .env 中的 API_KEY / BASE_URL / MODEL 配置与网络。")
+
+
 st.set_page_config(page_title="有机化学知识智能体", page_icon="🧪", layout="centered")
 
 st.title("🧪 有机化学知识智能体")
-st.caption("输入化学名称/问题，或 reaction SMILES（如 CC(=O)O.CCO>>CC(=O)OCC.O）。支持中英文：苯酚 / aspirin / caffeine")
+st.caption("输入化学名称/问题、reaction SMILES（如 CC(=O)O.CCO>>CC(=O)OCC.O），或机理名（SN2/E2）。支持中英文：苯酚 / aspirin")
 
 # session_state 持久化结果，避免 Streamlit 重跑时丢失
 if "result" not in st.session_state:
@@ -145,6 +165,8 @@ if result is not None:
     st.divider()
     if result.get("type") == "reaction":
         render_reaction_view(result)
+    elif result.get("type") == "mechanism":
+        render_mechanism_view(result)
     else:
         is_question = result.get("is_question", False)
 
