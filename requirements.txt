@@ -1,23 +1,17 @@
-# 有机化学知识智能体 - 依赖清单
+# 有机化学知识智能体（LLM Plus 转型版）- 依赖清单
 # Python 3.9+
 
 # === 核心化学处理 ===
-rdkit                          # 分子结构校验、描述符、绘图
+rdkit                          # SMILES 校验、分子式（utils/rdkit_utils.py）
+mol2chemfigPy3                 # SMILES -> chemfig/TikZ 代码（renderers/structure.py）
 
-# === 名称解析 ===
-requests                       # 调用 PubChem REST API（HTTP 客户端）
-pyopsin                        # IUPAC 名称本地解析（PubChem 失败时的备选路径，可选）
+# === LLM 客户端（Day 6-7）===
+requests                       # 调用 OpenAI 兼容 API
+python-dotenv                  # 读取 .env 中的 API_KEY
 
-# === 结构式渲染（Day 4-5 使用）===
-mol2chemfigPy3                 # SMILES -> chemfig/TikZ 代码
+# === 测试 ===
+pytest                          # 单元测试（tests/）
 
-# === 大模型接入（Day 7-8）===
-# 注意：ask_llm 直接用 requests 调 OpenAI 兼容的 /chat/completions 端点，
-#       无需 openai SDK，DeepSeek/SiliconFlow 均兼容。
-python-dotenv                # 读取 .env 中的 API_KEY（可选：缺失时程序有内置兜底解析器）
-
-# === Web 界面（Day 13-14 使用）===
-streamlit                      # 前端交互界面
-
-# === 可视化（第二阶段 2.2 使用）===
-matplotlib                      # 反应能量剖面图（势能面）绘制
+# === FastAPI 服务（Day 17-18 清小搭接入，暂未实现）===
+# fastapi
+# uvicorn[standard]
