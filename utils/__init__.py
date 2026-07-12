@@ -1,4 +1,2 @@
 # -*- coding: utf-8 -*-
-"""
-utils 子包：有机化学知识智能体的工具模块。
-"""
+"""utils 子包：转型后仅保留 rdkit_utils 与 tikz_utils。"""
