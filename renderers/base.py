@@ -9,13 +9,14 @@ from renderers.structure import render_structure
 from renderers.arrow import render_arrow
 from renderers.newman import render_newman
 from renderers.lewis import render_lewis
+from renderers.energy import render_energy
 
 RENDERER_REGISTRY = {
     "STRUCT": render_structure,
     "ARROW": render_arrow,
     "NEWMAN": render_newman,
     "LEWIS": render_lewis,
-    # "ENERGY": render_energy,  # 后续实现
+    "ENERGY": render_energy,
 }
 
 
