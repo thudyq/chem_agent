@@ -32,6 +32,7 @@ _OPENERS = {
     "ARROW": "[ARROW:",
     "NEWMAN": "[NEWMAN:",
     "ENERGY": "[ENERGY:",
+    "LEWIS": "[LEWIS:",
 }
 
 # REASONING 配对正则（内容不与括号冲突，可用正则）
