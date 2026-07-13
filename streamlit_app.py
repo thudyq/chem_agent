@@ -8,6 +8,7 @@ TikZ 走 st.code(language="latex")（自带复制按钮，点右上角复制到 
 """
 
 import re
+import tempfile
 
 import streamlit as st
 
@@ -51,6 +52,29 @@ if st.button("提问", type="primary"):
     else:
         with st.spinner("思考中（LLM 生成 + 渲染）..."):
             st.session_state.result = process_question(q)
+
+# ---- 图片上传（R3：图片→SMILES→分析）----
+st.divider()
+st.markdown("#### 📷 或上传结构式图片")
+uploaded = st.file_uploader("上传结构式图片（PNG/JPG）", type=["png", "jpg", "jpeg"])
+if uploaded is not None:
+    st.image(uploaded, caption="已上传图片", width=200)
+    suffix = "." + uploaded.name.rsplit(".", 1)[-1].lower()
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp.write(uploaded.getvalue())
+        tmp_path = tmp.name
+    if st.button("识别并分析", key="ocr_btn"):
+        with st.spinner("识别结构式（视觉模型）..."):
+            from utils.ocr_utils import image_to_smiles
+            smiles = image_to_smiles(tmp_path)
+        if smiles:
+            st.success(f"识别到 SMILES：`{smiles}`")
+            with st.spinner("分析中..."):
+                st.session_state.result = process_question(
+                    f"这个化合物的 SMILES 是 {smiles}，请分析其结构特征、官能团和基本化学性质。"
+                )
+        else:
+            st.error("识别失败。请在 .env 中配置 VISION_MODEL 为支持视觉的模型（如 GLM-4V / Qwen2-VL）。")
 
 result = st.session_state.result
 if result:
