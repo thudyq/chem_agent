@@ -10,6 +10,7 @@ from renderers.arrow import render_arrow
 from renderers.newman import render_newman
 from renderers.lewis import render_lewis
 from renderers.energy import render_energy
+from renderers.stereo import render_stereo
 
 RENDERER_REGISTRY = {
     "STRUCT": render_structure,
@@ -17,6 +18,7 @@ RENDERER_REGISTRY = {
     "NEWMAN": render_newman,
     "LEWIS": render_lewis,
     "ENERGY": render_energy,
+    "STEREO": render_stereo,
 }
 
 
