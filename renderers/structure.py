@@ -7,11 +7,12 @@
 """
 
 
-def smiles_to_chemfig(smiles: str):
+def smiles_to_chemfig(smiles: str, aromatic: bool = True):
     """SMILES → \\chemfig{...} 代码字符串；任何失败返回 None。
 
     RDKit 预验证（不可用时跳过）+ mol2chemfigPy3 渲染。供 render_structure
     及其他渲染器（arrow/newman 等）复用。
+    aromatic=True 渲染芳香环为圆圈；False 渲染 Kekulé 交替单双键。
     """
     if not smiles or not isinstance(smiles, str):
         return None
@@ -23,7 +24,7 @@ def smiles_to_chemfig(smiles: str):
         pass
     try:
         from mol2chemfigPy3 import mol2chemfig
-        result = mol2chemfig(smiles, inline=True)
+        result = mol2chemfig(smiles, aromatic=aromatic, inline=True)
     except Exception:
         return None
     if not isinstance(result, str) or not result.startswith("\\chemfig"):

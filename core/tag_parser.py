@@ -36,6 +36,7 @@ _OPENERS = {
     "STEREO": "[STEREO:",
     "MECH": "[MECH:",
     "CHARGE": "[CHARGE:",
+    "RESONANCE": "[RESONANCE:",
 }
 
 # REASONING 配对正则（内容不与括号冲突，可用正则）
