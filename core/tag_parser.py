@@ -35,6 +35,7 @@ _OPENERS = {
     "LEWIS": "[LEWIS:",
     "STEREO": "[STEREO:",
     "MECH": "[MECH:",
+    "CHARGE": "[CHARGE:",
 }
 
 # REASONING 配对正则（内容不与括号冲突，可用正则）
@@ -72,6 +73,11 @@ def _parse_content(tag_type: str, content: str) -> list:
         if "|" in content:
             smi, _, arrows = content.partition("|")
             return [smi.strip(), arrows.strip()]
+        return [content.strip(), ""]
+    if tag_type == "CHARGE":
+        if "|" in content:
+            smi, _, charges = content.partition("|")
+            return [smi.strip(), charges.strip()]
         return [content.strip(), ""]
     if tag_type == "ARROW":
         parts = content.split(",", 2)

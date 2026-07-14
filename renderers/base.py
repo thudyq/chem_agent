@@ -12,6 +12,7 @@ from renderers.lewis import render_lewis
 from renderers.energy import render_energy
 from renderers.stereo import render_stereo
 from renderers.mechanism import render_mechanism
+from renderers.charge import render_charge
 
 RENDERER_REGISTRY = {
     "STRUCT": render_structure,
@@ -21,6 +22,7 @@ RENDERER_REGISTRY = {
     "ENERGY": render_energy,
     "STEREO": render_stereo,
     "MECH": render_mechanism,
+    "CHARGE": render_charge,
 }
 
 
