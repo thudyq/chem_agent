@@ -33,14 +33,21 @@ def _atom_label(atom):
 
 
 def _parse_arrows(arrows_str):
-    """'2>0,0>1' → [(2,0),(0,1)]"""
+    """'2>0,0>1' → [(2,0,'standard'),(0,1,'standard')]
+    '2>>0' → [(2,0,'fishhook')]（鱼钩/单电子箭头）"""
     pairs = []
     for s in arrows_str.split(","):
         s = s.strip()
-        if ">" in s:
+        if ">>" in s:
+            try:
+                f, t = s.split(">>", 1)
+                pairs.append((int(f.strip()), int(t.strip()), "fishhook"))
+            except ValueError:
+                pass
+        elif ">" in s:
             try:
                 f, t = s.split(">", 1)
-                pairs.append((int(f.strip()), int(t.strip())))
+                pairs.append((int(f.strip()), int(t.strip()), "standard"))
             except ValueError:
                 pass
     return pairs
@@ -103,7 +110,7 @@ def render_mechanism(smiles: str, arrows_str: str = "") -> str:
         lines.append(f"  \\node[font=\\tiny, gray, below right] at ({x:.2f},{y:.2f}) {{{atom.GetIdx()}}};")
 
     # 弯箭头（红色 Bezier）
-    for idx, (fi, ti) in enumerate(pairs):
+    for idx, (fi, ti, atype) in enumerate(pairs):
         if fi >= mol.GetNumAtoms() or ti >= mol.GetNumAtoms():
             continue
         fx, fy = pos(fi)
@@ -114,10 +121,23 @@ def render_mechanism(smiles: str, arrows_str: str = "") -> str:
         off = 0.6 * sign
         mx = (fx + tx) / 2 + (-dy / L) * off
         my = (fy + ty) / 2 + (dx / L) * off
-        lines.append(
-            f"  \\draw[->, thick, red] ({fx:.2f},{fy:.2f}) "
-            f".. controls ({mx:.2f},{my:.2f}) .. ({tx:.2f},{ty:.2f});"
-        )
+        if atype == "fishhook":
+            # 鱼钩箭头：曲线（无 -> 全箭头）+ 单边半 barb
+            lines.append(
+                f"  \\draw[thick, red] ({fx:.2f},{fy:.2f}) "
+                f".. controls ({mx:.2f},{my:.2f}) .. ({tx:.2f},{ty:.2f});"
+            )
+            incoming = math.atan2(ty - my, tx - mx)
+            barb_ang = incoming + math.pi + math.radians(25)
+            blen = 0.18
+            bx = tx + blen * math.cos(barb_ang)
+            by = ty + blen * math.sin(barb_ang)
+            lines.append(f"  \\draw[thick, red] ({tx:.2f},{ty:.2f}) -- ({bx:.2f},{by:.2f});")
+        else:
+            lines.append(
+                f"  \\draw[->, thick, red] ({fx:.2f},{fy:.2f}) "
+                f".. controls ({mx:.2f},{my:.2f}) .. ({tx:.2f},{ty:.2f});"
+            )
 
     lines.append("\\end{tikzpicture}")
     return "\n".join(lines)
