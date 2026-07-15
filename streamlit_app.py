@@ -4,7 +4,8 @@
 启动: streamlit run streamlit_app.py
 
 将 process_question 的输出（文本 + 内联 TikZ）拆段渲染：文本走 markdown，
-TikZ 走 st.code(language="latex")（自带复制按钮，点右上角复制到 Overleaf）。
+TikZ/chemfig 代码段优先编译成 PNG 用 st.image 展示（检测到 LaTeX 引擎时），
+未装 LaTeX 则回退为 st.code(language="latex")（点右上角复制到 Overleaf）。
 """
 
 import re
@@ -13,6 +14,7 @@ import tempfile
 import streamlit as st
 
 from app import process_question
+from utils.latex_compile import compile_tikz_to_png, detect_backends
 
 # 代码段：tikzpicture 整块 | 单个 \chemfig{...}（兼容一级括号嵌套如 \mcfcringle{1.03}）
 _CODE_RE = re.compile(
@@ -34,6 +36,12 @@ def split_segments(text: str):
     if last < len(text):
         segments.append(("text", text[last:]))
     return segments
+
+
+@st.cache_data(show_spinner=False)
+def _render_code_png(code: str) -> bytes | None:
+    """编译 TikZ/chemfig 片段为 PNG（按代码内容缓存，重跑不重编）。"""
+    return compile_tikz_to_png(code)
 
 
 st.set_page_config(page_title="有机化学知识智能体", page_icon="🧪", layout="centered")
@@ -79,8 +87,30 @@ if uploaded is not None:
 result = st.session_state.result
 if result:
     st.divider()
-    for kind, content in split_segments(result):
+    segments = split_segments(result)
+    # 预编译所有代码段：成功 st.image，失败回退 st.code
+    code_segs = [c for k, c in segments if k == "code"]
+    compiled = {}
+    if code_segs:
+        backends = detect_backends()
+        if backends.get("latex_engine"):
+            with st.spinner("渲染图示中（LaTeX 编译，首次较慢）..."):
+                for c in code_segs:
+                    compiled[c] = _render_code_png(c)
+        else:
+            st.caption(
+                "⚠️ 未检测到 LaTeX 引擎，图示以代码形式显示。"
+                "安装 TeX Live / MiKTeX 后即可自动渲染为图片。"
+            )
+
+    for kind, content in segments:
         if kind == "code":
-            st.code(content, language="latex")
+            png = compiled.get(content)
+            if png:
+                st.image(png)
+                with st.expander("LaTeX 源码（复制到 Overleaf）"):
+                    st.code(content, language="latex")
+            else:
+                st.code(content, language="latex")
         elif content.strip():
             st.markdown(content)
