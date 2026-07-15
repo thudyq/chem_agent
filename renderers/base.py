@@ -14,6 +14,7 @@ from renderers.stereo import render_stereo
 from renderers.mechanism import render_mechanism
 from renderers.charge import render_charge
 from renderers.resonance import render_resonance
+from renderers.hbond import render_hbond
 
 RENDERER_REGISTRY = {
     "STRUCT": render_structure,
@@ -25,6 +26,7 @@ RENDERER_REGISTRY = {
     "MECH": render_mechanism,
     "CHARGE": render_charge,
     "RESONANCE": render_resonance,
+    "HBOND": render_hbond,
 }
 
 

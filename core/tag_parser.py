@@ -37,6 +37,7 @@ _OPENERS = {
     "MECH": "[MECH:",
     "CHARGE": "[CHARGE:",
     "RESONANCE": "[RESONANCE:",
+    "HBOND": "[HBOND:",
 }
 
 # REASONING 配对正则（内容不与括号冲突，可用正则）
@@ -79,6 +80,11 @@ def _parse_content(tag_type: str, content: str) -> list:
         if "|" in content:
             smi, _, charges = content.partition("|")
             return [smi.strip(), charges.strip()]
+        return [content.strip(), ""]
+    if tag_type == "HBOND":
+        if "|" in content:
+            smi, _, pairs = content.partition("|")
+            return [smi.strip(), pairs.strip()]
         return [content.strip(), ""]
     if tag_type == "ARROW":
         parts = content.split(",", 2)
