@@ -8,6 +8,7 @@
     [ARROW:反应物,产物,类型]
     [NEWMAN:SMILES,角度]
     [ENERGY:点序列]
+    [RETRO:目标,前体,转化名]   （逆合成空心箭头 ⇒）
     [REASONING]...[/REASONING]   （配对标记）
 """
 
@@ -38,6 +39,7 @@ _OPENERS = {
     "CHARGE": "[CHARGE:",
     "RESONANCE": "[RESONANCE:",
     "HBOND": "[HBOND:",
+    "RETRO": "[RETRO:",
 }
 
 # REASONING 配对正则（内容不与括号冲突，可用正则）
@@ -87,6 +89,11 @@ def _parse_content(tag_type: str, content: str) -> list:
             return [smi.strip(), pairs.strip()]
         return [content.strip(), ""]
     if tag_type == "ARROW":
+        parts = content.split(",", 2)
+        while len(parts) < 3:
+            parts.append("")
+        return parts
+    if tag_type == "RETRO":
         parts = content.split(",", 2)
         while len(parts) < 3:
             parts.append("")

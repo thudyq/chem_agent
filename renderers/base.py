@@ -15,6 +15,7 @@ from renderers.mechanism import render_mechanism
 from renderers.charge import render_charge
 from renderers.resonance import render_resonance
 from renderers.hbond import render_hbond
+from renderers.retro import render_retro
 
 RENDERER_REGISTRY = {
     "STRUCT": render_structure,
@@ -27,6 +28,7 @@ RENDERER_REGISTRY = {
     "CHARGE": render_charge,
     "RESONANCE": render_resonance,
     "HBOND": render_hbond,
+    "RETRO": render_retro,
 }
 
 
