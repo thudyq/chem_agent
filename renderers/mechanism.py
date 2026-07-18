@@ -11,25 +11,10 @@ renderer 额外标注索引号，便于核对箭头指向。
 
 import math
 
-
-def _atom_label(atom):
-    z = atom.GetAtomicNum()
-    if z == 6 and atom.GetFormalCharge() == 0:
-        return None
-    sym = atom.GetSymbol()
-    sym = sym[0].upper() + sym[1:]
-    h = atom.GetTotalNumHs()
-    parts = sym
-    if h == 1:
-        parts += "H"
-    elif h > 1:
-        parts += f"H$_{{{h}}}$"
-    fc = atom.GetFormalCharge()
-    if fc:
-        num = str(abs(fc)) if abs(fc) > 1 else ""
-        sign = "+" if fc > 0 else "-"
-        parts += f"$^{{{num}{sign}}}$"
-    return parts
+try:
+    from renderers._mol_base import atom_label, atom_pos, prepare_mol, bond_segments
+except ImportError:  # noqa: E722
+    from _mol_base import atom_label, atom_pos, prepare_mol, bond_segments
 
 
 def _parse_arrows(arrows_str):
@@ -57,54 +42,26 @@ def render_mechanism(smiles: str, arrows_str: str = "") -> str:
     """[MECH] 渲染：SMILES + 电子流向 → 分子骨架 + 弯箭头 TikZ。"""
     try:
         from rdkit import Chem
-        from rdkit.Chem.Draw import rdMolDraw2D
     except ImportError:
         return "（机理渲染失败：rdkit 未安装）"
 
-    mol = Chem.MolFromSmiles(smiles) if smiles else None
+    mol = prepare_mol(smiles)
     if mol is None:
         return f"（机理渲染失败：无效 SMILES「{smiles}」）"
-    try:
-        prepared = rdMolDraw2D.PrepareMolForDrawing(mol)
-        if prepared is not None:
-            mol = prepared
-    except Exception:
-        from rdkit.Chem import AllChem
-        AllChem.Compute2DCoords(mol)
-    conf = mol.GetConformer()
-
-    def pos(i):
-        p = conf.GetAtomPosition(i)
-        return p.x, p.y
 
     pairs = _parse_arrows(arrows_str)
 
     lines = ["\\begin{tikzpicture}"]
 
     # 骨架键
-    for b in mol.GetBonds():
-        i, j = b.GetBeginAtomIdx(), b.GetEndAtomIdx()
-        xi, yi = pos(i)
-        xj, yj = pos(j)
-        order = b.GetBondTypeAsDouble()
-        order = 3 if order >= 2.5 else (2 if order >= 1.5 else 1)
-        dx, dy = xj - xi, yj - yi
-        L = math.hypot(dx, dy) or 1.0
-        ux, uy = dx / L, dy / L
-        px, py = -uy, ux
-        si = 0.25 if _atom_label(mol.GetAtomWithIdx(i)) else 0.0
-        sj = 0.25 if _atom_label(mol.GetAtomWithIdx(j)) else 0.0
-        x1, y1 = xi + ux * si, yi + uy * si
-        x2, y2 = xj - ux * sj, yj - uy * sj
-        lines.append(f"  \\draw ({x1:.2f},{y1:.2f}) -- ({x2:.2f},{y2:.2f});")
-        if order >= 2:
-            d = 0.08
-            lines.append(f"  \\draw ({x1+px*d:.2f},{y1+py*d:.2f}) -- ({x2+px*d:.2f},{y2+py*d:.2f});")
+    for segs in bond_segments(mol, label_margin=0.25, bond_gap=0.08):
+        for x1, y1, x2, y2 in segs:
+            lines.append(f"  \\draw ({x1:.2f},{y1:.2f}) -- ({x2:.2f},{y2:.2f});")
 
     # 原子标签 + 索引号
     for atom in mol.GetAtoms():
-        x, y = pos(atom.GetIdx())
-        lab = _atom_label(atom)
+        x, y = atom_pos(mol, atom.GetIdx())
+        lab = atom_label(atom)
         if lab:
             lines.append(f"  \\node[fill=white, inner sep=1pt] at ({x:.2f},{y:.2f}) {{{lab}}};")
         lines.append(f"  \\node[font=\\tiny, gray, below right] at ({x:.2f},{y:.2f}) {{{atom.GetIdx()}}};")
@@ -113,8 +70,8 @@ def render_mechanism(smiles: str, arrows_str: str = "") -> str:
     for idx, (fi, ti, atype) in enumerate(pairs):
         if fi >= mol.GetNumAtoms() or ti >= mol.GetNumAtoms():
             continue
-        fx, fy = pos(fi)
-        tx, ty = pos(ti)
+        fx, fy = atom_pos(mol, fi)
+        tx, ty = atom_pos(mol, ti)
         dx, dy = tx - fx, ty - fy
         L = math.hypot(dx, dy) or 1.0
         sign = 1 if idx % 2 == 0 else -1
