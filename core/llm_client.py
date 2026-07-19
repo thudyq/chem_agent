@@ -2,54 +2,21 @@
 """core/llm_client.py — LLM 客户端（OpenAI 兼容）。
 
 调用 DeepSeek / SiliconFlow / 智谱等兼容 OpenAI 接口的服务。
-从环境变量读取 API_KEY / BASE_URL / MODEL_NAME（兼容旧 MODEL）。
+配置统一从 core.config.settings 读取（兼容旧 MODEL 环境变量）。
 system_prompt 未传时自动加载 prompts/system_prompt.txt。
 """
 
-import os
 import time
-from pathlib import Path
 
 import requests
 
+from .config import settings
 from .prompt_manager import load_system_prompt
 
-DEFAULT_TEMPERATURE = 0.2
-DEFAULT_MAX_TOKENS = 2048
-DEFAULT_TIMEOUT = 60
-DEFAULT_RETRIES = 3
-
-
-def _load_env():
-    """读取 .env 到 os.environ（python-dotenv 优先，缺失时手动解析兜底）。"""
-    try:
-        from dotenv import load_dotenv
-        load_dotenv()
-        return
-    except ImportError:
-        pass
-    env_path = Path(".env")
-    if not env_path.exists():
-        return
-    for raw in env_path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, val = line.partition("=")
-        val = val.strip().strip("'").strip('"')
-        os.environ.setdefault(key.strip(), val)
-
-
-def _get_config():
-    """读取并校验 LLM 配置。返回 (api_key, base_url, model) 或 None。"""
-    _load_env()
-    api_key = os.environ.get("API_KEY", "").strip()
-    base_url = os.environ.get("BASE_URL", "").strip().rstrip("/")
-    # MODEL_NAME（TRANSITION 规范），兼容旧 .env 的 MODEL
-    model = os.environ.get("MODEL_NAME", "").strip() or os.environ.get("MODEL", "").strip()
-    if not (api_key and base_url and model):
-        return None
-    return api_key, base_url, model
+DEFAULT_TEMPERATURE = settings.llm.temperature
+DEFAULT_MAX_TOKENS = settings.llm.max_tokens
+DEFAULT_TIMEOUT = settings.llm.timeout
+DEFAULT_RETRIES = settings.llm.retries
 
 
 def ask_llm(
@@ -71,11 +38,11 @@ def ask_llm(
     返回:
         回答文本；配置缺失或重试耗尽返回 None。
     """
-    config = _get_config()
-    if config is None:
+    config = settings.llm
+    if not config.is_configured:
         print("[ask_llm] 未配置 API_KEY/BASE_URL/MODEL_NAME，请创建 .env（参考 .env.example）。")
         return None
-    api_key, base_url, model = config
+    api_key, base_url, model = config.api_key, config.base_url, config.model_name
 
     if system_prompt is None:
         system_prompt = load_system_prompt()

@@ -7,23 +7,11 @@ MVP 方案：复用 OpenAI 兼容 API 的 vision 能力（content 含 image_url�
 """
 
 import base64
-import os
 import re
 
 import requests
 
-from core.llm_client import _load_env, _get_config
-
-
-def _get_vision_config():
-    """读取视觉模型独立配置（VISION_* 系列优先，回退到主配置）。"""
-    _load_env()
-    api_key = os.environ.get("VISION_API_KEY", "").strip() or os.environ.get("API_KEY", "").strip()
-    base_url = (os.environ.get("VISION_BASE_URL", "").strip() or os.environ.get("BASE_URL", "").strip()).rstrip("/")
-    model = os.environ.get("VISION_MODEL", "").strip() or os.environ.get("MODEL_NAME", "").strip() or os.environ.get("MODEL", "").strip()
-    if not (api_key and base_url and model):
-        return None
-    return api_key, base_url, model
+from core.config import settings
 
 
 def image_to_smiles(image_path: str) -> str:
@@ -32,11 +20,11 @@ def image_to_smiles(image_path: str) -> str:
     需配置 VISION_MODEL + VISION_BASE_URL + VISION_API_KEY（或回退到主配置）。
     失败返回 None。
     """
-    config = _get_vision_config()
-    if config is None:
+    config = settings.vision
+    if not config.is_configured:
         print("[ocr] 未配置 VISION_MODEL/VISION_BASE_URL/VISION_API_KEY")
         return None
-    api_key, base_url, model = config
+    api_key, base_url, model = config.api_key, config.base_url, config.model_name
 
     # 读图 + base64
     try:
