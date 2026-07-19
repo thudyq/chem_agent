@@ -8,7 +8,7 @@ process_question(user_question) 是核心编排函数，后续 Day 17-18 的 Fas
 from core.llm_client import ask_llm
 from core.tag_parser import parse_tags
 from core.tag_injector import inject_tags_into_text
-from renderers.base import RENDERER_REGISTRY
+from renderers.registry import RENDERER_REGISTRY
 
 
 def process_question(user_question: str) -> str:

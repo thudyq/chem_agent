@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""renderers/base.py — 渲染器注册表。
+"""renderers/registry.py — 渲染器注册表。
 
 每种 [TAG] 标记对应一个渲染函数，在此注册供主流程分派。
 后续 Day 按需新增 ARROW / NEWMAN / ENERGY 渲染器。

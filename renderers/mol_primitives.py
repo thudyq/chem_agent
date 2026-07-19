@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""renderers/_mol_base.py — RDKit 分子骨架绘制的共享工具。
+"""renderers/mol_primitives.py — RDKit 分子骨架绘制的共享工具。
 
 把 mechanism / lewis / stereo / charge / hbond 中重复的原子标签、
 2D 坐标计算、键线绘制逻辑抽取到这里，避免复制粘贴。

@@ -10,7 +10,7 @@
 
 import math
 
-from ._mol_base import atom_label, atom_pos, prepare_mol, bond_segments
+from .mol_primitives import atom_label, atom_pos, prepare_mol, bond_segments
 
 
 # 原子序 → 价电子数

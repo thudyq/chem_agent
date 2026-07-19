@@ -11,7 +11,7 @@ renderer 额外标注索引号，便于核对箭头指向。
 
 import math
 
-from ._mol_base import atom_label, atom_pos, prepare_mol, bond_segments
+from .mol_primitives import atom_label, atom_pos, prepare_mol, bond_segments
 
 
 def _parse_arrows(arrows_str):
