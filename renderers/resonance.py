@@ -9,7 +9,7 @@ LLM 提供多个共振极限式的 SMILES（~ 分隔），renderer 逐个渲染�
 示例：[RESONANCE:C1=CC=CC=C1~C1=CC=CC=C1]（苯的两个 Kekulé 式）
 """
 
-from renderers.structure import smiles_to_chemfig
+from .structure import smiles_to_chemfig
 
 
 def render_resonance(content: str) -> str:

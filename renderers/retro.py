@@ -9,7 +9,7 @@
 粗线止于箭头基部中心，再用 fill=white 的三角覆盖出空心头。
 """
 
-from renderers.structure import smiles_to_chemfig
+from .structure import smiles_to_chemfig
 
 
 def _open_arrow_tail_to(p_node: str, base_xshift: str = "-10pt",

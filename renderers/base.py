@@ -5,17 +5,17 @@
 后续 Day 按需新增 ARROW / NEWMAN / ENERGY 渲染器。
 """
 
-from renderers.structure import render_structure
-from renderers.arrow import render_arrow
-from renderers.newman import render_newman
-from renderers.lewis import render_lewis
-from renderers.energy import render_energy
-from renderers.stereo import render_stereo
-from renderers.mechanism import render_mechanism
-from renderers.charge import render_charge
-from renderers.resonance import render_resonance
-from renderers.hbond import render_hbond
-from renderers.retro import render_retro
+from .structure import render_structure
+from .arrow import render_arrow
+from .newman import render_newman
+from .lewis import render_lewis
+from .energy import render_energy
+from .stereo import render_stereo
+from .mechanism import render_mechanism
+from .charge import render_charge
+from .resonance import render_resonance
+from .hbond import render_hbond
+from .retro import render_retro
 
 RENDERER_REGISTRY = {
     "STRUCT": render_structure,

@@ -7,7 +7,7 @@
 复用 structure.smiles_to_chemfig 渲染两侧结构。
 """
 
-from renderers.structure import smiles_to_chemfig
+from .structure import smiles_to_chemfig
 
 
 def render_arrow(reactant_smi: str, product_smi: str, reaction_type: str = None) -> str:

@@ -12,7 +12,7 @@ from pathlib import Path
 
 import requests
 
-from core.prompt_manager import load_system_prompt
+from .prompt_manager import load_system_prompt
 
 DEFAULT_TEMPERATURE = 0.2
 DEFAULT_MAX_TOKENS = 2048

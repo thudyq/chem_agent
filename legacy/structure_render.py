@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-utils/structure_render.py
-=========================
+legacy/structure_render.py
+      =========================
 SMILES -> \\chemfig{TikZ} 渲染器。
 
 Day 4-5 任务：
@@ -9,9 +9,15 @@ Day 4-5 任务：
     - 提供可选的 LaTeX 导言区包装，生成可直接编译的完整文档。
 
 用法:
-    from utils.structure_render import smiles_to_tikz
+    from legacy.structure_render import smiles_to_tikz
     code = smiles_to_tikz("c1ccccc1")
 """
+
+import sys
+from pathlib import Path
+
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # mol2chemfigPy3 的输出含 \mcfcringle / \phantom 等宏，
 # LaTeX 端需同时加载 chemfig 和 mol2chemfig 两个宏包。

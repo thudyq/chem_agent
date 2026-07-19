@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-utils/mechanism_render.py
-=========================
+legacy/mechanism_render.py
+      =========================
 反应机理示意图：用 matplotlib 绘制带曲线电子流动箭头的机理图。
 
 2.3 任务：
@@ -13,7 +13,12 @@ labels 由 chem_agent 的 LLM 机理识别提供（用户的化合物角色）�
 机理类型暂未内置时返回 None，调用方优雅跳过。
 """
 
+import sys
 from io import BytesIO
+from pathlib import Path
+
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # 支持的机理类型
 SUPPORTED = {"SN2", "E2", "SN1", "E1"}

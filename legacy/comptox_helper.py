@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-utils/comptox_helper.py
-=======================
+legacy/comptox_helper.py
+      =======================
 EPA CompTox Chemicals Dashboard (CTX) API 客户端。
 
 用途：获取化合物的**实验**物理化学性质（熔点/沸点/密度/logP/溶解度等），
@@ -18,7 +18,11 @@ API 文档（经 librarian 核实，源背书：USEPA 官方 ctx-python/ctxR 包
 """
 
 import os
+import sys
 from pathlib import Path
+
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import requests
 

@@ -10,10 +10,7 @@
 
 import math
 
-try:
-    from renderers._mol_base import atom_label, atom_pos, prepare_mol, bond_segments
-except ImportError:  # noqa: E722
-    from _mol_base import atom_label, atom_pos, prepare_mol, bond_segments
+from ._mol_base import atom_label, atom_pos, prepare_mol, bond_segments
 
 
 # 原子序 → 价电子数

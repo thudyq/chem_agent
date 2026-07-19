@@ -5,10 +5,7 @@ RDKit 2D 坐标自绘分子骨架，在指定原子旁标注 δ+/δ-（红色）
 标记格式：[CHARGE:SMILES|0:δ+,1:δ-,...]
 """
 
-try:
-    from renderers._mol_base import atom_label, atom_pos, prepare_mol, bond_segments
-except ImportError:  # noqa: E722
-    from _mol_base import atom_label, atom_pos, prepare_mol, bond_segments
+from ._mol_base import atom_label, atom_pos, prepare_mol, bond_segments
 
 
 def _fmt_charge(raw: str) -> str:

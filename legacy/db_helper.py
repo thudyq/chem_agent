@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-utils/db_helper.py
-==================
+legacy/db_helper.py
+      ==================
 本地化合物知识库（SQLite）。
 
 Day 9-10 任务：
@@ -25,15 +25,18 @@ import requests
 
 # 项目根目录 / data 目录
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
-# 允许 `python utils/db_helper.py` 直接运行时导入 utils 包内兄弟模块
-if str(_PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT))
-
-from utils.curated_data import get_experimental
-from utils.comptox_helper import get_experimental_by_name as comptox_get_experimental
-
 _DATA_DIR = _PROJECT_ROOT / "data"
 _DEFAULT_DB = _DATA_DIR / "compounds.db"
+
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+try:
+    from .curated_data import get_experimental
+    from .comptox_helper import get_experimental_by_name as comptox_get_experimental
+except ImportError:  # noqa: E722
+    from curated_data import get_experimental
+    from comptox_helper import get_experimental_by_name as comptox_get_experimental
 
 # AGENT.md 指定的 20 个常见化合物：中文名 -> PubChem 查询用英文名
 COMPOUNDS = {

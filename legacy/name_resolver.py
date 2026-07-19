@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-utils/name_resolver.py
-======================
+legacy/name_resolver.py
+      ======================
 名称 -> SMILES 解析器。
 
 Day 2-3 任务：
@@ -10,9 +10,15 @@ Day 2-3 任务：
     - 全程处理网络超时与异常，确保程序不崩溃。
 
 用法:
-    from utils.name_resolver import name_to_smiles
+    from legacy.name_resolver import name_to_smiles
     smiles = name_to_smiles("aspirin")
 """
+
+import sys
+from pathlib import Path
+
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import requests
 

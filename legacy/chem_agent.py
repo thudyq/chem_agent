@@ -13,20 +13,32 @@ Day 11-12: main_process —— 串联名称解析/知识库/结构渲染/LLM，R
 import json
 import os
 import re
+import sys
 import time
 from pathlib import Path
+
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import requests
 from rdkit import Chem
 from rdkit.Chem import Descriptors
 from rdkit.Chem.rdMolDescriptors import CalcMolFormula
 
-from utils.name_resolver import name_to_smiles
-from utils.structure_render import smiles_to_tikz
-from utils.db_helper import query_property
-from utils.reaction_render import is_reaction_input, parse_reaction, render_reaction_chemfig
-from utils.energy_profile import parse_energy_points, plot_energy_profile
-from utils.mechanism_render import draw_mechanism, SUPPORTED as SUPPORTED_MECH
+try:
+    from .name_resolver import name_to_smiles
+    from .structure_render import smiles_to_tikz
+    from .db_helper import query_property
+    from .reaction_render import is_reaction_input, parse_reaction, render_reaction_chemfig
+    from .energy_profile import parse_energy_points, plot_energy_profile
+    from .mechanism_render import draw_mechanism, SUPPORTED as SUPPORTED_MECH
+except ImportError:  # noqa: E722
+    from name_resolver import name_to_smiles
+    from structure_render import smiles_to_tikz
+    from db_helper import query_property
+    from reaction_render import is_reaction_input, parse_reaction, render_reaction_chemfig
+    from energy_profile import parse_energy_points, plot_energy_profile
+    from mechanism_render import draw_mechanism, SUPPORTED as SUPPORTED_MECH
 
 # === LLM 默认参数 ===
 DEFAULT_TEMPERATURE = 0.2   # 低温度保证事实性

@@ -8,10 +8,7 @@ RDKit 解析含 @/@@ 的 SMILES → PrepareMolForDrawing（含坐标+楔形方�
 
 import math
 
-try:
-    from renderers._mol_base import atom_label, atom_pos, prepare_mol
-except ImportError:  # noqa: E722
-    from _mol_base import atom_label, atom_pos, prepare_mol
+from ._mol_base import atom_label, atom_pos, prepare_mol
 
 
 def render_stereo(smiles: str) -> str:

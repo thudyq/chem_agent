@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-utils/energy_profile.py
-========================
+legacy/energy_profile.py
+      ========================
 反应能量剖面图（势能面）：解析驻点能量 -> matplotlib 绘图。
 
 2.2 任务：
@@ -15,7 +15,12 @@ matplotlib 懒导入，未安装时绘图优雅返回 None。
 
 import json
 import re
+import sys
 from io import BytesIO
+from pathlib import Path
+
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 
 def parse_energy_points(text):

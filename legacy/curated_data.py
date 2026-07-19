@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-utils/curated_data.py
-=====================
+legacy/curated_data.py
+      =====================
 20 个常见化合物的实验数据（curated 参考值）。
 
 用途（UPGRADE 1.1）：
@@ -15,6 +15,12 @@ utils/curated_data.py
     - 会分解 / 升华的化合物，boiling_point 标注为"分解"或"升华"，不填虚假数值。
     - 所有值为参考值，如需 NIST 级精度请核对权威数据库。
 """
+
+import sys
+from pathlib import Path
+
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # 键 = en_name（与 db_helper.COMPOUNDS 的英文查询名一致）
 CURATED_EXPERIMENTAL = {

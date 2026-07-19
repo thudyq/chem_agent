@@ -5,7 +5,7 @@ app.py
 有机化学知识智能体 - Streamlit Web 界面。
 
 启动:
-    streamlit run app.py
+    streamlit run legacy/app.py
 
 功能:
     - 输入化学名称/问题 -> main_process 全链路处理
@@ -13,11 +13,19 @@ app.py
 """
 
 import base64
+import sys
 from io import BytesIO
+from pathlib import Path
+
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import streamlit as st
 
-from chem_agent import main_process
+try:
+    from .chem_agent import main_process
+except ImportError:  # noqa: E722
+    from chem_agent import main_process
 
 
 def render_png(smiles: str):

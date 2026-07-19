@@ -7,7 +7,7 @@
 
 from typing import List
 
-from core.tag_parser import RenderTag
+from .tag_parser import RenderTag
 
 
 def inject_tags_into_text(original_text: str, tags: List[RenderTag], rendered_map: dict) -> str:

@@ -9,10 +9,7 @@ RDKit 2D 坐标自绘分子骨架，在指定原子对之间画虚线表示氢�
 
 import math
 
-try:
-    from renderers._mol_base import atom_label, atom_pos, prepare_mol, bond_segments
-except ImportError:  # noqa: E722
-    from _mol_base import atom_label, atom_pos, prepare_mol, bond_segments
+from ._mol_base import atom_label, atom_pos, prepare_mol, bond_segments
 
 
 def _parse_hbonds(pairs_str: str):

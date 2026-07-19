@@ -11,10 +11,7 @@ renderer 额外标注索引号，便于核对箭头指向。
 
 import math
 
-try:
-    from renderers._mol_base import atom_label, atom_pos, prepare_mol, bond_segments
-except ImportError:  # noqa: E722
-    from _mol_base import atom_label, atom_pos, prepare_mol, bond_segments
+from ._mol_base import atom_label, atom_pos, prepare_mol, bond_segments
 
 
 def _parse_arrows(arrows_str):

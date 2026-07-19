@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-utils/reaction_render.py
-========================
+legacy/reaction_render.py
+      ========================
 反应方程式可视化：reaction SMILES -> 可视化方程式。
 
 2.1 任务：
@@ -16,7 +16,16 @@ utils/reaction_render.py
     A.B>>C.D | ⇌             可逆，无条件
 """
 
-from utils.structure_render import smiles_to_tikz
+import sys
+from pathlib import Path
+
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+try:
+    from .structure_render import smiles_to_tikz
+except ImportError:  # noqa: E722
+    from structure_render import smiles_to_tikz
 
 
 def is_reaction_input(text: str) -> bool:
