@@ -124,3 +124,35 @@ def test_arrow_bracket_smiles():
     tags = parse_tags("[ARROW:O=[N+]([O-])c1ccccc1,c1ccccc1N,a]")
     assert tags[0].args[0] == "O=[N+]([O-])c1ccccc1"
     assert tags[0].args[1] == "c1ccccc1N"
+
+
+def test_reaction_basic():
+    """[REACTION] 基础解析：反应物 | 产物 | 条件。"""
+    tags = parse_tags("[REACTION:c1ccccc1;[O-][N+](=O)[O-]|O=[N+]([O-])c1ccccc1;O|H2SO4]")
+    assert len(tags) == 1
+    t = tags[0]
+    assert t.type == "REACTION"
+    assert t.args[0] == "c1ccccc1;[O-][N+](=O)[O-]"
+    assert t.args[1] == "O=[N+]([O-])c1ccccc1;O"
+    assert t.args[2] == "H2SO4"
+
+
+def test_reaction_no_conditions():
+    """[REACTION] 省略条件时，args[2] 为空串。"""
+    tags = parse_tags("[REACTION:C;O2|CO2]")
+    assert len(tags) == 1
+    t = tags[0]
+    assert t.args[0] == "C;O2"
+    assert t.args[1] == "CO2"
+    assert t.args[2] == ""
+
+
+def test_reaction_bracket_atoms():
+    """[REACTION] 反应物/产物含 [N+]/[O-] 括号原子，验证括号平衡扫描器。"""
+    tags = parse_tags("[REACTION:[O-][N+](=O)[O-]|O=[N+]([O-])c1ccccc1|]")
+    assert len(tags) == 1
+    t = tags[0]
+    assert t.args[0] == "[O-][N+](=O)[O-]"
+    assert t.args[1] == "O=[N+]([O-])c1ccccc1"
+    assert t.args[2] == ""
+

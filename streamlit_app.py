@@ -16,9 +16,10 @@ import streamlit as st
 from app import process_question
 from utils.latex_compile import compile_tikz_to_png, detect_backends
 
-# 代码段：tikzpicture 整块 | 单个 \chemfig{...}（兼容一级括号嵌套如 \mcfcringle{1.03}）
+# 代码段：tikzpicture 整块 | schemestart 反应式 | 单个 \chemfig{...}
 _CODE_RE = re.compile(
     r"\\begin\{tikzpicture\}.*?\\end\{tikzpicture\}"
+    r"|\\schemestart.*?\\schemestop"
     r"|\\chemfig\{(?:[^{}]|\{[^{}]*\})*\}",
     re.DOTALL,
 )

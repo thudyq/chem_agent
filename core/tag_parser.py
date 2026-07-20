@@ -6,6 +6,7 @@
 支持的标记（TRANSITION Section 2）：
     [STRUCT:SMILES] 或 [STRUCT:SMILES,label=名称]
     [ARROW:反应物,产物,类型]
+    [REACTION:反应物1;反应物2;...|产物1;产物2;...|条件]
     [NEWMAN:SMILES,角度]
     [ENERGY:点序列]
     [RETRO:目标,前体,转化名]   （逆合成空心箭头 ⇒）
@@ -31,6 +32,7 @@ class RenderTag:
 _OPENERS = {
     "STRUCT": "[STRUCT:",
     "ARROW": "[ARROW:",
+    "REACTION": "[REACTION:",
     "NEWMAN": "[NEWMAN:",
     "ENERGY": "[ENERGY:",
     "LEWIS": "[LEWIS:",
@@ -93,6 +95,11 @@ def _parse_content(tag_type: str, content: str) -> list:
         while len(parts) < 3:
             parts.append("")
         return parts
+    if tag_type == "REACTION":
+        parts = content.split("|", 2)
+        while len(parts) < 3:
+            parts.append("")
+        return [p.strip() for p in parts]
     if tag_type == "RETRO":
         parts = content.split(",", 2)
         while len(parts) < 3:

@@ -7,6 +7,7 @@
 
 from .structure import render_structure
 from .arrow import render_arrow
+from .reaction import render_reaction
 from .newman import render_newman
 from .lewis import render_lewis
 from .energy import render_energy
@@ -20,6 +21,7 @@ from .retro import render_retro
 RENDERER_REGISTRY = {
     "STRUCT": render_structure,
     "ARROW": render_arrow,
+    "REACTION": render_reaction,
     "NEWMAN": render_newman,
     "LEWIS": render_lewis,
     "ENERGY": render_energy,
