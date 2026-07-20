@@ -156,3 +156,35 @@ def test_reaction_bracket_atoms():
     assert t.args[1] == "O=[N+]([O-])c1ccccc1"
     assert t.args[2] == ""
 
+
+def test_reactionmech_basic():
+    """[REACTIONMECH] 基础解析：反应物 | 产物 | 条件 | 机理箭头。"""
+    tags = parse_tags("[REACTIONMECH:CCl;[OH-]|[Cl-];CO|SN2|1:0>0:0,0:1>2:0]")
+    assert len(tags) == 1
+    t = tags[0]
+    assert t.type == "REACTIONMECH"
+    assert t.args[0] == "CCl;[OH-]"
+    assert t.args[1] == "[Cl-];CO"
+    assert t.args[2] == "SN2"
+    assert t.args[3] == "1:0>0:0,0:1>2:0"
+
+
+def test_reactionmech_no_conditions():
+    """[REACTIONMECH] 省略条件时，args[2] 为空串。"""
+    tags = parse_tags("[REACTIONMECH:CCl;[OH-]|[Cl-];CO||1:0>0:0]")
+    assert len(tags) == 1
+    t = tags[0]
+    assert t.args[0] == "CCl;[OH-]"
+    assert t.args[1] == "[Cl-];CO"
+    assert t.args[2] == ""
+    assert t.args[3] == "1:0>0:0"
+
+
+def test_reactionmech_fishhook():
+    """[REACTIONMECH] 鱼钩箭头（单电子转移）解析。"""
+    tags = parse_tags("[REACTIONMECH:C=C;[Br]|[CH2]CBr|hv|1:0>>0:0,0:0>>0:1]")
+    assert len(tags) == 1
+    t = tags[0]
+    assert t.type == "REACTIONMECH"
+    assert t.args[3] == "1:0>>0:0,0:0>>0:1"
+

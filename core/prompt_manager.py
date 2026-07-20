@@ -4,16 +4,64 @@
 from pathlib import Path
 
 _PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "system_prompt.txt"
+_ARROW_INSTRUCTION_PATH = (
+    Path(__file__).resolve().parent.parent / "prompts" / "Instruction-for-Arrows.md"
+)
+_STRUCTURE_INSTRUCTION_PATH = (
+    Path(__file__).resolve().parent.parent / "prompts" / "Instruction-for-Structure.md"
+)
+
+
+def _load_instruction(path: Path) -> str:
+    """加载独立 instruction 文件；不存在时返回空串。"""
+    if not path.exists():
+        return ""
+    return path.read_text(encoding="utf-8")
+
+
+def load_arrow_instructions() -> str:
+    """加载箭头使用规范。"""
+    return _load_instruction(_ARROW_INSTRUCTION_PATH)
+
+
+def load_structure_instructions() -> str:
+    """加载结构式使用规范。"""
+    return _load_instruction(_STRUCTURE_INSTRUCTION_PATH)
 
 
 def load_system_prompt() -> str:
-    """从 prompts/system_prompt.txt 加载系统提示文本。
+    """从 prompts/system_prompt.txt 加载系统提示，并追加箭头与结构式规范。
 
-    文件不存在时返回空串，调用方可据此降级。
+    文件不存在时返回空串，调用方可据此降级。箭头与结构式规范作为独立文件
+    维护，避免系统提示过长且便于后续更新。
     """
     if not _PROMPT_PATH.exists():
         return ""
-    return _PROMPT_PATH.read_text(encoding="utf-8")
+    system_prompt = _PROMPT_PATH.read_text(encoding="utf-8")
+
+    arrow_instructions = load_arrow_instructions()
+    if arrow_instructions:
+        system_prompt = (
+            system_prompt
+            + "\n\n"
+            + "============================================================\n"
+            + "箭头使用规范（来自 prompts/Instruction-for-Arrows.md）\n"
+            + "============================================================\n\n"
+            + arrow_instructions
+        )
+
+    structure_instructions = load_structure_instructions()
+    if structure_instructions:
+        system_prompt = (
+            system_prompt
+            + "\n\n"
+            + "============================================================\n"
+            + "结构式使用规范（来自 prompts/Instruction-for-Structure.md）\n"
+            + "============================================================\n\n"
+            + structure_instructions
+        )
+
+    return system_prompt
 
 
 def build_full_prompt(user_question: str) -> str:

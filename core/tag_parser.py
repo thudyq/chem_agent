@@ -6,11 +6,13 @@
 支持的标记（TRANSITION Section 2）：
     [STRUCT:SMILES] 或 [STRUCT:SMILES,label=名称]
     [ARROW:反应物,产物,类型]
-    [REACTION:反应物1;反应物2;...|产物1;产物2;...|条件]
+    [REACTION:反应物1;反应物2;...|产物1;产物2;...|反应条件]
+    [REACTIONMECH:反应物1;...|产物1;...|条件|机理箭头]
     [NEWMAN:SMILES,角度]
     [ENERGY:点序列]
     [RETRO:目标,前体,转化名]   （逆合成空心箭头 ⇒）
     [REASONING]...[/REASONING]   （配对标记）
+
 """
 
 import re
@@ -33,6 +35,7 @@ _OPENERS = {
     "STRUCT": "[STRUCT:",
     "ARROW": "[ARROW:",
     "REACTION": "[REACTION:",
+    "REACTIONMECH": "[REACTIONMECH:",
     "NEWMAN": "[NEWMAN:",
     "ENERGY": "[ENERGY:",
     "LEWIS": "[LEWIS:",
@@ -98,6 +101,11 @@ def _parse_content(tag_type: str, content: str) -> list:
     if tag_type == "REACTION":
         parts = content.split("|", 2)
         while len(parts) < 3:
+            parts.append("")
+        return [p.strip() for p in parts]
+    if tag_type == "REACTIONMECH":
+        parts = content.split("|", 3)
+        while len(parts) < 4:
             parts.append("")
         return [p.strip() for p in parts]
     if tag_type == "RETRO":
