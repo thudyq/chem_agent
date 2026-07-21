@@ -53,15 +53,17 @@ if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from renderers.mol_primitives import (
         bond_segments, condensed_atom_label, format_chem_text, label_plain_len,
-        lone_pair_tikz, mech_arrow_between, mech_arrow_origin, mol_visual_bbox,
+        lone_pair_tikz, mech_arrow_between, mech_arrow_origin,
         atom_pos, prepare_mol, scale_mol_coords,
     )
+    from renderers.layout import layout_row
 else:
     from .mol_primitives import (
         bond_segments, condensed_atom_label, format_chem_text, label_plain_len,
-        lone_pair_tikz, mech_arrow_between, mech_arrow_origin, mol_visual_bbox,
+        lone_pair_tikz, mech_arrow_between, mech_arrow_origin,
         atom_pos, prepare_mol, scale_mol_coords,
     )
+    from .layout import layout_row
 
 
 _MOL_GAP = 1.6    # 无连接符时相邻分子的水平间距
@@ -86,10 +88,6 @@ def _bond_margin(label: str) -> float:
     if n == 3:
         return 0.45
     return 0.58
-
-
-def _mol_bbox(mol):
-    return mol_visual_bbox(mol)
 
 
 def _parse_mech_arrows(specs):
@@ -172,33 +170,26 @@ def render_composite(layout: str, children: list) -> str:
         mols[comp["id"]] = {
             "mol": mol,
             "label": comp["label"],
-            "bbox": _mol_bbox(mol),
             "shift": (0.0, 0.0),
         }
 
-    cursor = 0.0
-    plus_positions = []
-    main_arrows = []
-    prev_kind = None
+    # 统一布局引擎：组件序列 → 位置/加号/箭头（视觉包围盒防重叠）
+    items = []
     for el in sequence:
-        kind = el[0]
-        if kind == "mol":
-            if prev_kind == "mol":
-                cursor += _MOL_GAP
-            info = mols[structs[el[1]]["id"]]
-            min_x, min_y, max_x, max_y = info["bbox"]
-            w = max_x - min_x
-            local_cx = (min_x + max_x) / 2.0
-            local_cy = (min_y + max_y) / 2.0
-            info["shift"] = (cursor + w / 2.0 - local_cx, -local_cy)
-            cursor += w
-        elif kind == "plus":
-            plus_positions.append(cursor + _PLUS_W / 2.0)
-            cursor += _PLUS_W
-        elif kind == "arrow":
-            main_arrows.append([cursor + _ARR_PAD, cursor + _ARR_W - _ARR_PAD, el[1]])
-            cursor += _ARR_W
-        prev_kind = kind
+        if el[0] == "mol":
+            cid = structs[el[1]]["id"]
+            items.append(("mol", cid, mols[cid]["mol"]))
+        elif el[0] == "plus":
+            items.append(("plus",))
+        elif el[0] == "arrow":
+            items.append(("arrow", el[1]))
+    layout = layout_row(items, mol_gap=_MOL_GAP, plus_w=_PLUS_W,
+                        arrow_w=_ARR_W, arrow_pad=_ARR_PAD)
+    for placed in layout.mols:
+        mols[placed.key]["shift"] = placed.shift
+        mols[placed.key]["bbox"] = placed.bbox
+    plus_positions = layout.pluses
+    main_arrows = [[a.x1, a.x2, a.condition] for a in layout.arrows]
 
     if global_cond:
         for arr in main_arrows:

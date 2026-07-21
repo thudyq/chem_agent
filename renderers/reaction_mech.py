@@ -45,14 +45,16 @@ if __name__ == "__main__":
     from renderers.mol_primitives import (
         atom_pos, bond_segments, condensed_atom_label, format_chem_text,
         label_plain_len, lone_pair_tikz, mech_arrow_between, mech_arrow_origin,
-        mol_visual_bbox, prepare_mol, scale_mol_coords,
+        prepare_mol, scale_mol_coords,
     )
+    from renderers.layout import layout_row
 else:
     from .mol_primitives import (
         atom_pos, bond_segments, condensed_atom_label, format_chem_text,
         label_plain_len, lone_pair_tikz, mech_arrow_between, mech_arrow_origin,
-        mol_visual_bbox, prepare_mol, scale_mol_coords,
+        prepare_mol, scale_mol_coords,
     )
+    from .layout import layout_row
 
 
 _MOL_GAP = 1.8        # 同一侧分子之间的水平间距
@@ -107,11 +109,6 @@ def _bond_margin(label: str) -> float:
     return 0.58
 
 
-def _mol_bbox(mol) -> Tuple[float, float, float, float]:
-    """返回分子视觉包围盒 (min_x, min_y, max_x, max_y)（含标签与孤对电子外延）。"""
-    return mol_visual_bbox(mol)
-
-
 def render_reaction_mech(reactants_str: str, products_str: str,
                          conditions: str = "", arrows_str: str = "",
                          flags: str = "") -> str:
@@ -145,39 +142,16 @@ def render_reaction_mech(reactants_str: str, products_str: str,
 
     arrows = _parse_arrows(arrows_str)
 
-    # 计算布局：反应物 → 箭头空档 → 产物
-    bboxes = [_mol_bbox(mol) for mol in molecules]
-    widths = [bbox[2] - bbox[0] for bbox in bboxes]
-    n_react = len(reactants)
-    n_prod = len(products)
-
-    left_width = sum(widths[:n_react]) + _MOL_GAP * (n_react - 1)
-    right_width = sum(widths[n_react:]) + _MOL_GAP * (n_prod - 1)
-
-    total_left = left_width + _ARR_MARGIN
-    total_right = right_width + _ARR_MARGIN
-    max_side = max(total_left, total_right)
-
-    shifts = []
-    cursor = -max_side
-    for i in range(n_react):
-        w = widths[i]
-        min_x, min_y, max_x, max_y = bboxes[i]
-        local_cx = (min_x + max_x) / 2.0
-        local_cy = (min_y + max_y) / 2.0
-        target_x = cursor + w / 2.0
-        shifts.append((target_x - local_cx, -local_cy))
-        cursor += w + _MOL_GAP
-
-    cursor = _ARR_MARGIN
-    for i in range(n_react, len(molecules)):
-        w = widths[i]
-        min_x, min_y, max_x, max_y = bboxes[i]
-        local_cx = (min_x + max_x) / 2.0
-        local_cy = (min_y + max_y) / 2.0
-        target_x = cursor + w / 2.0
-        shifts.append((target_x - local_cx, -local_cy))
-        cursor += w + _MOL_GAP
+    # 统一布局引擎：反应物 → 主箭头 → 产物（视觉包围盒防重叠）
+    items = []
+    for i, mol in enumerate(molecules):
+        if i == len(reactants):
+            items.append(("arrow", conditions.strip()))
+        items.append(("mol", i, mol))
+    layout = layout_row(items, mol_gap=_MOL_GAP,
+                        arrow_w=2 * _ARR_MARGIN, arrow_pad=_ARR_MARGIN / 2)
+    shifts = [p.shift for p in layout.mols]
+    main_arrow = layout.arrows[0]
 
     lines = [r"\begin{tikzpicture}"]
 
@@ -209,17 +183,15 @@ def render_reaction_mech(reactants_str: str, products_str: str,
                 lines.append(f"    {dot_line}")
         lines.append("  \\end{scope}")
 
-    arrow_left = -_ARR_MARGIN / 2.0
-    arrow_right = _ARR_MARGIN / 2.0
-    cond_text = format_chem_text(conditions.strip())
+    cond_text = format_chem_text(main_arrow.condition)
     if cond_text:
         lines.append(
-            f"  \\draw[->, very thick] ({arrow_left:.2f},0) -- ({arrow_right:.2f},0) "
+            f"  \\draw[->, very thick] ({main_arrow.x1:.2f},0) -- ({main_arrow.x2:.2f},0) "
             f"node[midway, above] {{{cond_text}}};"
         )
     else:
         lines.append(
-            f"  \\draw[->, very thick] ({arrow_left:.2f},0) -- ({arrow_right:.2f},0);"
+            f"  \\draw[->, very thick] ({main_arrow.x1:.2f},0) -- ({main_arrow.x2:.2f},0);"
         )
 
     for src_mol, src_pt, dst_mol, dst_pt, kind in arrows:
