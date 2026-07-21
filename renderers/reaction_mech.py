@@ -7,13 +7,18 @@ r"""renderers/reaction_mech.py — [REACTIONMECH] 机理图与反应式组合渲
 
 标记格式：
     [REACTIONMECH:反应物1;反应物2;...|产物1;产物2;...|反应条件|机理箭头]
+    [REACTIONMECH:反应物|产物|条件|机理箭头|numbering]   （显示原子序号）
 
 机理箭头格式：
     src_mol:src_atom>dst_mol:dst_atom        （双头弯箭头，电子对转移）
     src_mol:src_atom>>dst_mol:dst_atom       （鱼钩箭头，单电子转移）
+    端点也可以是键中点 "a-b"：src_mol:a-b>dst_mol:dst_atom
+    （σ 键断裂箭头从键发出，如 0:0-1>0:1）。杂原子起点自动上移到孤对电子
+    区域；键中点出发的箭头向下弯，其余向上弯。
 
 分子编号：先反应物后产物，从 0 开始。例如 2 个反应物 + 2 个产物时，产物
 Cl- 的编号为 2，CH3OH 的编号为 3。
+默认不显示原子序号；仅当需要核对编号时在第五段写 numbering。
 
 示例（SN2）：
     [REACTIONMECH:CCl;[OH-]|[Cl-];CO|SN2|1:0>0:0,0:1>2:0]
@@ -30,7 +35,6 @@ Cl- 的编号为 2，CH3OH 的编号为 3。
 - 产物、试剂也参与编号，LLM 可以画出“试剂 → 底物”或“键电子 → 离去基团”的箭头。
 """
 
-import math
 from typing import List, Tuple
 
 if __name__ == "__main__":
@@ -38,13 +42,22 @@ if __name__ == "__main__":
     from pathlib import Path
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from renderers.mol_primitives import atom_label, atom_pos, bond_segments, prepare_mol
+    from renderers.mol_primitives import (
+        atom_pos, bond_segments, condensed_atom_label, format_chem_text,
+        label_plain_len, lone_pair_tikz, mech_arrow_between, mech_arrow_origin,
+        mol_visual_bbox, prepare_mol, scale_mol_coords,
+    )
 else:
-    from .mol_primitives import atom_label, atom_pos, bond_segments, prepare_mol
+    from .mol_primitives import (
+        atom_pos, bond_segments, condensed_atom_label, format_chem_text,
+        label_plain_len, lone_pair_tikz, mech_arrow_between, mech_arrow_origin,
+        mol_visual_bbox, prepare_mol, scale_mol_coords,
+    )
 
 
-_MOL_GAP = 1.5        # 同一侧分子之间的水平间距
-_ARR_MARGIN = 1.5     # 分子与反应箭头之间的余量；反应箭头实际宽度等于此值
+_MOL_GAP = 1.8        # 同一侧分子之间的水平间距
+_ARR_MARGIN = 1.9     # 分子与反应箭头之间的余量；反应箭头实际宽度等于此值
+_MOL_SCALE = 0.8      # 分子坐标缩放因子（紧凑化，不影响字号）
 
 
 def _parse_molecules(s: str) -> List[str]:
@@ -52,9 +65,10 @@ def _parse_molecules(s: str) -> List[str]:
     return [x.strip() for x in s.split(";") if x.strip()]
 
 
-def _parse_arrows(arrows_str: str) -> List[Tuple[int, int, int, int, str]]:
-    """把机理箭头字符串解析为 (src_mol, src_atom, dst_mol, dst_atom, kind) 列表。
+def _parse_arrows(arrows_str: str) -> List[Tuple[int, str, int, str, str]]:
+    """把机理箭头字符串解析为 (src_mol, src_pt, dst_mol, dst_pt, kind) 列表。
 
+    src_pt / dst_pt 为原子序号字符串或 "a-b" 键中点字符串；
     kind 为 'standard' 或 'fishhook'。
     """
     arrows = []
@@ -75,45 +89,42 @@ def _parse_arrows(arrows_str: str) -> List[Tuple[int, int, int, int, str]]:
         src = src.strip()
         dst = dst.strip()
         try:
-            src_mol, src_atom = map(int, src.split(":", 1))
-            dst_mol, dst_atom = map(int, dst.split(":", 1))
+            src_mol_s, src_pt = src.split(":", 1)
+            dst_mol_s, dst_pt = dst.split(":", 1)
+            src_mol, dst_mol = int(src_mol_s), int(dst_mol_s)
         except ValueError:
             continue
-        arrows.append((src_mol, src_atom, dst_mol, dst_atom, kind))
+        arrows.append((src_mol, src_pt.strip(), dst_mol, dst_pt.strip(), kind))
     return arrows
 
 
+def _bond_margin(label: str) -> float:
+    n = label_plain_len(label)
+    if n <= 2:
+        return 0.30
+    if n == 3:
+        return 0.45
+    return 0.58
+
+
 def _mol_bbox(mol) -> Tuple[float, float, float, float]:
-    """返回分子 2D 坐标包围盒 (min_x, min_y, max_x, max_y)。"""
-    xs = []
-    ys = []
-    for atom in mol.GetAtoms():
-        x, y = atom_pos(mol, atom.GetIdx())
-        xs.append(x)
-        ys.append(y)
-    return min(xs), min(ys), max(xs), max(ys)
-
-
-def _transformed_pos(mol, shift: Tuple[float, float], idx: int) -> Tuple[float, float]:
-    x, y = atom_pos(mol, idx)
-    return x + shift[0], y + shift[1]
-
-
-def _format_conditions(text: str) -> str:
-    """把化学式中的数字自动转为下标（如 H2SO4 → H$_2$SO$_4$）。"""
-    if not text or "$" in text:
-        return text
-    import re
-    return re.sub(r"([A-Za-z])(\d+)", r"\1$_\2$", text)
+    """返回分子视觉包围盒 (min_x, min_y, max_x, max_y)（含标签与孤对电子外延）。"""
+    return mol_visual_bbox(mol)
 
 
 def render_reaction_mech(reactants_str: str, products_str: str,
-                         conditions: str = "", arrows_str: str = "") -> str:
-    r"""[REACTIONMECH] 渲染：反应式 + 机理弯箭头 → 单张 TikZ。"""
+                         conditions: str = "", arrows_str: str = "",
+                         flags: str = "") -> str:
+    r"""[REACTIONMECH] 渲染：反应式 + 机理弯箭头 → 单张 TikZ。
+
+    flags 含 "numbering" 时显示原子序号（默认隐藏）。
+    """
     try:
         from rdkit import Chem
     except ImportError:
         return "（机理反应图渲染失败：rdkit 未安装）"
+
+    show_numbers = "numbering" in (flags or "")
 
     reactants = _parse_molecules(reactants_str)
     products = _parse_molecules(products_str)
@@ -129,6 +140,7 @@ def render_reaction_mech(reactants_str: str, products_str: str,
         mol = prepare_mol(smi)
         if mol is None:
             return f"（机理反应图渲染失败：无效 SMILES「{smi}」）"
+        scale_mol_coords(mol, _MOL_SCALE)
         molecules.append(mol)
 
     arrows = _parse_arrows(arrows_str)
@@ -169,30 +181,37 @@ def render_reaction_mech(reactants_str: str, products_str: str,
 
     lines = [r"\begin{tikzpicture}"]
 
+    # 每个分子一个 scope：内部全部局部坐标，位置由 shift 决定
     for mol, shift in zip(molecules, shifts):
-        for segs in bond_segments(mol, label_margin=0.25, bond_gap=0.08):
+        lines.append(
+            f"  \\begin{{scope}}[shift={{({shift[0]:.2f},{shift[1]:.2f})}}]"
+        )
+        for segs in bond_segments(mol, labeler=condensed_atom_label,
+                                  margin_fn=_bond_margin):
             for x1, y1, x2, y2 in segs:
                 lines.append(
-                    f"  \\draw ({x1 + shift[0]:.2f},{y1 + shift[1]:.2f}) "
-                    f"-- ({x2 + shift[0]:.2f},{y2 + shift[1]:.2f});"
+                    f"    \\draw ({x1:.2f},{y1:.2f}) -- ({x2:.2f},{y2:.2f});"
                 )
-
-    for mol, shift in zip(molecules, shifts):
         for atom in mol.GetAtoms():
-            x, y = _transformed_pos(mol, shift, atom.GetIdx())
-            lab = atom_label(atom)
+            x, y = atom_pos(mol, atom.GetIdx())
+            lab = condensed_atom_label(atom)
             if lab:
                 lines.append(
-                    f"  \\node[fill=white, inner sep=1pt] at ({x:.2f},{y:.2f}) {{{lab}}};"
+                    f"    \\node[fill=white, inner sep=1pt] at ({x:.2f},{y:.2f}) {{{lab}}};"
                 )
-            lines.append(
-                f"  \\node[font=\\tiny, gray, below right] at ({x:.2f},{y:.2f}) "
-                f"{{{atom.GetIdx()}}};"
-            )
+            if show_numbers:
+                lines.append(
+                    f"    \\node[font=\\tiny, gray, below right] at ({x:.2f},{y:.2f}) "
+                    f"{{{atom.GetIdx()}}};"
+                )
+        for atom in mol.GetAtoms():
+            for dot_line in lone_pair_tikz(mol, atom.GetIdx()):
+                lines.append(f"    {dot_line}")
+        lines.append("  \\end{scope}")
 
     arrow_left = -_ARR_MARGIN / 2.0
     arrow_right = _ARR_MARGIN / 2.0
-    cond_text = _format_conditions(conditions.strip())
+    cond_text = format_chem_text(conditions.strip())
     if cond_text:
         lines.append(
             f"  \\draw[->, very thick] ({arrow_left:.2f},0) -- ({arrow_right:.2f},0) "
@@ -203,39 +222,25 @@ def render_reaction_mech(reactants_str: str, products_str: str,
             f"  \\draw[->, very thick] ({arrow_left:.2f},0) -- ({arrow_right:.2f},0);"
         )
 
-    for src_mol, src_atom, dst_mol, dst_atom, kind in arrows:
+    for src_mol, src_pt, dst_mol, dst_pt, kind in arrows:
         if src_mol >= len(molecules) or dst_mol >= len(molecules):
             continue
         sm = molecules[src_mol]
         dm = molecules[dst_mol]
-        if src_atom >= sm.GetNumAtoms() or dst_atom >= dm.GetNumAtoms():
+        p1 = mech_arrow_origin(dm, dst_pt, shifts[dst_mol],
+                               lone_pair_offset=False)
+        if p1 is None:
             continue
-        fx, fy = _transformed_pos(sm, shifts[src_mol], src_atom)
-        tx, ty = _transformed_pos(dm, shifts[dst_mol], dst_atom)
-        dx, dy = tx - fx, ty - fy
-        L = math.hypot(dx, dy) or 1.0
-        off = 0.5
-        sign = -1 if (src_mol + dst_mol) % 2 == 0 else 1
-        mx = (fx + tx) / 2.0 + (-dy / L) * off * sign
-        my = (fy + ty) / 2.0 + (dx / L) * off * sign
-        if kind == "fishhook":
-            lines.append(
-                f"  \\draw[thick, red] ({fx:.2f},{fy:.2f}) "
-                f".. controls ({mx:.2f},{my:.2f}) .. ({tx:.2f},{ty:.2f});"
-            )
-            incoming = math.atan2(ty - my, tx - mx)
-            barb_ang = incoming + math.pi + math.radians(25)
-            blen = 0.18
-            bx = tx + blen * math.cos(barb_ang)
-            by = ty + blen * math.sin(barb_ang)
-            lines.append(
-                f"  \\draw[thick, red] ({tx:.2f},{ty:.2f}) -- ({bx:.2f},{by:.2f});"
-            )
-        else:
-            lines.append(
-                f"  \\draw[->, thick, red] ({fx:.2f},{fy:.2f}) "
-                f".. controls ({mx:.2f},{my:.2f}) .. ({tx:.2f},{ty:.2f});"
-            )
+        p0 = mech_arrow_origin(sm, src_pt, shifts[src_mol],
+                               toward=(p1[0], p1[1]),
+                               prefer_single=(kind == "fishhook"))
+        if p0 is None:
+            continue
+        inset_start = 0.0 if p0[3] else (0.05 if p0[2] else 0.15)
+        lines.extend(
+            mech_arrow_between(p0[0], p0[1], p1[0], p1[1], kind,
+                               from_bond=p0[2], inset_start=inset_start)
+        )
 
     lines.append(r"\end{tikzpicture}")
     return "\n".join(lines)
@@ -250,12 +255,12 @@ if __name__ == "__main__":
     print("[REACTIONMECH] 机理反应图测试")
     print("=" * 60)
 
-    print("\n[1] SN2：OH- 进攻 CH3Cl，Cl- 离去")
+    print("\n[1] SN2：OH- 孤对电子进攻 CH3Cl，C-Cl 键断裂")
     print(render_reaction_mech(
         "CCl;[OH-]",
-        "[Cl-];CO",
+        "CO;[Cl-]",
         "SN2",
-        "1:0>0:0,0:1>2:0",
+        "1:0>0:0,0:0-1>0:1",
     ))
 
     print("\n[2] 苯的硝化：NO2+ 进攻苯环")
@@ -288,4 +293,13 @@ if __name__ == "__main__":
         "[Cl-];CO",
         "SN2",
         "1:0>0:99",
+    ))
+
+    print("\n[6] numbering 标志：显示原子序号")
+    print(render_reaction_mech(
+        "CCl;[OH-]",
+        "CO;[Cl-]",
+        "SN2",
+        "1:0>0:0,0:0-1>0:1",
+        "numbering",
     ))

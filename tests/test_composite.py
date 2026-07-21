@@ -1,0 +1,271 @@
+# -*- coding: utf-8 -*-
+"""tests/test_composite.py — [COMPOSITE] 容器式复合标记渲染器单元测试。
+
+运行: python -m pytest tests/test_composite.py -v
+"""
+
+import re
+
+import pytest
+
+from core.tag_parser import parse_tags
+from core.tag_injector import inject_tags_into_text
+from renderers.composite import render_composite
+from renderers.mol_primitives import format_chem_text
+from renderers.registry import RENDERER_REGISTRY
+
+rdkit = pytest.importorskip("rdkit", reason="rdkit 未安装，跳过渲染测试")
+
+
+SN2_DEMO = (
+    "[COMPOSITE:reaction_mech]"
+    "[STRUCT:CCl,label=CH3Cl]"
+    "[PLUS]"
+    "[STRUCT:[OH-],id=nu,label=OH-]"
+    "[RXNARROW]"
+    "[STRUCT:CO,label=CH3OH]"
+    "[PLUS]"
+    "[STRUCT:[Cl-],label=Cl-]"
+    "[MECHARROW:nu:0>r0:0]"
+    "[MECHARROW:r0:0-1>r0:1]"
+    "[CONDITION:SN2]"
+    "[/COMPOSITE]"
+)
+
+
+def _render(text: str) -> str:
+    tags = parse_tags(text)
+    composite = next((t for t in tags if t.type == "COMPOSITE"), None)
+    assert composite is not None, "未解析到 COMPOSITE 标记"
+    return render_composite(composite.args[0], composite.args[1])
+
+
+def test_sn2_full_scene():
+    """正例1：SN2 完整机理场景（4 组分 + 2 机理箭头 + 条件）。"""
+    out = _render(SN2_DEMO)
+    assert out.startswith("\\begin{tikzpicture}")
+    assert out.endswith("\\end{tikzpicture}")
+    assert out.count("$+$") == 2          # 两个 PLUS 连接符
+    assert "SN$_2$" in out                # CONDITION 标注到主箭头（数字自动下标）
+    assert out.count("\\draw[->, very thick]") == 1   # 一个主反应箭头
+    assert out.count("\\draw[->, thick, red]") == 2   # 两条双电子弯箭头
+    assert "CH$_{3}$" in out              # 非环碳按结构简式写出
+    assert "OH$^{-}$" in out and "Cl$^{-}$" in out
+    assert "\\node[font=\\tiny, gray" not in out      # 默认不显示原子序号
+    assert "\\node[below]" not in out     # 纯化学式 label 不重复显示（分子本身已是简式）
+    # 孤对电子点：OH-(3对)+CH3Cl的Cl(3对)+CH3OH的O(2对)+Cl-(4对)=12对=24点
+    assert out.count("\\fill") == 24
+
+
+def test_cjk_label_caption_shown():
+    """中文名称/角色标注仍显示在分子下方。"""
+    out = _render(
+        "[COMPOSITE:reaction_mech]"
+        "[STRUCT:CCl,label=底物][RXNARROW][STRUCT:CO,label=产物]"
+        "[/COMPOSITE]"
+    )
+    assert "底物" in out and "产物" in out
+    assert out.count("\\node[below]") == 2
+
+
+def test_bond_origin_arrow_bends_down():
+    """键中点出发的断键箭头向下弯，孤对电子进攻箭头向上弯。"""
+    out = _render(SN2_DEMO)
+    controls = re.findall(r"controls \(([-\d.]+),([-\d.]+)\)", out)
+    assert len(controls) == 2
+    cys = [float(cy) for _, cy in controls]
+    assert any(cy > 0 for cy in cys)   # nu:0>r0:0 进攻箭头向上
+    assert any(cy < 0 for cy in cys)   # r0:0-1>r0:1 断键箭头向下
+
+
+def test_numbering_flag():
+    """正例4：numbering 标志打开原子序号标注。"""
+    out = _render(
+        "[COMPOSITE:reaction_mech,numbering]"
+        "[STRUCT:CCl][RXNARROW][STRUCT:CO]"
+        "[/COMPOSITE]"
+    )
+    assert "\\node[font=\\tiny, gray" in out
+
+
+def test_lone_pair_origin_offset():
+    """进攻箭头起点落在孤对电子点上（点距 0.30，绕元素符号中心）。"""
+    out = _render(SN2_DEMO)
+    o_pos = _resolve_node_positions(out, "OH$^{-}$")
+    assert o_pos
+    ox, oy = o_pos[0]
+    # "OH-" 后缀宽 2 字符 -> 符号中心左移 0.26；正上方槽位，点距 0.30
+    expected = (ox - 0.26, oy + 0.30)
+    m = re.search(r"\\draw\[->, thick, red\] \(([-\d.]+),([-\d.]+)\)", out)
+    assert m is not None
+    start = (float(m.group(1)), float(m.group(2)))
+    assert abs(start[0] - expected[0]) < 0.1
+    assert abs(start[1] - expected[1]) < 0.1
+
+
+def test_lone_pairs_orthogonal_placement():
+    """OH- 的孤对电子点正交摆放（上/左/下，无斜向），且绕 O 符号中心。"""
+    out = _render(SN2_DEMO)
+    o_pos = _resolve_node_positions(out, "OH$^{-}$")
+    assert o_pos
+    ox, oy = o_pos[0]
+    cx, cy = ox - 0.26, oy          # 元素符号中心
+    scope_with_o = re.search(
+        r"\\begin\{scope\}\[shift=\{\(([-\d.]+),([-\d.]+)\)\}\]"
+        r"(?:(?!\\end\{scope\}).)*OH\$\^\{-\}\$.*?\\end\{scope\}", out, re.DOTALL,
+    )
+    assert scope_with_o
+    sx, sy = float(scope_with_o.group(1)), float(scope_with_o.group(2))
+    dots = re.findall(r"\\fill \(([-\d.]+),([-\d.]+)\)", scope_with_o.group(0))
+    assert len(dots) == 6            # 3 对
+    for dxs, dys in dots:
+        dx = sx + float(dxs) - cx
+        dy = sy + float(dys) - cy
+        # 正交摆放：偏移主轴对齐（|dx| 或 |dy| 小于点对半距）
+        assert abs(dx) < 0.1 or abs(dy) < 0.1, f"斜向电子点: ({dx:.2f},{dy:.2f})"
+        # 点距 0.30（容差含点对半距 0.055）
+        assert abs(abs(dx) + abs(dy) - 0.30) < 0.08
+
+
+def _resolve_node_positions(out: str, label: str) -> list:
+    """解析输出中所有 {label} 节点的全局坐标（局部坐标 + 所属 scope 的 shift）。"""
+    positions = []
+    for m in re.finditer(
+        r"\\begin\{scope\}\[shift=\{\(([-\d.]+),([-\d.]+)\)\}\](.*?)\\end\{scope\}",
+        out, re.DOTALL,
+    ):
+        sx, sy, body = float(m.group(1)), float(m.group(2)), m.group(3)
+        for nm in re.finditer(
+            r"\\node\[fill=white[^\]]*\] at \(([-\d.]+),([-\d.]+)\) "
+            r"\{((?:[^{}]|\{[^{}]*\})*)\}", body
+        ):
+            if nm.group(3) == label:
+                positions.append((sx + float(nm.group(1)), sy + float(nm.group(2))))
+    return positions
+
+
+def test_molecules_wrapped_in_scopes():
+    """每个分子组件封装在独立 scope 中（局部坐标）。"""
+    out = _render(SN2_DEMO)
+    scopes = re.findall(r"\\begin\{scope\}\[shift=", out)
+    assert len(scopes) == 4                      # 4 个 STRUCT 组件
+    assert out.count("\\end{scope}") == 4
+    # scope 内为局部坐标：键/标签不再加全局偏移（CH3Cl 的 C 在局部原点附近）
+    first_scope = re.search(
+        r"\\begin\{scope\}\[shift=\{\(([-\d.]+),([-\d.]+)\)\}\](.*?)\\end\{scope\}",
+        out, re.DOTALL,
+    )
+    assert "CH$_{3}$" in first_scope.group(3)
+
+
+def test_arrow_endpoints_near_atoms():
+    """箭头终点贴近目标原子（内缩 0.10），起点在键中点的箭头贴近键。"""
+    out = _render(SN2_DEMO)
+    # 键中点箭头终点 -> CH3Cl 的 Cl；进攻箭头终点 -> CH3Cl 的 C
+    c_positions = _resolve_node_positions(out, "CH$_{3}$")
+    cl_positions = _resolve_node_positions(out, "Cl")
+    assert c_positions and cl_positions
+    c_pos = c_positions[0]
+    cl_pos = cl_positions[0]
+    ends = re.findall(r"\.\. \(([-\d.]+),([-\d.]+)\);", out)
+    assert len(ends) == 2
+    attack_end = (float(ends[0][0]), float(ends[0][1]))
+    bond_end = (float(ends[1][0]), float(ends[1][1]))
+    assert abs(attack_end[0] - c_pos[0]) < 0.2 and abs(attack_end[1] - c_pos[1]) < 0.2
+    assert abs(bond_end[0] - cl_pos[0]) < 0.2 and abs(bond_end[1] - cl_pos[1]) < 0.2
+
+
+def test_format_chem_text():
+    """化学文本排版：数字下标、尾部电荷上标、已排版文本跳过。"""
+    assert format_chem_text("CH3Cl") == "CH$_3$Cl"
+    assert format_chem_text("OH-") == "OH$^{-}$"
+    assert format_chem_text("H2SO4, 浓HNO3") == "H$_2$SO$_4$, 浓HNO$_3$"
+    assert format_chem_text("SO42-") == "SO$_4$$^{2-}$"
+    assert format_chem_text("NH4+") == "NH$_4$$^{+}$"
+    assert format_chem_text("OH$^-$") == "OH$^-$"
+    assert format_chem_text("") == ""
+
+
+def test_row_layout_multi_step():
+    """正例2：row 布局多步序列（多个内联条件 RXNARROW）。"""
+    out = _render(
+        "[COMPOSITE:row]"
+        "[STRUCT:C=C,label=乙烯][RXNARROW:H2O / H+]"
+        "[STRUCT:CCO,label=乙醇][RXNARROW:CuO, Δ]"
+        "[STRUCT:CC=O,label=乙醛]"
+        "[/COMPOSITE]"
+    )
+    assert out.count("\\draw[->, very thick]") == 2
+    assert "H$_2$O / H$^+$" in out or "H2O / H+" in out or "H$_2$O" in out
+    assert "乙烯" in out and "乙醛" in out
+
+
+def test_fishhook_arrows():
+    """正例3：鱼钩箭头（单电子）生成半边 barb。"""
+    out = _render(
+        "[COMPOSITE:reaction_mech]"
+        "[STRUCT:C=C][PLUS][STRUCT:[Br],id=br]"
+        "[RXNARROW:hv]"
+        "[STRUCT:[CH2]CBr]"
+        "[MECHARROW:br:0>>r0:0]"
+        "[/COMPOSITE]"
+    )
+    assert "\\draw[thick, red]" in out              # 鱼钩曲线（无 -> 全箭头）
+    assert "\\draw[->, thick, red]" not in out
+    assert "hv" in out                              # RXNARROW 内联条件生效
+
+
+def test_error_no_struct():
+    """错误处理1：容器内缺少 STRUCT。"""
+    out = _render("[COMPOSITE:row][PLUS][/COMPOSITE]")
+    assert "缺少 [STRUCT]" in out
+
+
+def test_error_missing_rxnarrow():
+    """错误处理2：reaction_mech 布局缺少 RXNARROW。"""
+    out = _render("[COMPOSITE:reaction_mech][STRUCT:CCl][STRUCT:CO][/COMPOSITE]")
+    assert "RXNARROW" in out
+
+
+def test_error_unknown_layout():
+    """错误处理3：未知布局名。"""
+    out = _render("[COMPOSITE:grid][STRUCT:CCl][/COMPOSITE]")
+    assert "未知布局" in out
+
+
+def test_error_invalid_smiles():
+    """错误处理4：无效 SMILES 报出组件 id。"""
+    out = _render(
+        "[COMPOSITE:row][STRUCT:XYZ_INVALID,id=bad][RXNARROW][STRUCT:CC][/COMPOSITE]"
+    )
+    assert "无效 SMILES" in out and "bad" in out
+
+
+def test_unknown_mech_ref_skipped():
+    """容错1：机理箭头引用未知 id / 越界原子，跳过不崩溃。"""
+    out = _render(
+        "[COMPOSITE:reaction_mech]"
+        "[STRUCT:CCl][RXNARROW][STRUCT:CO]"
+        "[MECHARROW:r9:0>r0:0,r0:99>r2:0]"
+        "[/COMPOSITE]"
+    )
+    assert out.startswith("\\begin{tikzpicture}")
+    assert "red" not in out
+
+
+def test_registry_dispatch_and_injection():
+    """集成：注册表分派 + 注入器整串替换。"""
+    text = f"SN2 反应机理如下：\n{SN2_DEMO}\n以上。"
+    tags = parse_tags(text)
+    rendered = {}
+    for tag in tags:
+        renderer = RENDERER_REGISTRY.get(tag.type)
+        assert renderer is not None
+        rendered[tag.raw] = renderer(*tag.args)
+    out = inject_tags_into_text(text, tags, rendered)
+    assert "[COMPOSITE" not in out
+    assert "[STRUCT" not in out
+    assert "[/COMPOSITE]" not in out
+    assert "\\begin{tikzpicture}" in out
+    assert out.startswith("SN2 反应机理如下：")
+    assert out.endswith("以上。")

@@ -41,24 +41,29 @@ def render_energy(points_str: str) -> str:
     # 平滑曲线
     coords = " ".join(f"({x0 + i*xstep:.1f},{yp(v):.2f})" for i, v in enumerate(values))
     lines.append(f"  \\draw[thick, blue, smooth] plot coordinates {{{coords}}};")
-    # 点 + 标签
+    # 点 + 标签：每个驻点一个 scope（局部坐标，便于后续叠加结构组件）
     role_map = {0: "反应物", n - 1: "产物"}
     if max_idx not in role_map:
         role_map[max_idx] = "过渡态"
     for i, v in enumerate(values):
         x = x0 + i * xstep
         y = yp(v)
-        lines.append(f"  \\fill[blue] ({x:.1f},{y:.2f}) circle (0.06);")
+        lines.append(f"  \\begin{{scope}}[shift={{({x:.1f},{y:.2f})}}]")
+        lines.append("    \\fill[blue] (0,0) circle (0.06);")
         if i in role_map:
             yoff = 0.35 if i == max_idx else -0.3
-            lines.append(f"  \\node[font=\\small] at ({x:.1f},{y+yoff:.2f}) {{{role_map[i]} ({v:+.0f})}};")
-    # Ea / ΔH 标注框（右上角，两行）
+            lines.append(f"    \\node[font=\\small] at (0,{yoff:.2f}) {{{role_map[i]} ({v:+.0f})}};")
+        lines.append("  \\end{scope}")
+    # Ea / ΔH 标注框（独立 scope 组件）
     ea = emax - values[0]
     dh = values[-1] - values[0]
+    node_text = f"Ea $\\approx$ {ea:.0f} kJ/mol\\\\$\\Delta$H $\\approx$ {dh:+.0f} kJ/mol"
+    lines.append(f"  \\begin{{scope}}[shift={{({x_last:.1f},4.2)}}]")
     lines.append(
-        f"  \\node[draw, rounded corners, fill=yellow!10, font=\\small, align=left]"
-        f" at ({x_last:.1f},4.2) {{Ea $\\approx$ {ea:.0f} kJ/mol\\\\$\\Delta$H $\\approx$ {dh:+.0f} kJ/mol}};"
+        "    \\node[draw, rounded corners, fill=yellow!10, font=\\small, align=left]"
+        f" at (0,0) {{{node_text}}};"
     )
+    lines.append("  \\end{scope}")
     lines.append("\\end{tikzpicture}")
     return "\n".join(lines)
 

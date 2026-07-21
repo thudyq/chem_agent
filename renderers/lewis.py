@@ -5,28 +5,11 @@
 布局坐标与 RDKit 不一致——故 Lewis 完全用 RDKit 2D 坐标自绘：键、原子标签、
 孤对电子点统一坐标系，保证对齐。
 
-孤对电子数 = (价电子 − 键级和 − 形式电荷) / 2。
+孤对电子的计数、正交优先摆放、固定点距与符号中心修正与其他机理渲染器
+共享同一套逻辑（renderers/mol_primitives.py）。
 """
 
-import math
-
-from .mol_primitives import atom_label, atom_pos, prepare_mol, bond_segments
-
-
-# 原子序 → 价电子数
-_VALENCE_E = {1: 1, 5: 5, 6: 4, 7: 5, 8: 6, 9: 7, 14: 4, 15: 5, 16: 6, 17: 7, 35: 7, 53: 7}
-
-
-def _num_lone_pairs(atom) -> int:
-    """计算原子上的孤对电子数。"""
-    z = atom.GetAtomicNum()
-    ve = _VALENCE_E.get(z)
-    if ve is None:
-        return 0
-    bond_sum = sum(b.GetBondTypeAsDouble() for b in atom.GetBonds()) + atom.GetTotalNumHs()
-    fc = atom.GetFormalCharge()
-    lp = (ve - bond_sum - fc) / 2
-    return int(lp) if lp >= 0 else 0
+from .mol_primitives import atom_label, atom_pos, prepare_mol, bond_segments, lone_pair_tikz
 
 
 def render_lewis(smiles: str) -> str:
@@ -54,30 +37,10 @@ def render_lewis(smiles: str) -> str:
             x, y = atom_pos(mol, atom.GetIdx())
             lines.append(f"  \\node[fill=white,inner sep=1pt] at ({x:.2f},{y:.2f}) {{{lab}}};")
 
-    # 孤对电子点
-    DOT, R = 0.03, 0.28
+    # 孤对电子点（共享逻辑：正交优先、点距 0.30、绕元素符号中心）
     for atom in mol.GetAtoms():
-        lp = _num_lone_pairs(atom)
-        if lp <= 0:
-            continue
-        xi, yi = atom_pos(mol, atom.GetIdx())
-        dirs = []
-        for n in atom.GetNeighbors():
-            xn, yn = atom_pos(mol, n.GetIdx())
-            dL = math.hypot(xn - xi, yn - yi) or 1.0
-            dirs.append(((xn - xi) / dL, (yn - yi) / dL))
-        avg_ang = math.atan2(sum(d[1] for d in dirs), sum(d[0] for d in dirs)) if dirs else math.pi / 2
-        opp_ang = avg_ang + math.pi  # 孤对电子置于键方向的反侧
-        spread = 0.90
-        for k in range(lp):
-            off = (k - (lp - 1) / 2) * spread
-            ang = opp_ang + off
-            cx, cy = xi + R * math.cos(ang), yi + R * math.sin(ang)
-            perp = ang + math.pi / 2
-            dd = 0.07
-            for s in (-1, 1):
-                dx, dy = cx + s * dd * math.cos(perp), cy + s * dd * math.sin(perp)
-                lines.append(f"  \\fill ({dx:.2f},{dy:.2f}) circle ({DOT});")
+        for dot_line in lone_pair_tikz(mol, atom.GetIdx()):
+            lines.append(f"  {dot_line}")
 
     lines.append("\\end{tikzpicture}")
     return "\n".join(lines)

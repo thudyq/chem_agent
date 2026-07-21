@@ -22,30 +22,20 @@ matrix 是 TikZ 内置功能，无需额外 \usetikzlibrary。
 - 条件中的化学式（如 H2SO4）会自动转下标；已含 $ 的文本保持原样。
 """
 
-import re
-
 if __name__ == "__main__":
     import sys
     from pathlib import Path
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from renderers.structure import smiles_to_chemfig
+    from renderers.mol_primitives import format_chem_text
 else:
     from .structure import smiles_to_chemfig
+    from .mol_primitives import format_chem_text
 
 
 _ARROW_GAP = "1.0cm"
 _PLUS_GAP = "0.3cm"
-
-
-def _format_conditions(text: str) -> str:
-    """把化学式中的数字自动转为下标（如 H2SO4 → H$_2$SO$_4$）。
-
-    若文本已含 $ 或为空，则保持原样，避免重复转义。
-    """
-    if not text or "$" in text:
-        return text
-    return re.sub(r"([A-Za-z])(\d+)", r"\1$_\2$", text)
 
 
 def render_reaction(reactants_str: str, products_str: str, conditions: str = "") -> str:
@@ -77,7 +67,7 @@ def render_reaction(reactants_str: str, products_str: str, conditions: str = "")
     reactant_chemfigs = chemfigs[: len(reactants)]
     product_chemfigs = chemfigs[len(reactants) :]
 
-    formatted_conditions = _format_conditions(conditions.strip())
+    formatted_conditions = format_chem_text(conditions.strip())
 
     # 用 TikZ matrix 拼接所有元素：节点在 cell 中自动垂直居中，无需额外库。
     cells = []

@@ -188,3 +188,106 @@ def test_reactionmech_fishhook():
     assert t.type == "REACTIONMECH"
     assert t.args[3] == "1:0>>0:0,0:0>>0:1"
 
+
+def test_reactionmech_numbering_flag():
+    """[REACTIONMECH] 第五段 numbering 标志解析，缺省为空串。"""
+    tags = parse_tags("[REACTIONMECH:CCl;[OH-]|[Cl-];CO|SN2|1:0>0:0|numbering]")
+    t = tags[0]
+    assert len(t.args) == 5
+    assert t.args[4] == "numbering"
+
+    tags = parse_tags("[REACTIONMECH:CCl;[OH-]|[Cl-];CO|SN2|1:0>0:0]")
+    assert tags[0].args[4] == ""
+
+
+def test_mech_numbering_flag():
+    """[MECH] 第三段 numbering 标志解析，缺省为空串。"""
+    tags = parse_tags("[MECH:CCl.[OH-]|2>0,0>1|numbering]")
+    t = tags[0]
+    assert t.type == "MECH"
+    assert t.args == ["CCl.[OH-]", "2>0,0>1", "numbering"]
+
+    tags = parse_tags("[MECH:CCl.[OH-]|2>0,0>1]")
+    assert tags[0].args == ["CCl.[OH-]", "2>0,0>1", ""]
+
+
+def test_composite_basic():
+    """[COMPOSITE] 基础解析：布局名 + 子标记列表。"""
+    text = (
+        "[COMPOSITE:reaction_mech]"
+        "[STRUCT:CCl,label=CH3Cl]"
+        "[PLUS]"
+        "[STRUCT:[OH-],label=OH-]"
+        "[RXNARROW]"
+        "[STRUCT:[Cl-]][PLUS][STRUCT:CO]"
+        "[MECHARROW:r1:0>r0:0]"
+        "[CONDITION:SN2]"
+        "[/COMPOSITE]"
+    )
+    tags = parse_tags(text)
+    assert len(tags) == 1
+    t = tags[0]
+    assert t.type == "COMPOSITE"
+    assert t.args[0] == "reaction_mech"
+    children = t.args[1]
+    assert [c.type for c in children] == [
+        "STRUCT", "PLUS", "STRUCT", "RXNARROW",
+        "STRUCT", "PLUS", "STRUCT", "MECHARROW", "CONDITION",
+    ]
+    assert children[0].args == ["CCl", "CH3Cl"]
+    assert children[2].args == ["[OH-]", "OH-"]
+    assert children[7].args == ["r1:0>r0:0"]
+    assert children[8].args == ["SN2"]
+    assert text[t.start_pos:t.end_pos] == t.raw
+
+
+def test_composite_inner_tags_not_toplevel():
+    """[COMPOSITE] 容器内的 STRUCT 不会作为顶层标记重复出现。"""
+    text = "前 [STRUCT:C] [COMPOSITE:row][STRUCT:CC][/COMPOSITE] 后"
+    tags = parse_tags(text)
+    assert [t.type for t in tags] == ["STRUCT", "COMPOSITE"]
+    assert tags[0].args[0] == "C"
+    children = tags[1].args[1]
+    assert len(children) == 1
+    assert children[0].args[0] == "CC"
+
+
+def test_composite_rxnarrow_inline_condition():
+    """[COMPOSITE] 内 [RXNARROW:条件] 内联条件解析。"""
+    tags = parse_tags(
+        "[COMPOSITE:reaction_mech][STRUCT:C=C][RXNARROW:H2SO4][STRUCT:CCO][/COMPOSITE]"
+    )
+    children = tags[0].args[1]
+    assert [c.type for c in children] == ["STRUCT", "RXNARROW", "STRUCT"]
+    assert children[1].args == ["H2SO4"]
+
+
+def test_composite_struct_with_id():
+    """[COMPOSITE] 内 STRUCT 的 id= 不污染 SMILES 与 label。"""
+    tags = parse_tags("[COMPOSITE:row][STRUCT:CCl,label=CH3Cl,id=sub][/COMPOSITE]")
+    child = tags[0].args[1][0]
+    assert child.args == ["CCl", "CH3Cl"]
+    assert ",id=sub" in child.raw
+
+
+def test_composite_struct_id_before_label():
+    """[COMPOSITE] 内 STRUCT 的 id= 写在 label= 之前同样解析正确。"""
+    tags = parse_tags("[COMPOSITE:row][STRUCT:CCl,id=sub,label=CH3Cl][/COMPOSITE]")
+    child = tags[0].args[1][0]
+    assert child.args == ["CCl", "CH3Cl"]
+
+
+def test_composite_unclosed_degrades():
+    """[COMPOSITE] 缺少 [/COMPOSITE] 时不产生 COMPOSITE 标记，内部标记按顶层处理。"""
+    text = "[COMPOSITE:row][STRUCT:CCl]"
+    tags = parse_tags(text)
+    assert [t.type for t in tags] == ["STRUCT"]
+    assert tags[0].args[0] == "CCl"
+
+
+def test_composite_reasoning_inside_filtered():
+    """[COMPOSITE] 内的 REASONING 不作为顶层标记返回。"""
+    text = "[COMPOSITE:row][REASONING]x[/REASONING][STRUCT:C][/COMPOSITE]"
+    tags = parse_tags(text)
+    assert [t.type for t in tags] == ["COMPOSITE"]
+
