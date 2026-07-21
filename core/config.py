@@ -120,6 +120,21 @@ class CompToxConfig:
 
 
 @dataclass(frozen=True)
+class ServiceConfig:
+    """清小搭接入服务（api.py）配置。
+
+    api_key: 服务端 Bearer 密钥（环境变量 SERVICE_API_KEY），
+    接入清小搭向导时在「API 密钥」处填同一个值。
+    """
+
+    api_key: str = field(default_factory=lambda: _get_str("SERVICE_API_KEY"))
+
+    @property
+    def is_configured(self) -> bool:
+        return bool(self.api_key)
+
+
+@dataclass(frozen=True)
 class PromptConfig:
     """System prompt 文件路径配置。"""
 
@@ -135,6 +150,7 @@ class Settings:
     llm: LLMConfig = field(default_factory=LLMConfig)
     vision: VisionConfig = field(default_factory=VisionConfig)
     comptox: CompToxConfig = field(default_factory=CompToxConfig)
+    service: ServiceConfig = field(default_factory=ServiceConfig)
     prompt: PromptConfig = field(default_factory=PromptConfig)
     project_root: Path = field(default_factory=lambda: _PROJECT_ROOT)
 

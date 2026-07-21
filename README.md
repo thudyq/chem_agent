@@ -76,7 +76,8 @@ flowchart LR
 
 ```
 /chem_agent
-├── app.py                     # FastAPI 服务入口（清小搭接入）
+├── api.py                     # 清小搭接入服务（FastAPI，OpenAI 兼容协议）
+├── app.py                     # 端到端管线：LLM → 标记解析 → 渲染 → 注入
 ├── streamlit_app.py           # Streamlit 网页入口
 ├── core/
 │   ├── config.py              # 统一配置入口
@@ -86,7 +87,9 @@ flowchart LR
 │   └── prompt_manager.py      # System Prompt 管理
 ├── renderers/
 │   ├── registry.py            # 标记调度表
+│   ├── layout.py              # 统一坐标布局引擎（R-7）
 │   ├── mol_primitives.py      # 共享分子绘制工具
+│   ├── composite.py           # [COMPOSITE] 容器式复合标记渲染器
 │   ├── structure.py           # [STRUCT] 渲染器
 │   ├── lewis.py               # [LEWIS] 渲染器
 │   ├── charge.py              # [CHARGE] 渲染器
@@ -97,6 +100,8 @@ flowchart LR
 │   ├── retro.py               # [RETRO] 渲染器
 │   ├── resonance.py           # [RESONANCE] 渲染器
 │   ├── mechanism.py           # [MECH] 渲染器
+│   ├── reaction.py            # [REACTION] 渲染器
+│   ├── reaction_mech.py       # [REACTIONMECH] 渲染器
 │   └── energy.py              # [ENERGY] 渲染器
 ├── utils/
 │   ├── rdkit_utils.py         # RDKit 验证工具
@@ -137,6 +142,7 @@ pip install -r requirements.txt
 # 4. 配置环境变量
 cp .env.example .env
 # 编辑 .env，填入你的 API_KEY 和 BASE_URL
+# 接入清小搭时还需设置 SERVICE_API_KEY（服务端密钥）
 
 # 5. 验证安装
 python -c "from utils.rdkit_utils import validate_smiles; print(validate_smiles('C'))"
@@ -149,14 +155,15 @@ python -c "from utils.rdkit_utils import validate_smiles; print(validate_smiles(
 # 运行 Streamlit 界面（本地调试）
 streamlit run streamlit_app.py
 
-# 或运行 FastAPI 服务（模拟清小搭接入）
-uvicorn app:app --host 0.0.0.0 --port 8000 --reload
+# 或运行清小搭接入服务（OpenAI 兼容协议）
+uvicorn api:app --host 0.0.0.0 --port 8000
 ```
 
 ### API 调用示例
 
 ```bash
-curl -X POST http://localhost:8000/chat/completions \
+curl -X POST http://localhost:8000/v1/chat/completions \
+  -H "Authorization: Bearer 你的SERVICE_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "messages": [{"role": "user", "content": "画出苯的结构式，并说明其分子式"}],
@@ -184,8 +191,8 @@ curl -X POST http://localhost:8000/chat/completions \
 | 阶段        | 目标                         | 状态     |
 | :---------- | :--------------------------- | :------- |
 | **MVP**     | 名称→SMILES→TikZ 结构式渲染  | ✅ 已完成 |
-| **Phase 1** | 转型为 LLM 驱动 + 标记解析器 | 🔄 进行中 |
-| **Phase 2** | FastAPI 适配 + 清小搭接入    | 📋 计划中 |
+| **Phase 1** | 转型为 LLM 驱动 + 标记解析器 | ✅ 已完成 |
+| **Phase 2** | FastAPI 适配 + 清小搭接入    | ✅ 已完成 |
 
 ---
 

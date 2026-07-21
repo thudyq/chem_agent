@@ -15,6 +15,7 @@ pytest                          # 单元测试（tests/）
 # === 本地 Web 界面（Day 14，P3 可选）===
 streamlit                       # 本地测试界面（清小搭接入用 FastAPI，见下）
 
-# === FastAPI 服务（Day 17-18 清小搭接入，暂未实现）===
-# fastapi
-# uvicorn[standard]
+# === FastAPI 服务（清小搭接入，api.py）===
+fastapi                         # HTTP 服务框架
+uvicorn[standard]               # ASGI 服务器
+httpx                           # fastapi TestClient 依赖（测试用）
