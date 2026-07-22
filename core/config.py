@@ -125,9 +125,20 @@ class ServiceConfig:
 
     api_key: 服务端 Bearer 密钥（环境变量 SERVICE_API_KEY），
     接入清小搭向导时在「API 密钥」处填同一个值。
+    public_base_url: 服务公网地址（环境变量 PUBLIC_BASE_URL，如
+    https://your.host），用于拼接附件下载 URL；缺省用请求 Host 推导。
+    attachment_dir: 图片附件存放目录（清小搭拉取后可清理）。
+    attachment_ttl: 附件保留秒数（清小搭会立即转存到自己 OSS，默认 1 小时足够）。
     """
 
     api_key: str = field(default_factory=lambda: _get_str("SERVICE_API_KEY"))
+    public_base_url: str = field(
+        default_factory=lambda: _get_str("PUBLIC_BASE_URL").rstrip("/")
+    )
+    attachment_dir: Path = field(
+        default_factory=lambda: _PROJECT_ROOT / "data" / "attachments"
+    )
+    attachment_ttl: int = 3600
 
     @property
     def is_configured(self) -> bool:

@@ -23,6 +23,7 @@ FAKE_ANSWER = "苯的结构式为 [STRUCT:c1ccccc1]，分子式 C6H6。"
 def _mock_pipeline(monkeypatch):
     monkeypatch.setattr(api, "SERVICE_KEY", TEST_KEY)
     monkeypatch.setattr(api, "process_question", lambda q: FAKE_ANSWER)
+    monkeypatch.setattr(api, "build_attachments", lambda answer, base: [])
     yield
 
 
@@ -160,29 +161,150 @@ def test_chat_multimodal_image(client, monkeypatch, tmp_path):
 def test_extract_question_format_variants():
     """多模态格式变体：image_url 字符串形式 / input_image / 纯字符串 part。"""
     # image_url 为字符串 + content 混入纯字符串
-    text, images = api._extract_question([{"role": "user", "content": [
+    text, images, _, _ = api._extract_question([{"role": "user", "content": [
         "纯文本部分",
         {"type": "image_url", "image_url": "https://x/y.png"},
     ]}])
     assert text == "纯文本部分"
     assert images == ["https://x/y.png"]
     # input_image 类型
-    text, images = api._extract_question([{"role": "user", "content": [
+    text, images, _, _ = api._extract_question([{"role": "user", "content": [
         {"type": "input_text", "text": "t"},
         {"type": "input_image", "image_url": {"url": "data:image/png;base64,BB"}},
     ]}])
     assert text == "t"
     assert images == ["data:image/png;base64,BB"]
     # 非法结构不崩溃
-    assert api._extract_question("not-a-list") == ("", [])
-    assert api._extract_question([{"role": "user", "content": [123, None]}]) == ("", [])
+    assert api._extract_question("not-a-list") == ("", [], [], [])
+    assert api._extract_question([{"role": "user", "content": [123, None]}]) == ("", [], [], [])
+
+
+def test_extract_question_audio_and_file():
+    """input_audio 与 file part 按文档字段解析。"""
+    text, images, audios, files = api._extract_question([{"role": "user", "content": [
+        {"type": "text", "text": "处理这些"},
+        {"type": "input_audio", "input_audio": {"url": "https://oss/voice.mp3", "format": "mp3"}},
+        {"type": "file", "file": {"url": "https://oss/note.txt", "filename": "note.txt"}},
+        {"type": "file", "file": {"file_id": "fid-1", "filename": "doc.pdf"}},
+    ]}])
+    assert text == "处理这些"
+    assert audios == [("https://oss/voice.mp3", "mp3")]
+    assert files == [("https://oss/note.txt", "", "note.txt"),
+                     ("", "fid-1", "doc.pdf")]
+
+
+def test_audio_input_graceful_note(client, monkeypatch):
+    """音频输入：显式提示暂不支持，不静默丢弃。"""
+    captured = {}
+    monkeypatch.setattr(api, "process_question",
+                        lambda q: captured.setdefault("q", q) or FAKE_ANSWER)
+    payload = {"messages": [{"role": "user", "content": [
+        {"type": "input_audio", "input_audio": {"url": "https://oss/v.mp3", "format": "mp3"}},
+    ]}]}
+    resp = client.post("/v1/chat/completions", json=payload, headers=AUTH)
+    assert resp.status_code == 200
+    assert "暂不支持音频输入" in captured["q"]
+
+
+def test_file_input_txt_inlined(client, monkeypatch):
+    """文本类文件（txt/md/csv）按 URL 下载并内联内容。"""
+    captured = {}
+    monkeypatch.setattr(api, "_download_text", lambda url: "苯的熔点为 5.5℃")
+    monkeypatch.setattr(api, "process_question",
+                        lambda q: captured.setdefault("q", q) or FAKE_ANSWER)
+    payload = {"messages": [{"role": "user", "content": [
+        {"type": "text", "text": "总结这份文档"},
+        {"type": "file", "file": {"url": "https://oss/note.txt", "filename": "note.txt"}},
+    ]}]}
+    resp = client.post("/v1/chat/completions", json=payload, headers=AUTH)
+    assert resp.status_code == 200
+    assert "苯的熔点为 5.5℃" in captured["q"]
+    assert "note.txt" in captured["q"]
+
+
+def test_file_input_unsupported_type(client, monkeypatch):
+    """不支持的文件类型与仅 file_id：显式提示，不静默丢弃。"""
+    captured = {}
+    monkeypatch.setattr(api, "process_question",
+                        lambda q: captured.setdefault("q", q) or FAKE_ANSWER)
+    payload = {"messages": [{"role": "user", "content": [
+        {"type": "file", "file": {"url": "https://oss/a.pdf", "filename": "a.pdf"}},
+        {"type": "file", "file": {"file_id": "fid-1", "filename": "b.docx"}},
+    ]}]}
+    resp = client.post("/v1/chat/completions", json=payload, headers=AUTH)
+    assert resp.status_code == 200
+    assert "暂不支持解析该类型文件" in captured["q"]
+    assert "file_id" in captured["q"]
+
+
+FAKE_ATTACHMENTS = [{
+    "fileUrl": "https://host/files/" + "a" * 32 + ".png",
+    "fileName": "化学图示-1.png",
+    "fileType": "image",
+    "mimeType": "image/png",
+    "fileSize": 100,
+}]
+
+
+def test_x_soda_attachments_non_stream(client, monkeypatch):
+    """有附件时非流式响应顶层带 x_soda.attachments；无附件时不带。"""
+    monkeypatch.setattr(api, "build_attachments",
+                        lambda answer, base: FAKE_ATTACHMENTS)
+    resp = client.post("/v1/chat/completions", json=_chat_payload(), headers=AUTH)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["x_soda"]["attachments"][0]["fileType"] == "image"
+    assert data["x_soda"]["attachments"][0]["fileUrl"].startswith("https://")
+
+    monkeypatch.setattr(api, "build_attachments", lambda answer, base: [])
+    resp = client.post("/v1/chat/completions", json=_chat_payload(), headers=AUTH)
+    assert "x_soda" not in resp.json()
+
+
+def test_x_soda_attachments_stream(client, monkeypatch):
+    """流式：x_soda 挂在 stop 帧（与 usage 同帧），增量帧不带。"""
+    monkeypatch.setattr(api, "build_attachments",
+                        lambda answer, base: FAKE_ATTACHMENTS)
+    resp = client.post("/v1/chat/completions",
+                       json=_chat_payload(stream=True), headers=AUTH)
+    frames, done = _parse_sse(resp.text)
+    assert done
+    last = frames[-1]
+    assert last["choices"][0]["finish_reason"] == "stop"
+    assert last["x_soda"]["attachments"][0]["mimeType"] == "image/png"
+    assert "usage" in last
+    for f in frames[:-1]:
+        assert "x_soda" not in f
+
+
+def test_serve_attachment(client, tmp_path, monkeypatch):
+    """/files/{name}：合法文件可下载；非法名与不存在的文件 404。"""
+    import core.attachments as att_mod
+    name = "b" * 32 + ".png"
+    real_dir = api.settings.service.attachment_dir
+    real_dir.mkdir(parents=True, exist_ok=True)
+    target = real_dir / name
+    target.write_bytes(b"\x89PNG fake")
+    try:
+        resp = client.get(f"/files/{name}")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("image/png")
+        assert resp.content == b"\x89PNG fake"
+    finally:
+        target.unlink(missing_ok=True)
+    assert client.get(f"/files/{'c' * 32}.png").status_code == 404
+    assert client.get("/files/..%2F..%2Fetc%2Fpasswd").status_code in (404, 422)
+    assert client.get("/files/not-a-valid-name.png").status_code == 404
 
 
 def test_image_without_vision_config(client, monkeypatch):
     """收到图片但未配置视觉模型：回答中明确说明原因，不静默忽略。"""
     import types
     monkeypatch.setattr(api, "settings", types.SimpleNamespace(
-        vision=types.SimpleNamespace(is_configured=False)))
+        vision=types.SimpleNamespace(is_configured=False),
+        service=types.SimpleNamespace(public_base_url="", attachment_dir=None,
+                                      attachment_ttl=0),
+    ))
     captured = {}
     monkeypatch.setattr(api, "process_question",
                         lambda q: captured.setdefault("q", q) or FAKE_ANSWER)

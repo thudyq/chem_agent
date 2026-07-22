@@ -19,3 +19,9 @@ streamlit                       # 本地测试界面（清小搭接入用 FastAP
 fastapi                         # HTTP 服务框架
 uvicorn[standard]               # ASGI 服务器
 httpx                           # fastapi TestClient 依赖（测试用）
+
+# === LaTeX 编译链（TikZ → PNG 图片附件，api.py / streamlit_app.py）===
+# 注意：LaTeX 引擎是系统级依赖，pip 装不了，服务器上需另装：
+#   Debian/Ubuntu: sudo apt install texlive-xetex texlive-latex-extra texlive-lang-chinese poppler-utils
+#   Windows: 安装 MiKTeX（勾选 chemfig/mol2chemfig/ctex 宏包）
+PyMuPDF                         # PDF → PNG（pip 可装部分）
