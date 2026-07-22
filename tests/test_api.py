@@ -155,3 +155,41 @@ def test_chat_multimodal_image(client, monkeypatch, tmp_path):
     assert resp.status_code == 200
     assert "这是什么分子？" in captured["q"]
     assert "c1ccccc1" in captured["q"]
+
+
+def test_extract_question_format_variants():
+    """多模态格式变体：image_url 字符串形式 / input_image / 纯字符串 part。"""
+    # image_url 为字符串 + content 混入纯字符串
+    text, images = api._extract_question([{"role": "user", "content": [
+        "纯文本部分",
+        {"type": "image_url", "image_url": "https://x/y.png"},
+    ]}])
+    assert text == "纯文本部分"
+    assert images == ["https://x/y.png"]
+    # input_image 类型
+    text, images = api._extract_question([{"role": "user", "content": [
+        {"type": "input_text", "text": "t"},
+        {"type": "input_image", "image_url": {"url": "data:image/png;base64,BB"}},
+    ]}])
+    assert text == "t"
+    assert images == ["data:image/png;base64,BB"]
+    # 非法结构不崩溃
+    assert api._extract_question("not-a-list") == ("", [])
+    assert api._extract_question([{"role": "user", "content": [123, None]}]) == ("", [])
+
+
+def test_image_without_vision_config(client, monkeypatch):
+    """收到图片但未配置视觉模型：回答中明确说明原因，不静默忽略。"""
+    import types
+    monkeypatch.setattr(api, "settings", types.SimpleNamespace(
+        vision=types.SimpleNamespace(is_configured=False)))
+    captured = {}
+    monkeypatch.setattr(api, "process_question",
+                        lambda q: captured.setdefault("q", q) or FAKE_ANSWER)
+    payload = {"messages": [{"role": "user", "content": [
+        {"type": "text", "text": "看图"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+    ]}]}
+    resp = client.post("/v1/chat/completions", json=payload, headers=AUTH)
+    assert resp.status_code == 200
+    assert "VISION_MODEL" in captured["q"]

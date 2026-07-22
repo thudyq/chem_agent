@@ -63,9 +63,16 @@ def _usage(prompt_text: str, answer: str) -> dict:
 
 
 def _extract_question(messages: list) -> tuple[str, list]:
-    """从 messages 取最后一个 user 消息，返回 (文本, 图片 URL 列表)。"""
+    """从 messages 取最后一个 user 消息，返回 (文本, 图片 URL 列表)。
+
+    兼容多种多模态格式：content 为字符串 / 数组；part 类型
+    text / input_text / image_url / input_image / image；
+    image_url 取值可以是 {"url": ...} 字典或直接是字符串。
+    """
+    if not isinstance(messages, list):
+        return "", []
     for m in reversed(messages):
-        if m.get("role") != "user":
+        if not isinstance(m, dict) or m.get("role") != "user":
             continue
         content = m.get("content")
         if isinstance(content, str):
@@ -73,12 +80,20 @@ def _extract_question(messages: list) -> tuple[str, list]:
         if isinstance(content, list):
             texts, images = [], []
             for part in content:
-                if part.get("type") == "text":
+                if isinstance(part, str):
+                    texts.append(part)
+                    continue
+                if not isinstance(part, dict):
+                    continue
+                ptype = part.get("type", "")
+                if ptype in ("text", "input_text"):
                     texts.append(part.get("text", ""))
-                elif part.get("type") == "image_url":
-                    url = (part.get("image_url") or {}).get("url", "")
-                    if url:
-                        images.append(url)
+                elif ptype in ("image_url", "input_image", "image"):
+                    ref = part.get("image_url") or part.get("url") or ""
+                    if isinstance(ref, dict):
+                        ref = ref.get("url", "")
+                    if ref:
+                        images.append(ref)
             return "\n".join(t for t in texts if t), images
     return "", []
 
@@ -111,21 +126,35 @@ def _fetch_image_to_temp(url: str, tmp_dir: str) -> str | None:
 
 
 def _build_question(text: str, images: list, tmp_dir: str) -> str:
-    """文本 + 图片识别结果拼成最终问题。"""
+    """文本 + 图片识别结果拼成最终问题。
+
+    图片处理失败时给出明确原因（未配置视觉模型 / 下载失败 / 识别失败），
+    便于平台实测与用户排查，而不是静默忽略。
+    """
     parts = [text] if text else []
-    if images:
-        from utils.ocr_utils import image_to_smiles
-        for url in images:
-            path = _fetch_image_to_temp(url, tmp_dir)
-            if not path:
-                parts.append("（一张图片下载失败，已忽略）")
-                continue
-            smiles = image_to_smiles(path)
-            if smiles:
-                parts.append(f"（上传的结构式图片识别为 SMILES：{smiles}）")
-            else:
-                parts.append("（一张结构式图片识别失败，已忽略）")
-    return "\n".join(parts) or "（空消息）"
+    if not images:
+        return "\n".join(parts) or "（空消息）"
+    if not settings.vision.is_configured:
+        print("[api] 收到图片但未配置 VISION_MODEL/VISION_BASE_URL/VISION_API_KEY")
+        parts.append(
+            "（用户上传了图片，但服务未配置视觉模型（VISION_MODEL 等），"
+            "无法识别图片内容，请提示用户先描述结构或联系管理员配置视觉模型）"
+        )
+        return "\n".join(parts)
+    from utils.ocr_utils import image_to_smiles
+    for url in images:
+        path = _fetch_image_to_temp(url, tmp_dir)
+        if not path:
+            print(f"[api] 图片下载/解码失败: {url[:80]}")
+            parts.append("（一张图片下载失败，已忽略）")
+            continue
+        smiles = image_to_smiles(path)
+        if smiles:
+            parts.append(f"（上传的结构式图片识别为 SMILES：{smiles}）")
+        else:
+            print(f"[api] 视觉模型未能识别图片: {url[:80]}")
+            parts.append("（一张结构式图片识别失败，已忽略）")
+    return "\n".join(parts)
 
 
 def _sse_frame(cid: str, created: int, delta: dict,
