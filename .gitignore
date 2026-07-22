@@ -23,6 +23,7 @@ Thumbs.db
 #其他配置文件
 .chktexrc
 data/
+venv/
 
 # 环境变量与密钥（禁止提交；.env.example 仍被跟踪）
 .env
