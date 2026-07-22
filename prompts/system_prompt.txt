@@ -123,6 +123,8 @@
       [RXNARROW] 或 [RXNARROW:条件]         主反应箭头，兼作反应物/产物分界；可多个（A→B→C 多步）
       [CONDITION:文本]                      填充第一个无内联条件的主箭头
       [MECHARROW:id:端点>id:端点]           机理弯箭头（>> 为鱼钩）；端点为原子序号或键中点 a-b
+      [CHARGE:id|原子:δ+,原子:δ-,...]       组件上的部分电荷标注（红色，极性/亲电位点）
+      [HBOND:id|from-to,...]                组件内的氢键虚线
     示例（SN2）：
       [COMPOSITE:reaction_mech]
       [STRUCT:CCl,label=CH3Cl][PLUS][STRUCT:[OH-],id=nu,label=OH-]

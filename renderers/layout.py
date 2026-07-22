@@ -12,7 +12,10 @@ composite / reaction_mech 及后续组合式渲染器（多步序列、共振组
 from dataclasses import dataclass
 from typing import Any, Hashable, List, Tuple
 
-from .mol_primitives import mol_visual_bbox
+from .mol_primitives import (
+    atom_pos, bond_segments, condensed_atom_label, label_bond_margin,
+    lone_pair_tikz, mol_visual_bbox,
+)
 
 
 @dataclass
@@ -95,6 +98,41 @@ def layout_row(items: list, *, mol_gap: float = 1.6, plus_w: float = 1.1,
             cursor += arrow_w
         prev_kind = kind
     return RowLayout(mols=mols, pluses=pluses, arrows=arrows, width=cursor)
+
+
+def molecule_scope_lines(mol, shift: Tuple[float, float], *,
+                         show_numbers: bool = False,
+                         show_lone_pairs: bool = True) -> List[str]:
+    r"""分子组件的 scope 绘制行（内部全部局部坐标，位置由 shift 决定）。
+
+    普通方程式（show_lone_pairs=False）不画孤对电子点；
+    机理场景（show_lone_pairs=True）画出电子点；show_numbers 显示原子序号。
+    """
+    lines = [
+        f"  \\begin{{scope}}[shift={{({shift[0]:.2f},{shift[1]:.2f})}}]"
+    ]
+    for segs in bond_segments(mol, labeler=condensed_atom_label,
+                              margin_fn=label_bond_margin):
+        for x1, y1, x2, y2 in segs:
+            lines.append(f"    \\draw ({x1:.2f},{y1:.2f}) -- ({x2:.2f},{y2:.2f});")
+    for atom in mol.GetAtoms():
+        x, y = atom_pos(mol, atom.GetIdx())
+        lab = condensed_atom_label(atom)
+        if lab:
+            lines.append(
+                f"    \\node[fill=white, inner sep=1pt] at ({x:.2f},{y:.2f}) {{{lab}}};"
+            )
+        if show_numbers:
+            lines.append(
+                f"    \\node[font=\\tiny, gray, below right] at ({x:.2f},{y:.2f}) "
+                f"{{{atom.GetIdx()}}};"
+            )
+    if show_lone_pairs:
+        for atom in mol.GetAtoms():
+            for dot_line in lone_pair_tikz(mol, atom.GetIdx()):
+                lines.append(f"    {dot_line}")
+    lines.append("  \\end{scope}")
+    return lines
 
 
 if __name__ == "__main__":

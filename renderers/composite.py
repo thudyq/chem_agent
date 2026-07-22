@@ -36,6 +36,10 @@ LLM 在容器内显式列出结构组件、连接符与机理箭头，渲染器�
 区域；键中点出发的箭头向下弯，其余向上弯。引用未知 id 或越界原子的箭头
 会被跳过，不影响整体渲染。
 
+组件级标注（R-2，随分子 scope 一起移动）：
+    [CHARGE:ref|idx:δ+,idx:δ-,...]   组件 ref 上的部分电荷（红色）
+    [HBOND:ref|from-to,...]          组件 ref 内的氢键虚线（teal dashed）
+
 绘制风格：分子按结构简式绘制（非环碳原子写出 CH₃/CH₂/CH，环上碳保持
 键线式）。label 中的纯化学式（如 CH3Cl）不会重复显示——分子本身已是简式；
 中文名称/角色标注（如 底物、亲核试剂）仍显示在分子下方。
@@ -52,18 +56,18 @@ if __name__ == "__main__":
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from renderers.mol_primitives import (
-        bond_segments, condensed_atom_label, format_chem_text, label_plain_len,
-        lone_pair_tikz, mech_arrow_between, mech_arrow_origin,
-        atom_pos, prepare_mol, scale_mol_coords,
+        format_chem_text, format_partial_charge, hbond_line_tikz,
+        mech_arrow_between, mech_arrow_origin, parse_charge_pairs,
+        parse_hbond_pairs, atom_pos, prepare_mol, scale_mol_coords,
     )
-    from renderers.layout import layout_row
+    from renderers.layout import layout_row, molecule_scope_lines
 else:
     from .mol_primitives import (
-        bond_segments, condensed_atom_label, format_chem_text, label_plain_len,
-        lone_pair_tikz, mech_arrow_between, mech_arrow_origin,
-        atom_pos, prepare_mol, scale_mol_coords,
+        format_chem_text, format_partial_charge, hbond_line_tikz,
+        mech_arrow_between, mech_arrow_origin, parse_charge_pairs,
+        parse_hbond_pairs, atom_pos, prepare_mol, scale_mol_coords,
     )
-    from .layout import layout_row
+    from .layout import layout_row, molecule_scope_lines
 
 
 _MOL_GAP = 1.6    # 无连接符时相邻分子的水平间距
@@ -79,15 +83,6 @@ _MECH_ARROW_RE = re.compile(
 _STRUCT_ID_RE = re.compile(r",id=([A-Za-z0-9_]+)")
 
 _SUPPORTED_LAYOUTS = ("reaction_mech", "row")
-
-
-def _bond_margin(label: str) -> float:
-    n = label_plain_len(label)
-    if n <= 2:
-        return 0.30
-    if n == 3:
-        return 0.45
-    return 0.58
 
 
 def _parse_mech_arrows(specs):
@@ -107,6 +102,7 @@ def _collect_components(children):
     sequence = []
     mech_specs = []
     global_cond = ""
+    annotations = {}
     for child in children:
         if child.type == "STRUCT":
             m = _STRUCT_ID_RE.search(child.raw)
@@ -125,7 +121,10 @@ def _collect_components(children):
         elif child.type == "MECHARROW":
             if child.args:
                 mech_specs.extend(child.args[0].split(","))
-    return structs, sequence, mech_specs, global_cond
+        elif child.type in ("CHARGE", "HBOND") and len(child.args) >= 2:
+            ref = child.args[0].strip()
+            annotations.setdefault(ref, {})[child.type.lower()] = child.args[1]
+    return structs, sequence, mech_specs, global_cond, annotations
 
 
 def render_composite(layout: str, children: list) -> str:
@@ -154,7 +153,7 @@ def render_composite(layout: str, children: list) -> str:
         )
     show_numbers = "numbering" in flags
 
-    structs, sequence, mech_specs, global_cond = _collect_components(children)
+    structs, sequence, mech_specs, global_cond, annotations = _collect_components(children)
 
     if not structs:
         return "（COMPOSITE 渲染失败：容器内缺少 [STRUCT] 组件）"
@@ -167,10 +166,13 @@ def render_composite(layout: str, children: list) -> str:
         if mol is None:
             return f"（COMPOSITE 渲染失败：无效 SMILES「{comp['smiles']}」（组件 {comp['id']}）"
         scale_mol_coords(mol, _MOL_SCALE)
+        anno = annotations.get(comp["id"], {})
         mols[comp["id"]] = {
             "mol": mol,
             "label": comp["label"],
             "shift": (0.0, 0.0),
+            "charges": parse_charge_pairs(anno.get("charge", "")),
+            "hbonds": parse_hbond_pairs(anno.get("hbond", "")),
         }
 
     # 统一布局引擎：组件序列 → 位置/加号/箭头（视觉包围盒防重叠）
@@ -199,37 +201,31 @@ def render_composite(layout: str, children: list) -> str:
 
     lines = [r"\begin{tikzpicture}"]
 
-    # 每个分子一个 scope：内部全部局部坐标，位置由 shift 决定，
-    # 整体移动分子不破坏键/标签/电子点的内部比例
+    # 每个分子一个 scope（布局引擎积木），组件级标注（电荷/氢键）随分子移动
     for comp in structs:
         info = mols[comp["id"]]
         mol = info["mol"]
-        shift = info["shift"]
-        lines.append(
-            f"  \\begin{{scope}}[shift={{({shift[0]:.2f},{shift[1]:.2f})}}]"
-        )
-        for segs in bond_segments(mol, labeler=condensed_atom_label,
-                                  margin_fn=_bond_margin):
-            for x1, y1, x2, y2 in segs:
-                lines.append(
-                    f"    \\draw ({x1:.2f},{y1:.2f}) -- ({x2:.2f},{y2:.2f});"
-                )
-        for atom in mol.GetAtoms():
-            x, y = atom_pos(mol, atom.GetIdx())
-            lab = condensed_atom_label(atom)
-            if lab:
-                lines.append(
-                    f"    \\node[fill=white, inner sep=1pt] at ({x:.2f},{y:.2f}) {{{lab}}};"
-                )
-            if show_numbers:
-                lines.append(
-                    f"    \\node[font=\\tiny, gray, below right] at ({x:.2f},{y:.2f}) "
-                    f"{{{atom.GetIdx()}}};"
-                )
-        for atom in mol.GetAtoms():
-            for dot_line in lone_pair_tikz(mol, atom.GetIdx()):
-                lines.append(f"    {dot_line}")
-        lines.append("  \\end{scope}")
+        lines.extend(molecule_scope_lines(mol, info["shift"],
+                                          show_numbers=show_numbers))
+        for idx, raw_label in info["charges"].items():
+            if idx >= mol.GetNumAtoms():
+                continue
+            x, y = atom_pos(mol, idx)
+            x += info["shift"][0]
+            y += info["shift"][1]
+            lines.append(
+                f"  \\node[font=\\small, red] at ({x + 0.30:.2f},{y + 0.25:.2f}) "
+                f"{{{format_partial_charge(raw_label)}}};"
+            )
+        for fi, ti in info["hbonds"]:
+            if fi >= mol.GetNumAtoms() or ti >= mol.GetNumAtoms():
+                continue
+            fx, fy = atom_pos(mol, fi)
+            tx, ty = atom_pos(mol, ti)
+            lines.append(
+                "  " + hbond_line_tikz(fx + info["shift"][0], fy + info["shift"][1],
+                                       tx + info["shift"][0], ty + info["shift"][1])
+            )
 
     for comp in structs:
         info = mols[comp["id"]]

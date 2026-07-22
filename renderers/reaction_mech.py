@@ -43,18 +43,16 @@ if __name__ == "__main__":
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from renderers.mol_primitives import (
-        atom_pos, bond_segments, condensed_atom_label, format_chem_text,
-        label_plain_len, lone_pair_tikz, mech_arrow_between, mech_arrow_origin,
+        format_chem_text, mech_arrow_between, mech_arrow_origin,
         prepare_mol, scale_mol_coords,
     )
-    from renderers.layout import layout_row
+    from renderers.layout import layout_row, molecule_scope_lines
 else:
     from .mol_primitives import (
-        atom_pos, bond_segments, condensed_atom_label, format_chem_text,
-        label_plain_len, lone_pair_tikz, mech_arrow_between, mech_arrow_origin,
+        format_chem_text, mech_arrow_between, mech_arrow_origin,
         prepare_mol, scale_mol_coords,
     )
-    from .layout import layout_row
+    from .layout import layout_row, molecule_scope_lines
 
 
 _MOL_GAP = 1.8        # 同一侧分子之间的水平间距
@@ -98,15 +96,6 @@ def _parse_arrows(arrows_str: str) -> List[Tuple[int, str, int, str, str]]:
             continue
         arrows.append((src_mol, src_pt.strip(), dst_mol, dst_pt.strip(), kind))
     return arrows
-
-
-def _bond_margin(label: str) -> float:
-    n = label_plain_len(label)
-    if n <= 2:
-        return 0.30
-    if n == 3:
-        return 0.45
-    return 0.58
 
 
 def render_reaction_mech(reactants_str: str, products_str: str,
@@ -155,33 +144,9 @@ def render_reaction_mech(reactants_str: str, products_str: str,
 
     lines = [r"\begin{tikzpicture}"]
 
-    # 每个分子一个 scope：内部全部局部坐标，位置由 shift 决定
+    # 每个分子一个 scope（布局引擎积木）
     for mol, shift in zip(molecules, shifts):
-        lines.append(
-            f"  \\begin{{scope}}[shift={{({shift[0]:.2f},{shift[1]:.2f})}}]"
-        )
-        for segs in bond_segments(mol, labeler=condensed_atom_label,
-                                  margin_fn=_bond_margin):
-            for x1, y1, x2, y2 in segs:
-                lines.append(
-                    f"    \\draw ({x1:.2f},{y1:.2f}) -- ({x2:.2f},{y2:.2f});"
-                )
-        for atom in mol.GetAtoms():
-            x, y = atom_pos(mol, atom.GetIdx())
-            lab = condensed_atom_label(atom)
-            if lab:
-                lines.append(
-                    f"    \\node[fill=white, inner sep=1pt] at ({x:.2f},{y:.2f}) {{{lab}}};"
-                )
-            if show_numbers:
-                lines.append(
-                    f"    \\node[font=\\tiny, gray, below right] at ({x:.2f},{y:.2f}) "
-                    f"{{{atom.GetIdx()}}};"
-                )
-        for atom in mol.GetAtoms():
-            for dot_line in lone_pair_tikz(mol, atom.GetIdx()):
-                lines.append(f"    {dot_line}")
-        lines.append("  \\end{scope}")
+        lines.extend(molecule_scope_lines(mol, shift, show_numbers=show_numbers))
 
     cond_text = format_chem_text(main_arrow.condition)
     if cond_text:

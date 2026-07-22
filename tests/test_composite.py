@@ -253,6 +253,42 @@ def test_unknown_mech_ref_skipped():
     assert "red" not in out
 
 
+def test_charge_annotation_child():
+    """R-2：CHARGE 子标记在对应组件上标注部分电荷（红色 δ）。"""
+    out = _render(
+        "[COMPOSITE:row]"
+        "[STRUCT:OCC,label=乙醇,id=et]"
+        "[CHARGE:et|0:δ-,1:δ+]"
+        "[/COMPOSITE]"
+    )
+    assert "$\\delta^-$" in out and "$\\delta^+$" in out
+    assert "red" in out
+
+
+def test_hbond_annotation_child():
+    """R-2：HBOND 子标记在对应组件内画氢键虚线（teal dashed）。"""
+    out = _render(
+        "[COMPOSITE:row]"
+        "[STRUCT:OCO,id=diol]"
+        "[HBOND:diol|0-2]"
+        "[/COMPOSITE]"
+    )
+    assert "\\draw[dashed, teal, thick]" in out
+
+
+def test_annotation_unknown_ref_ignored():
+    """R-2 容错：CHARGE/HBOND 引用未知组件 id，忽略不崩溃。"""
+    out = _render(
+        "[COMPOSITE:row]"
+        "[STRUCT:CCl]"
+        "[CHARGE:nobody|1:δ+]"
+        "[HBOND:nobody|0-1]"
+        "[/COMPOSITE]"
+    )
+    assert out.startswith("\\begin{tikzpicture}")
+    assert "delta" not in out and "teal" not in out
+
+
 def test_registry_dispatch_and_injection():
     """集成：注册表分派 + 注入器整串替换。"""
     text = f"SN2 反应机理如下：\n{SN2_DEMO}\n以上。"

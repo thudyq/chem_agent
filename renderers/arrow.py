@@ -1,13 +1,27 @@
 # -*- coding: utf-8 -*-
-"""renderers/arrow.py — [ARROW] 标记渲染器：反应物 → 产物 的带箭头反应式。
+r"""renderers/arrow.py — [ARROW] 标记渲染器：反应物 → 产物 的带箭头反应式。
 
-用 tikzpicture 显式坐标布局：反应物节点 (0,0)、产物节点 (8,0)，
-\\draw[->] 连接，反应类型标注置于箭头下方中点。相比 chemfig \\schemestart
-的自动间距，显式坐标可控、无重叠，且标注在下方符合阅读习惯。
-复用 structure.smiles_to_chemfig 渲染两侧结构。
+由统一布局引擎（R-7，renderers/layout.py）排布：反应物 → 产物，
+反应类型标注置于箭头下方中点。每个分子封装为独立 TikZ scope（局部坐标）。
+
+标记格式：[ARROW:反应物SMILES,产物SMILES,反应类型]
 """
 
-from .structure import smiles_to_chemfig
+if __name__ == "__main__":
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from renderers.mol_primitives import format_chem_text, prepare_mol, scale_mol_coords
+    from renderers.layout import layout_row, molecule_scope_lines
+else:
+    from .mol_primitives import format_chem_text, prepare_mol, scale_mol_coords
+    from .layout import layout_row, molecule_scope_lines
+
+
+_ARR_W = 3.0
+_ARR_PAD = 0.5
+_MOL_SCALE = 0.8
 
 
 def render_arrow(reactant_smi: str, product_smi: str, reaction_type: str = None) -> str:
@@ -15,24 +29,41 @@ def render_arrow(reactant_smi: str, product_smi: str, reaction_type: str = None)
 
     任一 SMILES 无效/渲染失败时返回可读的错误提示字符串。
     """
-    reactant = smiles_to_chemfig(reactant_smi)
+    try:
+        from rdkit import Chem  # noqa: F401
+    except ImportError:
+        return "（反应箭头渲染失败：rdkit 未安装）"
+
+    reactant = prepare_mol(reactant_smi)
     if reactant is None:
         return f"（反应箭头渲染失败：无效反应物 SMILES「{reactant_smi}」）"
-    product = smiles_to_chemfig(product_smi)
+    product = prepare_mol(product_smi)
     if product is None:
         return f"（反应箭头渲染失败：无效产物 SMILES「{product_smi}」）"
+    scale_mol_coords(reactant, _MOL_SCALE)
+    scale_mol_coords(product, _MOL_SCALE)
 
-    # 反应物 (0,0)、产物 (8,0)，draw[->] 连接节点边界；标注置于箭头下方中点
-    parts = [
-        "\\begin{tikzpicture}",
-        f"  \\node (r) at (0,0) {{{reactant}}};",
-        f"  \\node (p) at (8,0) {{{product}}};",
-        "  \\draw[->, thick, shorten >=3pt, shorten <=3pt] (r) -- (p);",
-    ]
+    layout = layout_row(
+        [("mol", "r", reactant), ("arrow", ""), ("mol", "p", product)],
+        arrow_w=_ARR_W, arrow_pad=_ARR_PAD,
+    )
+    main_arrow = layout.arrows[0]
+
+    lines = ["\\begin{tikzpicture}"]
+    for placed in layout.mols:
+        lines.extend(molecule_scope_lines(placed.mol, placed.shift,
+                                          show_lone_pairs=False))
+    lines.append(
+        f"  \\draw[->, thick] ({main_arrow.x1:.2f},0) -- ({main_arrow.x2:.2f},0);"
+    )
     if reaction_type:
-        parts.append(f"  \\node[below] at (4,0) {{\\small\\itshape {reaction_type}}};")
-    parts.append("\\end{tikzpicture}")
-    return "\n".join(parts)
+        mid = (main_arrow.x1 + main_arrow.x2) / 2.0
+        lines.append(
+            f"  \\node[below] at ({mid:.2f},0) "
+            f"{{\\small\\itshape {format_chem_text(reaction_type)}}};"
+        )
+    lines.append("\\end{tikzpicture}")
+    return "\n".join(lines)
 
 
 if __name__ == "__main__":

@@ -1,12 +1,10 @@
 # -*- coding: utf-8 -*-
 r"""renderers/reaction.py — [REACTION] 组合式反应方程式渲染器。
 
-把多个反应物和多个产物当作独立的结构组件，用 TikZ matrix 横向排列成一幅
-完整反应式：反应物 + 反应物 + ... → 产物 + 产物 + ...，箭头上方可标注反应条件。
-
-使用 tikzpicture + matrix 而非 \schemestart，避免 chemfig 内部对齐选项的
-限制与编译错误，同时获得对节点间距、箭头长度、垂直居中的完全控制；
-matrix 是 TikZ 内置功能，无需额外 \usetikzlibrary。
+把多个反应物和多个产物当作独立的结构组件，由统一布局引擎（R-7，
+renderers/layout.py）排成一行：反应物 + 反应物 + ... → 产物 + 产物 + ...，
+箭头上方可标注反应条件。每个分子封装为独立 TikZ scope（局部坐标），
+位置、加号、箭头全部由 layout_row 计算，避免重叠。
 
 标记格式：
     [REACTION:反应物1;反应物2;...|产物1;产物2;...|反应条件]
@@ -16,10 +14,8 @@ matrix 是 TikZ 内置功能，无需额外 \usetikzlibrary。
     [REACTION:C=C;[H]O[H]|CCO|H2SO4]
 
 设计选择：
-- 用分号 ; 分隔同一侧分子，避免和 SMILES 中的 [N+]([O-]) 等字符冲突；
-- 用 | 分隔反应物区、产物区、可选反应条件；
-- 化学计量系数在 v1 中暂由 LLM 在条件文本中注明，后续可扩展为 n:SMILES 语法；
-- 条件中的化学式（如 H2SO4）会自动转下标；已含 $ 的文本保持原样。
+- 分子按结构简式绘制（非环碳写出 CH₃/CH₂/CH，环上碳保持键线式），不画孤对电子；
+- 条件中的化学式（如 H2SO4）自动转下标；已含 $ 的文本保持原样。
 """
 
 if __name__ == "__main__":
@@ -27,15 +23,18 @@ if __name__ == "__main__":
     from pathlib import Path
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from renderers.structure import smiles_to_chemfig
-    from renderers.mol_primitives import format_chem_text
+    from renderers.mol_primitives import format_chem_text, prepare_mol, scale_mol_coords
+    from renderers.layout import layout_row, molecule_scope_lines
 else:
-    from .structure import smiles_to_chemfig
-    from .mol_primitives import format_chem_text
+    from .mol_primitives import format_chem_text, prepare_mol, scale_mol_coords
+    from .layout import layout_row, molecule_scope_lines
 
 
-_ARROW_GAP = "1.0cm"
-_PLUS_GAP = "0.3cm"
+_MOL_GAP = 1.6
+_PLUS_W = 1.1
+_ARR_W = 2.6
+_ARR_PAD = 0.65
+_MOL_SCALE = 0.8
 
 
 def render_reaction(reactants_str: str, products_str: str, conditions: str = "") -> str:
@@ -49,6 +48,11 @@ def render_reaction(reactants_str: str, products_str: str, conditions: str = "")
     返回:
         可编译的 TikZ 代码；失败返回可读错误提示。
     """
+    try:
+        from rdkit import Chem  # noqa: F401
+    except ImportError:
+        return "（反应式渲染失败：rdkit 未安装）"
+
     reactants = [s.strip() for s in reactants_str.split(";") if s.strip()]
     products = [s.strip() for s in products_str.split(";") if s.strip()]
 
@@ -57,50 +61,43 @@ def render_reaction(reactants_str: str, products_str: str, conditions: str = "")
     if not products:
         return "（反应式渲染失败：产物不能为空）"
 
-    chemfigs = []
+    mols = []
     for smi in reactants + products:
-        cf = smiles_to_chemfig(smi)
-        if cf is None:
+        mol = prepare_mol(smi)
+        if mol is None:
             return f"（反应式渲染失败：无法为「{smi}」生成结构式）"
-        chemfigs.append(cf)
+        scale_mol_coords(mol, _MOL_SCALE)
+        mols.append(mol)
 
-    reactant_chemfigs = chemfigs[: len(reactants)]
-    product_chemfigs = chemfigs[len(reactants) :]
+    items = []
+    n_react = len(reactants)
+    for i, mol in enumerate(mols):
+        if i == n_react:
+            items.append(("arrow", conditions.strip()))
+        elif i > 0:
+            items.append(("plus",))
+        items.append(("mol", i, mol))
+    layout = layout_row(items, mol_gap=_MOL_GAP, plus_w=_PLUS_W,
+                        arrow_w=_ARR_W, arrow_pad=_ARR_PAD)
 
-    formatted_conditions = format_chem_text(conditions.strip())
+    lines = [r"\begin{tikzpicture}"]
+    for placed in layout.mols:
+        lines.extend(molecule_scope_lines(placed.mol, placed.shift,
+                                          show_lone_pairs=False))
+    for px in layout.pluses:
+        lines.append(f"  \\node at ({px:.2f},0) {{$+$}};")
 
-    # 用 TikZ matrix 拼接所有元素：节点在 cell 中自动垂直居中，无需额外库。
-    cells = []
-    for i, cf in enumerate(reactant_chemfigs):
-        cells.append(f"\\node (r{i}) {{{cf}}};")
-        if i < len(reactant_chemfigs) - 1:
-            cells.append(r"\node {$+$};")
-
-    # 空白列提供箭头间距，minimum width 控制箭头长度
-    cells.append(f"\\node[minimum width={_ARROW_GAP}] {{}};")
-
-    for i, cf in enumerate(product_chemfigs):
-        cells.append(f"\\node (p{i}) {{{cf}}};")
-        if i < len(product_chemfigs) - 1:
-            cells.append(r"\node {$+$};")
-
-    matrix_row = " & ".join(cells) + r" \\"
-
-    lines = [
-        r"\begin{tikzpicture}[baseline=(current bounding box.center)]",
-        r"  \matrix (m) [column sep=" + _PLUS_GAP + ", row sep=0cm, nodes={anchor=center}] {",
-        f"    {matrix_row}",
-        r"  };",
-    ]
-
-    last_r = f"r{len(reactant_chemfigs) - 1}"
-    if formatted_conditions:
+    main_arrow = layout.arrows[0]
+    cond_text = format_chem_text(main_arrow.condition)
+    if cond_text:
         lines.append(
-            f"  \\draw[->, thick] ({last_r}.east) -- (p0.west) "
-            f"node[midway, above] {{\\small {formatted_conditions}}};"
+            f"  \\draw[->, very thick] ({main_arrow.x1:.2f},0) -- ({main_arrow.x2:.2f},0) "
+            f"node[midway, above] {{{cond_text}}};"
         )
     else:
-        lines.append(f"  \\draw[->, thick] ({last_r}.east) -- (p0.west);")
+        lines.append(
+            f"  \\draw[->, very thick] ({main_arrow.x1:.2f},0) -- ({main_arrow.x2:.2f},0);"
+        )
 
     lines.append(r"\end{tikzpicture}")
     return "\n".join(lines)

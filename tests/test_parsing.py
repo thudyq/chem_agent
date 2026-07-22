@@ -291,3 +291,20 @@ def test_composite_reasoning_inside_filtered():
     tags = parse_tags(text)
     assert [t.type for t in tags] == ["COMPOSITE"]
 
+
+def test_composite_charge_hbond_children():
+    """[COMPOSITE] 内 CHARGE/HBOND 子标记解析（R-2），不作为顶层标记。"""
+    text = (
+        "[COMPOSITE:row]"
+        "[STRUCT:OCC,id=et]"
+        "[CHARGE:et|0:δ-,1:δ+]"
+        "[HBOND:et|0-2]"
+        "[/COMPOSITE]"
+    )
+    tags = parse_tags(text)
+    assert [t.type for t in tags] == ["COMPOSITE"]
+    children = tags[0].args[1]
+    assert [c.type for c in children] == ["STRUCT", "CHARGE", "HBOND"]
+    assert children[1].args == ["et", "0:δ-,1:δ+"]
+    assert children[2].args == ["et", "0-2"]
+

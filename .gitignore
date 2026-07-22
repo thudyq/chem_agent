@@ -12,6 +12,7 @@ latex_tests/
 
 # 内部工作文档（AI 指令）
 instructions/
+portfolio/
 .omo/
 
 # 其他常见的临时文件

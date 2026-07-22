@@ -7,23 +7,10 @@ RDKit 2D 坐标自绘分子骨架，在指定原子对之间画虚线表示氢�
       [HBOND:OCO|0-2]（分子内 O(0)···O(2) 氢键）
 """
 
-import math
-
-from .mol_primitives import atom_label, atom_pos, prepare_mol, bond_segments
-
-
-def _parse_hbonds(pairs_str: str):
-    """'0-2,3-5' → [(0,2),(3,5)]"""
-    pairs = []
-    for s in pairs_str.split(","):
-        s = s.strip()
-        if "-" in s:
-            try:
-                f, t = s.split("-", 1)
-                pairs.append((int(f.strip()), int(t.strip())))
-            except ValueError:
-                pass
-    return pairs
+from .mol_primitives import (
+    atom_label, atom_pos, hbond_line_tikz, parse_hbond_pairs,
+    prepare_mol, bond_segments,
+)
 
 
 def render_hbond(smiles: str, pairs_str: str = "") -> str:
@@ -37,7 +24,7 @@ def render_hbond(smiles: str, pairs_str: str = "") -> str:
     if mol is None:
         return f"（氢键渲染失败：无效 SMILES「{smiles}」）"
 
-    hbonds = _parse_hbonds(pairs_str)
+    hbonds = parse_hbond_pairs(pairs_str)
 
     lines = ["\\begin{tikzpicture}"]
 
@@ -53,21 +40,13 @@ def render_hbond(smiles: str, pairs_str: str = "") -> str:
             x, y = atom_pos(mol, atom.GetIdx())
             lines.append(f"  \\node[fill=white, inner sep=1pt] at ({x:.2f},{y:.2f}) {{{lab}}};")
 
-    # 氢键虚线（蓝绿色，dashed，缩短两端避免压住原子）
+    # 氢键虚线
     for fi, ti in hbonds:
         if fi >= mol.GetNumAtoms() or ti >= mol.GetNumAtoms():
             continue
         fx, fy = atom_pos(mol, fi)
         tx, ty = atom_pos(mol, ti)
-        dx, dy = tx - fx, ty - fy
-        L = math.hypot(dx, dy) or 1.0
-        ux, uy = dx / L, dy / L
-        margin = 0.25
-        x1, y1 = fx + ux * margin, fy + uy * margin
-        x2, y2 = tx - ux * margin, ty - uy * margin
-        lines.append(
-            f"  \\draw[dashed, teal, thick] ({x1:.2f},{y1:.2f}) -- ({x2:.2f},{y2:.2f});"
-        )
+        lines.append("  " + hbond_line_tikz(fx, fy, tx, ty))
 
     lines.append("\\end{tikzpicture}")
     return "\n".join(lines)

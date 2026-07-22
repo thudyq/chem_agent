@@ -20,6 +20,8 @@ COMPOSITE 容器内允许的子标记：
     [RXNARROW] 或 [RXNARROW:条件]      主反应箭头（兼作反应物/产物分界）
     [CONDITION:文本]                   主反应箭头上方的条件文本
     [MECHARROW:src:atom>dst:atom]      机理弯箭头；>> 为鱼钩箭头
+    [CHARGE:ref|idx:δ+,...]            组件 ref 上的部分电荷标注（R-2）
+    [HBOND:ref|from-to,...]            组件 ref 内的氢键虚线（R-2）
 
 COMPOSITE 解析结果为单个 RenderTag：type="COMPOSITE"，
 args=[布局名, 子标记 RenderTag 列表]，raw 覆盖整个配对块。
@@ -71,6 +73,8 @@ _INNER_OPENERS = {
     "MECHARROW": "[MECHARROW:",
     "CONDITION": "[CONDITION:",
     "RXNARROW": "[RXNARROW:",
+    "CHARGE": "[CHARGE:",
+    "HBOND": "[HBOND:",
 }
 
 # COMPOSITE 容器内允许的无参子标记（整串匹配）

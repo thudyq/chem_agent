@@ -68,6 +68,68 @@ def label_plain_len(label: str) -> int:
     return len(re.sub(r"[$_{}^\\]", "", label))
 
 
+def label_bond_margin(label: str) -> float:
+    """按标签可视长度分档的键线留白（机理场景统一值）。"""
+    n = label_plain_len(label)
+    if n <= 2:
+        return 0.30
+    if n == 3:
+        return 0.45
+    return 0.58
+
+
+def format_partial_charge(raw: str) -> str:
+    """部分电荷文本排版：δ+ → $\\delta^+$，δ- → $\\delta^-$；其他原样返回。"""
+    raw = raw.strip()
+    if "δ" in raw:
+        s = raw.replace("δ", "\\delta")
+        if s.endswith("+"):
+            s = s[:-1] + "^+"
+        elif s.endswith("-"):
+            s = s[:-1] + "^-"
+        return f"${s}$"
+    return raw
+
+
+def parse_charge_pairs(charges_str: str) -> dict:
+    """'0:δ+,1:δ-' → {0: 'δ+', 1: 'δ-'}（原子序号 → 部分电荷标签）。"""
+    result = {}
+    for pair in (charges_str or "").split(","):
+        pair = pair.strip()
+        if ":" in pair:
+            idx_str, _, label = pair.partition(":")
+            try:
+                result[int(idx_str.strip())] = label.strip()
+            except ValueError:
+                pass
+    return result
+
+
+def parse_hbond_pairs(pairs_str: str) -> list:
+    """'0-2,3-5' → [(0, 2), (3, 5)]（氢键两端原子序号）。"""
+    pairs = []
+    for s in (pairs_str or "").split(","):
+        s = s.strip()
+        if "-" in s:
+            try:
+                f, t = s.split("-", 1)
+                pairs.append((int(f.strip()), int(t.strip())))
+            except ValueError:
+                pass
+    return pairs
+
+
+def hbond_line_tikz(fx: float, fy: float, tx: float, ty: float,
+                    margin: float = 0.25) -> str:
+    r"""生成一条氢键虚线（teal dashed，两端内缩避免压住原子标签）。"""
+    dx, dy = tx - fx, ty - fy
+    length = math.hypot(dx, dy) or 1.0
+    ux, uy = dx / length, dy / length
+    x1, y1 = fx + ux * margin, fy + uy * margin
+    x2, y2 = tx - ux * margin, ty - uy * margin
+    return f"\\draw[dashed, teal, thick] ({x1:.2f},{y1:.2f}) -- ({x2:.2f},{y2:.2f});"
+
+
 _VALENCE_ELECTRONS = {1: 1, 5: 3, 6: 4, 7: 5, 8: 6, 9: 7,
                       14: 4, 15: 5, 16: 6, 17: 7, 35: 7, 53: 7}
 

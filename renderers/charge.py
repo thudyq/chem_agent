@@ -5,34 +5,10 @@ RDKit 2D 坐标自绘分子骨架，在指定原子旁标注 δ+/δ-（红色）
 标记格式：[CHARGE:SMILES|0:δ+,1:δ-,...]
 """
 
-from .mol_primitives import atom_label, atom_pos, prepare_mol, bond_segments
-
-
-def _fmt_charge(raw: str) -> str:
-    """δ+ → $\\delta^+$, δ- → $\\delta^-$"""
-    raw = raw.strip()
-    if "δ" in raw:
-        s = raw.replace("δ", "\\delta")
-        if s.endswith("+"):
-            s = s[:-1] + "^+"
-        elif s.endswith("-"):
-            s = s[:-1] + "^-"
-        return f"${s}$"
-    return raw
-
-
-def _parse_charges(charges_str: str) -> dict:
-    """'0:δ+,1:δ-' → {0: 'δ+', 1: 'δ-'}"""
-    result = {}
-    for pair in charges_str.split(","):
-        pair = pair.strip()
-        if ":" in pair:
-            idx_str, _, label = pair.partition(":")
-            try:
-                result[int(idx_str.strip())] = label.strip()
-            except ValueError:
-                pass
-    return result
+from .mol_primitives import (
+    atom_label, atom_pos, format_partial_charge, parse_charge_pairs,
+    prepare_mol, bond_segments,
+)
 
 
 def render_charge(smiles: str, charges_str: str = "") -> str:
@@ -46,7 +22,7 @@ def render_charge(smiles: str, charges_str: str = "") -> str:
     if mol is None:
         return f"（电荷标注渲染失败：无效 SMILES「{smiles}」）"
 
-    charges = _parse_charges(charges_str)
+    charges = parse_charge_pairs(charges_str)
 
     lines = ["\\begin{tikzpicture}"]
 
@@ -67,7 +43,7 @@ def render_charge(smiles: str, charges_str: str = "") -> str:
         if idx >= mol.GetNumAtoms():
             continue
         x, y = atom_pos(mol, idx)
-        label = _fmt_charge(raw_label)
+        label = format_partial_charge(raw_label)
         lines.append(f"  \\node[font=\\small, red] at ({x+0.30:.2f},{y+0.25:.2f}) {{{label}}};")
 
     lines.append("\\end{tikzpicture}")
