@@ -308,3 +308,11 @@ def test_composite_charge_hbond_children():
     assert children[1].args == ["et", "0:δ-,1:δ+"]
     assert children[2].args == ["et", "0-2"]
 
+
+def test_composite_struct_at_pos_attrs():
+    """[COMPOSITE] energy 布局 STRUCT 的 at=/pos= 不污染 SMILES 与 label（R-3）。"""
+    text = "[COMPOSITE:energy][STRUCT:CCl,label=底物,at=1,pos=below][/COMPOSITE]"
+    child = parse_tags(text)[0].args[1][0]
+    assert child.args == ["CCl", "底物"]
+    assert ",at=1" in child.raw and ",pos=below" in child.raw
+

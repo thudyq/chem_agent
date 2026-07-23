@@ -289,6 +289,84 @@ def test_annotation_unknown_ref_ignored():
     assert "delta" not in out and "teal" not in out
 
 
+ENERGY_DEMO = (
+    "[COMPOSITE:energy]"
+    "[ENERGY:0,108,-20]"
+    "[STRUCT:CCl.[OH-],label=反应物,at=0]"
+    "[STRUCT:CCl.[OH-],label=过渡态,at=1]"
+    "[STRUCT:CO.[Cl-],label=产物,at=2]"
+    "[/COMPOSITE]"
+)
+
+
+def test_energy_layout_full():
+    """R-3 正例：势能面曲线 + 3 个驻点结构 + 驻点标签用 STRUCT label。"""
+    out = _render(ENERGY_DEMO)
+    assert out.startswith("\\begin{tikzpicture}")
+    assert "smooth] plot coordinates" in out              # 势能面曲线
+    assert "\\draw[gray, dashed]" in out                 # 反应物基线
+    assert "Ea $\\approx$ 108" in out                    # Ea 标注框
+    assert "anchor=north" in out                         # 标注框 anchor 定位
+    # 3 个驻点 scope + 3 个分子 scope（标注框为带 anchor 的直接节点）
+    assert out.count("\\begin{scope}[shift=") == 6
+    assert "反应物 (+0)" in out and "过渡态 (+108)" in out and "产物 (-20)" in out
+
+
+def test_energy_layout_struct_positions():
+    """R-3 布局：分子在驻点正上方（above）或下方（below），水平居中。"""
+    out = _render(ENERGY_DEMO)
+    scopes = re.findall(
+        r"\\begin\{scope\}\[shift=\{\(([-\d.]+),([-\d.]+)\)\}\]", out)
+    assert len(scopes) == 6
+    # 前 3 个是驻点 scope（y 单调：低-高-低），后 3 个是分子 scope
+    point_ys = [float(y) for _, y in scopes[:3]]
+    mol_ys = [float(y) for _, y in scopes[3:6]]
+    assert point_ys[1] > point_ys[0] and point_ys[1] > point_ys[2]   # 过渡态最高
+    for my, py in zip(mol_ys, point_ys):
+        assert my > py - 0.5                                        # 分子在驻点上方
+
+
+def test_energy_layout_box_above_everything():
+    """标注框在最高组件上方净空带（底边高于所有分子与标签），纵轴随之加高。"""
+    out = _render(ENERGY_DEMO)
+    box = re.search(r"anchor=north (?:east|west)\] at \(([-\d.]+),([-\d.]+)\)", out)
+    assert box is not None
+    box_y = float(box.group(2))
+    scopes = re.findall(
+        r"\\begin\{scope\}\[shift=\{\(([-\d.]+),([-\d.]+)\)\}\]", out)
+    mol_shift_ys = [float(y) for _, y in scopes[3:6]]
+    # 标注框 y（顶边）比最高分子 shift 高出净空（gap 0.3 + 分子自身高度）
+    assert box_y > max(mol_shift_ys) + 0.8
+    # 纵轴顶端 = 标注框顶 + 0.2
+    axis = re.search(r"\\draw\[->\] \(0,0\) -- \(0,([-\d.]+)\);", out)
+    assert abs(float(axis.group(1)) - (box_y + 0.2)) < 0.05
+
+
+def test_energy_layout_pos_below():
+    """R-3 pos=below：分子放在驻点下方。"""
+    out = _render(
+        "[COMPOSITE:energy]"
+        "[ENERGY:0,108,-20]"
+        "[STRUCT:CCl,at=1,pos=below]"
+        "[/COMPOSITE]"
+    )
+    scopes = re.findall(
+        r"\\begin\{scope\}\[shift=\{\(([-\d.]+),([-\d.]+)\)\}\]", out)
+    point_y = float(scopes[1][1])        # 过渡态驻点（最高点）
+    mol_y = float(scopes[3][1])          # 分子 scope（顶部应低于驻点 margin 0.6）
+    assert mol_y < point_y - 0.5
+
+
+def test_energy_layout_errors():
+    """R-3 错误路径：缺 ENERGY / STRUCT 缺 at / at 越界。"""
+    assert "需要 [ENERGY" in _render(
+        "[COMPOSITE:energy][STRUCT:CCl,at=0][/COMPOSITE]")
+    assert "需要 at=" in _render(
+        "[COMPOSITE:energy][ENERGY:0,108,-20][STRUCT:CCl][/COMPOSITE]")
+    assert "超出能量点范围" in _render(
+        "[COMPOSITE:energy][ENERGY:0,108,-20][STRUCT:CCl,at=5][/COMPOSITE]")
+
+
 def test_registry_dispatch_and_injection():
     """集成：注册表分派 + 注入器整串替换。"""
     text = f"SN2 反应机理如下：\n{SN2_DEMO}\n以上。"

@@ -75,6 +75,7 @@ _INNER_OPENERS = {
     "RXNARROW": "[RXNARROW:",
     "CHARGE": "[CHARGE:",
     "HBOND": "[HBOND:",
+    "ENERGY": "[ENERGY:",
 }
 
 # COMPOSITE 容器内允许的无参子标记（整串匹配）
@@ -110,15 +111,15 @@ def _parse_content(tag_type: str, content: str) -> list:
         smi, label = content, None
         li = content.find(",label=")
         ii = content.find(",id=")
-        cut = [p for p in (li, ii) if p != -1]
+        ai = content.find(",at=")
+        pi = content.find(",pos=")
+        cut = [p for p in (li, ii, ai, pi) if p != -1]
         if cut:
             smi = content[: min(cut)]
         if li != -1:
             lab_start = li + len(",label=")
-            if ii != -1 and ii > li:
-                label = content[lab_start:ii]
-            else:
-                label = content[lab_start:]
+            after = [p for p in (ii, ai, pi) if p != -1 and p > li]
+            label = content[lab_start:min(after)] if after else content[lab_start:]
         return [smi, label]
     if tag_type == "MECH":
         parts = content.split("|", 2)

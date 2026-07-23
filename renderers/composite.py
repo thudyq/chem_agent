@@ -21,6 +21,14 @@ LLM 在容器内显式列出结构组件、连接符与机理箭头，渲染器�
 布局种类：
     reaction_mech: 反应式 + 机理场景，必须包含至少一个 [RXNARROW]；
     row: 纯横向组件排列（共振式、多步序列等），[RXNARROW] 可选。
+    energy: 势能面 + 驻点结构（R-3）：容器内需一个 [ENERGY:点序列]，
+        每个 STRUCT 用 at=点序号 挂到驻点上（pos=above/below 可选，默认 above）：
+        [COMPOSITE:energy]
+        [ENERGY:0,108,-20]
+        [STRUCT:CCl.[OH-],label=反应物,at=0]
+        [STRUCT:CCl.[OH-],label=过渡态,at=1,pos=above]
+        [STRUCT:CO.[Cl-],label=产物,at=2]
+        [/COMPOSITE]
     头部可追加标志：[COMPOSITE:reaction_mech,numbering] 打开原子序号标注
     （默认不显示；仅在碳原子较多、需要指明参与反应的原子时使用）。
 
@@ -57,17 +65,25 @@ if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from renderers.mol_primitives import (
         format_chem_text, format_partial_charge, hbond_line_tikz,
-        mech_arrow_between, mech_arrow_origin, parse_charge_pairs,
-        parse_hbond_pairs, atom_pos, prepare_mol, scale_mol_coords,
+        mech_arrow_between, mech_arrow_origin, mol_visual_bbox,
+        parse_charge_pairs, parse_hbond_pairs, atom_pos, prepare_mol,
+        scale_mol_coords,
     )
-    from renderers.layout import layout_row, molecule_scope_lines
+    from renderers.layout import (
+        energy_annotation_placement, energy_point_coords, layout_row,
+        molecule_scope_lines, place_bbox,
+    )
 else:
     from .mol_primitives import (
         format_chem_text, format_partial_charge, hbond_line_tikz,
-        mech_arrow_between, mech_arrow_origin, parse_charge_pairs,
-        parse_hbond_pairs, atom_pos, prepare_mol, scale_mol_coords,
+        mech_arrow_between, mech_arrow_origin, mol_visual_bbox,
+        parse_charge_pairs, parse_hbond_pairs, atom_pos, prepare_mol,
+        scale_mol_coords,
     )
-    from .layout import layout_row, molecule_scope_lines
+    from .layout import (
+        energy_annotation_placement, energy_point_coords, layout_row,
+        molecule_scope_lines, place_bbox,
+    )
 
 
 _MOL_GAP = 1.6    # 无连接符时相邻分子的水平间距
@@ -81,8 +97,10 @@ _MECH_ARROW_RE = re.compile(
     r"([A-Za-z0-9_]+)\s*:\s*(\d+(?:-\d+)?)\s*$"
 )
 _STRUCT_ID_RE = re.compile(r",id=([A-Za-z0-9_]+)")
+_STRUCT_AT_RE = re.compile(r",at=(\d+)")
+_STRUCT_POS_RE = re.compile(r",pos=(above|below)")
 
-_SUPPORTED_LAYOUTS = ("reaction_mech", "row")
+_SUPPORTED_LAYOUTS = ("reaction_mech", "row", "energy")
 
 
 def _parse_mech_arrows(specs):
@@ -108,7 +126,15 @@ def _collect_components(children):
             m = _STRUCT_ID_RE.search(child.raw)
             cid = m.group(1) if m else f"r{len(structs)}"
             label = child.args[1] if len(child.args) > 1 else None
-            structs.append({"id": cid, "smiles": child.args[0].strip(), "label": label})
+            at_m = _STRUCT_AT_RE.search(child.raw)
+            pos_m = _STRUCT_POS_RE.search(child.raw)
+            structs.append({
+                "id": cid,
+                "smiles": child.args[0].strip(),
+                "label": label,
+                "at": int(at_m.group(1)) if at_m else None,
+                "pos": pos_m.group(1) if pos_m else "above",
+            })
             sequence.append(("mol", len(structs) - 1))
         elif child.type == "PLUS":
             sequence.append(("plus",))
@@ -125,6 +151,94 @@ def _collect_components(children):
             ref = child.args[0].strip()
             annotations.setdefault(ref, {})[child.type.lower()] = child.args[1]
     return structs, sequence, mech_specs, global_cond, annotations
+
+
+def _render_energy_layout(points_str: str, structs: list, mols: dict,
+                          show_numbers: bool) -> str:
+    """energy 布局：势能面曲线 + 驻点结构组件（R-3）。
+
+    每个 STRUCT 通过 at= 挂到能量点上（pos=above/below，默认 above），
+    分子按视觉包围盒置于驻点正上方/下方；驻点标签优先用 STRUCT 的 label。
+    """
+    try:
+        values = [float(v.strip()) for v in points_str.split(",") if v.strip()]
+    except ValueError:
+        return f"（COMPOSITE 渲染失败：能量点序列格式错误「{points_str}」）"
+    if len(values) < 2:
+        return "（COMPOSITE 渲染失败：能量点至少需要 2 个）"
+
+    n = len(values)
+    info = energy_point_coords(values)
+    max_idx = info["max_idx"]
+    x_last = info["x_last"]
+    role_map = {0: "反应物", n - 1: "产物"}
+    if max_idx not in role_map:
+        role_map[max_idx] = "过渡态"
+
+    at_map = {}
+    for comp in structs:
+        if comp["at"] is None:
+            return (f"（COMPOSITE 渲染失败：energy 布局中 STRUCT 组件 "
+                    f"{comp['id']} 需要 at=点序号）")
+        if comp["at"] >= n:
+            return (f"（COMPOSITE 渲染失败：组件 {comp['id']} 的 "
+                    f"at={comp['at']} 超出能量点范围 0~{n - 1}）")
+        at_map[comp["at"]] = comp
+
+    # 先计算全部组件的已占区域，再决定标注框与纵轴高度（避免遮挡）
+    mol_placements = []
+    occupied = []
+    for comp in structs:
+        _, _, x, y = info["points"][comp["at"]]
+        mol = mols[comp["id"]]["mol"]
+        bbox = mol_visual_bbox(mol, include_lone_pairs=False)
+        shift = place_bbox(bbox, x, y, comp["pos"], margin=0.6)
+        mol_placements.append((mol, shift))
+        occupied.append((bbox[0] + shift[0], bbox[1] + shift[1],
+                         bbox[2] + shift[0], bbox[3] + shift[1]))
+    for i, v, x, y in info["points"]:
+        yoff = 0.35 if i == max_idx else -0.3
+        occupied.append((x - 0.85, y + yoff - 0.22, x + 0.85, y + yoff + 0.22))
+
+    box_x, box_y, box_anchor, axis_top = energy_annotation_placement(
+        occupied, x_last)
+
+    lines = [r"\begin{tikzpicture}"]
+    lines.append(f"  \\draw[->] (0,0) -- ({x_last + 0.8:.1f},0);")
+    lines.append(f"  \\draw[->] (0,0) -- (0,{axis_top:.1f});")
+    lines.append(f"  \\node[font=\\small] at ({(x_last + 0.8) / 2:.1f},-0.30) {{反应进程}};")
+    lines.append(
+        f"  \\node[font=\\small, rotate=90, anchor=south] at (-0.10,{axis_top - 0.5:.1f}) "
+        "{能量 (kJ/mol)};"
+    )
+    y0 = info["points"][0][3]
+    lines.append(f"  \\draw[gray, dashed] (0,{y0:.2f}) -- ({x_last:.1f},{y0:.2f});")
+    coords = " ".join(f"({x:.1f},{y:.2f})" for _, _, x, y in info["points"])
+    lines.append(f"  \\draw[thick, blue, smooth] plot coordinates {{{coords}}};")
+
+    for i, v, x, y in info["points"]:
+        comp = at_map.get(i)
+        label = comp["label"] if (comp and comp["label"]) else role_map.get(i)
+        lines.append(f"  \\begin{{scope}}[shift={{({x:.1f},{y:.2f})}}]")
+        lines.append("    \\fill[blue] (0,0) circle (0.06);")
+        if label:
+            yoff = 0.35 if i == max_idx else -0.3
+            lines.append(f"    \\node[font=\\small] at (0,{yoff:.2f}) {{{label} ({v:+.0f})}};")
+        lines.append("  \\end{scope}")
+
+    for mol, shift in mol_placements:
+        lines.extend(molecule_scope_lines(mol, shift, show_numbers=show_numbers,
+                                          show_lone_pairs=False))
+
+    ea = max(values) - values[0]
+    dh = values[-1] - values[0]
+    node_text = f"Ea $\\approx$ {ea:.0f} kJ/mol\\\\$\\Delta$H $\\approx$ {dh:+.0f} kJ/mol"
+    lines.append(
+        "    \\node[draw, rounded corners, fill=yellow!10, font=\\small, align=left, "
+        f"anchor={box_anchor}] at ({box_x:.2f},{box_y:.2f}) {{{node_text}}};"
+    )
+    lines.append(r"\end{tikzpicture}")
+    return "\n".join(lines)
 
 
 def render_composite(layout: str, children: list) -> str:
@@ -174,6 +288,13 @@ def render_composite(layout: str, children: list) -> str:
             "charges": parse_charge_pairs(anno.get("charge", "")),
             "hbonds": parse_hbond_pairs(anno.get("hbond", "")),
         }
+
+    if layout_name == "energy":
+        energy_child = next((c for c in children if c.type == "ENERGY"), None)
+        if energy_child is None or not energy_child.args:
+            return "（COMPOSITE 渲染失败：energy 布局需要 [ENERGY:点序列] 组件）"
+        return _render_energy_layout(energy_child.args[0], structs, mols,
+                                     show_numbers)
 
     # 统一布局引擎：组件序列 → 位置/加号/箭头（视觉包围盒防重叠）
     items = []
@@ -334,6 +455,15 @@ if __name__ == "__main__":
             "[RXNARROW:SN2]"
             "[STRUCT:CO,label=CH3OH][PLUS][STRUCT:[Cl-],label=Cl-]"
             "[MECHARROW:r1:0>r0:0,r0:0-1>r0:1]"
+            "[/COMPOSITE]",
+        ),
+        (
+            "energy 布局：SN2 势能面 + 三个驻点结构",
+            "[COMPOSITE:energy]"
+            "[ENERGY:0,108,-20]"
+            "[STRUCT:CCl.[OH-],label=反应物,at=0]"
+            "[STRUCT:CCl.[OH-],label=过渡态,at=1]"
+            "[STRUCT:CO.[Cl-],label=产物,at=2]"
             "[/COMPOSITE]",
         ),
     ]

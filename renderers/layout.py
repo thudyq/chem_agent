@@ -135,6 +135,65 @@ def molecule_scope_lines(mol, shift: Tuple[float, float], *,
     return lines
 
 
+def energy_point_coords(values: list, *, x0: float = 1.0, xstep: float = 1.5,
+                        height: float = 3.0) -> dict:
+    """能量点序列 → 势能面画布坐标（R-3 驻点布局）。
+
+    返回 dict：
+        points: [(i, value, x, y), ...]  每个驻点的序号、能量值、画布坐标；
+        max_idx: 能量最高点下标（过渡态候选）；
+        x_last: 最后一个点的 x 坐标（坐标轴/标注框定位用）。
+    """
+    n = len(values)
+    emax, emin = max(values), min(values)
+    erange = (emax - emin) or 1.0
+    points = []
+    for i, v in enumerate(values):
+        x = x0 + i * xstep
+        y = (v - emin) / erange * height
+        points.append((i, v, x, y))
+    return {
+        "points": points,
+        "max_idx": values.index(emax),
+        "x_last": x0 + (n - 1) * xstep,
+    }
+
+
+def place_bbox(bbox: Tuple[float, float, float, float], x: float, y: float,
+               side: str = "above", margin: float = 0.5) -> Tuple[float, float]:
+    """把组件包围盒放到 (x, y) 的指定方位，返回 scope shift。
+
+    side="above"：包围盒底边距 (x,y) 上方 margin；
+    side="below"：包围盒顶边距 (x,y) 下方 margin。
+    """
+    min_x, min_y, max_x, max_y = bbox
+    sx = x - (min_x + max_x) / 2.0
+    sy = (y + margin - min_y) if side == "above" else (y - margin - max_y)
+    return (sx, sy)
+
+
+def energy_annotation_placement(occupied: list, x_last: float, *,
+                                box_h: float = 0.8, gap: float = 0.3,
+                                min_top: float = 3.5):
+    """势能面 Ea/ΔH 标注框与纵轴高度的无遮挡布局。
+
+    occupied: 已占区域 [(min_x, min_y, max_x, max_y), ...]（全局坐标，
+    含驻点结构、驻点标签）。标注框放在最高组件上方的净空带（box 底边
+    高于一切组件），水平方向置于离最高组件较远的一侧；纵轴随之加高。
+
+    返回 (x, y, anchor, axis_top)：标注框节点坐标与 anchor（north east/
+    north west），以及纵轴箭头顶端高度。
+    """
+    max_top = max([min_top] + [r[3] for r in occupied])
+    box_top = max_top + gap + box_h
+    axis_top = box_top + 0.2
+    highest = max(occupied, key=lambda r: r[3]) if occupied else None
+    mid = (x_last + 0.8) / 2.0
+    if highest is not None and (highest[0] + highest[2]) / 2.0 < mid:
+        return x_last + 0.7, box_top, "north east", axis_top
+    return 0.15, box_top, "north west", axis_top
+
+
 if __name__ == "__main__":
     import sys
     from pathlib import Path
