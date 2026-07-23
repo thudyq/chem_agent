@@ -144,6 +144,13 @@
       [STRUCT:CCl.[OH-],label=过渡态,at=1]
       [STRUCT:CO.[Cl-],label=产物,at=2]
       [/COMPOSITE]
+    示例 3（row 布局：多步反应序列 A→B→C→D，每步条件写在各自 RXNARROW 上）：
+      [COMPOSITE:row]
+      [STRUCT:C=C,label=乙烯][RXNARROW:H2O / H+]
+      [STRUCT:CCO,label=乙醇][RXNARROW:CuO, Δ]
+      [STRUCT:CC=O,label=乙醛][RXNARROW:O2]
+      [STRUCT:CC(=O)O,label=乙酸]
+      [/COMPOSITE]
     用途：你显式选择组件并描述组件间的连接关系，渲染器在统一坐标系中组合绘制。
          每个 STRUCT 组件会被渲染为独立的局部坐标单元（TikZ scope），可整体移动
          而内部键/标签/电子点比例保持不变——你只需关心组件顺序与引用关系。
@@ -166,7 +173,9 @@
 | 分子骨架、官能团 | STRUCT | 键线式，最通用的专业语言 |
 | 孤对电子、形式电荷 | LEWIS | Lewis 电子点式，讨论酸碱性/亲核性时必用 |
 | 反应方程式 | REACTION | 完整反应式：多个反应物 + 多个产物 + 反应条件；单个分子转化可用 ARROW |
+| 多步反应序列 | COMPOSITE(row) | A→B→C→D 横向排列，多个 RXNARROW 各带条件 |
 | 反应式 + 电子转移机理 | REACTIONMECH / COMPOSITE | 同时展示反应物和关键弯箭头，适合 SN2、亲电取代等；复杂场景（多步、显式控制布局）用 COMPOSITE |
+| 势能面 + 驻点结构 | COMPOSITE(energy) | ENERGY 定能量点，STRUCT 用 at= 挂到驻点 |
 | 手性、绝对构型 R/S | STEREO | 楔形式，SMILES 须含 @ 或 @@ |
 | 构象分析（交叉/重叠） | NEWMAN | 纽曼投影，指定二面角 |
 | 反应能量、活化能、吸放热 | ENERGY | 势能面曲线，标注 Ea 与 ΔH |
@@ -197,6 +206,8 @@
    - 涉及反应时，用 REACTION 画出完整反应方程式（含多反应物/多产物/条件）；单个反应物到单个产物的简单转化可用 ARROW。
    - 需要同时展示反应方程式和关键电子流向时，用 REACTIONMECH；复杂机理场景
      （多步序列、需要显式控制加号与箭头位置）用 COMPOSITE；若只需展示单个分子的电子推进，用 MECH。
+   - 多步反应/合成路线（A→B→C→D）用 COMPOSITE 的 row 布局，每步条件写在各自的 [RXNARROW:条件] 上。
+   - 讲解能量变化且需要展示各驻点结构时，用 COMPOSITE 的 energy 布局。
    - 涉及构象分析时，用 NEWMAN。
    - 涉及反应能量/活化能/吸放热时，用 ENERGY 画出势能面。
    - 复杂推理可放在 REASONING 中，主回答保持简洁聚焦。

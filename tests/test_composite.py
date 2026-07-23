@@ -200,6 +200,27 @@ def test_row_layout_multi_step():
     assert "乙烯" in out and "乙醛" in out
 
 
+def test_row_layout_four_step_sequence():
+    """R-5：A→B→C→D 四步序列（3 个带内联条件的主箭头，分子按序排列）。"""
+    out = _render(
+        "[COMPOSITE:row]"
+        "[STRUCT:C=C,label=乙烯]"
+        "[RXNARROW:H2O / H+]"
+        "[STRUCT:CCO,label=乙醇]"
+        "[RXNARROW:CuO, Δ]"
+        "[STRUCT:CC=O,label=乙醛]"
+        "[RXNARROW:O2]"
+        "[STRUCT:CC(=O)O,label=乙酸]"
+        "[/COMPOSITE]"
+    )
+    assert out.count("\\begin{scope}[shift=") == 4
+    assert out.count("\\draw[->, very thick]") == 3
+    assert "H$_2$O" in out and "CuO, Δ" in out and "O$_2$" in out
+    scopes = re.findall(r"\\begin\{scope\}\[shift=\{\(([-\d.]+),", out)
+    xs = [float(x) for x in scopes]
+    assert xs == sorted(xs)                     # 分子按序列从左到右递增
+
+
 def test_fishhook_arrows():
     """正例3：鱼钩箭头（单电子）生成半边 barb。"""
     out = _render(
