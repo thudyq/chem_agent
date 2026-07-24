@@ -105,3 +105,33 @@ def test_multi_arrows_sequence():
     assert result.arrows[0].condition == "H2O"
     assert result.arrows[1].condition == "CuO"
     assert result.arrows[0].x2 < result.arrows[1].x1
+
+
+def test_resarrow_connector():
+    """共振箭头 ↔ 连接符：占位并记录中心 x（R-6）。"""
+    items = [("mol", "a", _mol("C1=CC=CC=C1")),
+             ("resarrow",),
+             ("mol", "b", _mol("C1C=CC=CC=1"))]
+    result = layout_row(items, res_w=1.1)
+    assert len(result.resarrows) == 1
+    b0 = _global_bbox(result.mols[0])
+    b1 = _global_bbox(result.mols[1])
+    assert b0[2] < result.resarrows[0] < b1[0]
+
+
+def test_layout_rows_stacking():
+    """多行布局：newline 分隔的行逐行向下堆叠（y 偏移递增）。"""
+    from renderers.layout import layout_rows
+    items = [
+        ("mol", "main", _mol("CC(=O)[O-]")),
+        ("newline",),
+        ("mol", "r1", _mol("CC(=O)[O-]")),
+        ("resarrow",),
+        ("mol", "r2", _mol("CC([O-])=O")),
+    ]
+    rows, y_offsets = layout_rows(items)
+    assert len(rows) == 2
+    assert len(rows[0].mols) == 1 and len(rows[1].mols) == 2
+    assert y_offsets[0] == 0.0
+    assert y_offsets[1] > 1.0          # 第二行在第一行下方（行高 + 行距）
+    assert len(rows[1].resarrows) == 1

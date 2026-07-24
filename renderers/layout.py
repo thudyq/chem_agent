@@ -9,7 +9,7 @@ composite / reaction_mech 及后续组合式渲染器（多步序列、共振组
 位置计算全部交给 layout_row。
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Hashable, List, Tuple
 
 from .mol_primitives import (
@@ -42,6 +42,7 @@ class RowLayout:
     pluses: List[float]          # + 号中心 x 坐标
     arrows: List[PlacedArrow]
     width: float                 # 总宽（右端游标）
+    resarrows: List[float] = field(default_factory=list)   # ↔ 中心 x 坐标
 
     def mol_map(self) -> dict:
         """key → PlacedMol 映射，便于按组件 id 取位置。"""
@@ -50,6 +51,7 @@ class RowLayout:
 
 def layout_row(items: list, *, mol_gap: float = 1.6, plus_w: float = 1.1,
                arrow_w: float = 2.6, arrow_pad: float = 0.65,
+               res_w: float = 1.1,
                bbox_fn=mol_visual_bbox) -> RowLayout:
     """把组件序列排成一行。
 
@@ -57,9 +59,10 @@ def layout_row(items: list, *, mol_gap: float = 1.6, plus_w: float = 1.1,
         items: 组件序列，元素为
             ("mol", key, mol)  分子组件（RDKit Mol，已有 2D 坐标）；
             ("plus",)          加号连接符；
-            ("arrow", cond)    主反应箭头（cond 为条件文本，可空）。
+            ("arrow", cond)    主反应箭头（cond 为条件文本，可空）；
+            ("resarrow",)      共振箭头 ↔ 连接符。
         mol_gap: 相邻两个 mol 之间无连接符时的水平间距。
-        plus_w: 加号占位宽度。
+        plus_w / res_w: 加号 / 共振箭头占位宽度。
         arrow_w: 反应箭头占位宽度。
         arrow_pad: 箭头实际线段两端内缩量。
         bbox_fn: 视觉包围盒函数（默认含标签与孤对电子外延）。
@@ -72,6 +75,7 @@ def layout_row(items: list, *, mol_gap: float = 1.6, plus_w: float = 1.1,
     mols: List[PlacedMol] = []
     pluses: List[float] = []
     arrows: List[PlacedArrow] = []
+    resarrows: List[float] = []
     prev_kind = None
     for item in items:
         kind = item[0]
@@ -90,6 +94,9 @@ def layout_row(items: list, *, mol_gap: float = 1.6, plus_w: float = 1.1,
         elif kind == "plus":
             pluses.append(cursor + plus_w / 2.0)
             cursor += plus_w
+        elif kind == "resarrow":
+            resarrows.append(cursor + res_w / 2.0)
+            cursor += res_w
         elif kind == "arrow":
             cond = item[1] if len(item) > 1 else ""
             arrows.append(PlacedArrow(x1=cursor + arrow_pad,
@@ -97,7 +104,38 @@ def layout_row(items: list, *, mol_gap: float = 1.6, plus_w: float = 1.1,
                                       condition=cond))
             cursor += arrow_w
         prev_kind = kind
-    return RowLayout(mols=mols, pluses=pluses, arrows=arrows, width=cursor)
+    return RowLayout(mols=mols, pluses=pluses, arrows=arrows, width=cursor,
+                     resarrows=resarrows)
+
+
+def layout_rows(items: list, *, row_gap: float = 1.2, **kwargs):
+    """多行布局：items 中的 ("newline",) 分隔各行（R-6 上下排列）。
+
+    每行用 layout_row 排布（kwargs 透传），再按行内最高组件的高度 + row_gap
+    逐行向下堆叠（y 向下为负方向）。
+
+    返回:
+        (rows, y_offsets)：rows 为每行的 RowLayout，y_offsets 为每行相对
+        第一行的向下偏移量（渲染时从组件 y 坐标中减去）。
+    """
+    rows_items, current = [], []
+    for item in items:
+        if item[0] == "newline":
+            rows_items.append(current)
+            current = []
+        else:
+            current.append(item)
+    rows_items.append(current)
+
+    rows, y_offsets = [], []
+    y = 0.0
+    for row_items in rows_items:
+        layout = layout_row(row_items, **kwargs)
+        rows.append(layout)
+        y_offsets.append(y)
+        height = max((p.bbox[3] - p.bbox[1] for p in layout.mols), default=1.0)
+        y += height + row_gap
+    return rows, y_offsets
 
 
 def molecule_scope_lines(mol, shift: Tuple[float, float], *,

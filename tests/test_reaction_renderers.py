@@ -72,3 +72,22 @@ def test_retro_error_paths():
     """RETRO 错误路径：无效目标 / 无效前体。"""
     assert "无效目标" in render_retro("XYZ", "CC")
     assert "无效前体" in render_retro("CC", "XYZ")
+
+
+def test_resonance_basic():
+    """RESONANCE（布局引擎迁移）：极限式 scope 化 + ↔ + 孤对电子点。"""
+    from renderers.resonance import render_resonance
+    out = render_resonance("CC(=O)[O-]~CC([O-])=O")
+    assert out.startswith("\\begin{tikzpicture}")
+    assert out.count("\\begin{scope}[shift=") == 2
+    assert out.count("$\\leftrightarrow$") == 1
+    assert "O$^{-}$" in out
+    assert "\\fill" in out                            # 共振场景画出孤对电子
+
+
+def test_resonance_error_paths():
+    """RESONANCE 错误路径：空内容 / 少于 2 式 / 无效 SMILES。"""
+    from renderers.resonance import render_resonance
+    assert "内容为空" in render_resonance("")
+    assert "至少需要 2 个" in render_resonance("CC")
+    assert "无效 SMILES" in render_resonance("CC~XYZ_INVALID")

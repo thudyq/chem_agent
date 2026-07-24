@@ -388,6 +388,48 @@ def test_energy_layout_errors():
         "[COMPOSITE:energy][ENERGY:0,108,-20][STRUCT:CCl,at=5][/COMPOSITE]")
 
 
+def test_resonance_layout_auto_arrow():
+    """R-6：resonance 布局连续 STRUCT 之间自动插入 ↔（无需手写连接符）。"""
+    out = _render(
+        "[COMPOSITE:resonance]"
+        "[STRUCT:C1=CC=CC=C1,label=式 I]"
+        "[STRUCT:C1C=CC=CC=1,label=式 II]"
+        "[/COMPOSITE]"
+    )
+    assert out.count("$\\leftrightarrow$") == 1
+    assert out.count("\\begin{scope}[shift=") == 2
+    assert "式 I" in out and "式 II" in out
+
+
+def test_resonance_layout_three_forms():
+    """R-6：三个共振极限式两个 ↔。"""
+    out = _render(
+        "[COMPOSITE:resonance]"
+        "[STRUCT:C1=CC=CC=C1][STRUCT:C1C=CC=CC=1][STRUCT:c1ccccc1]"
+        "[/COMPOSITE]"
+    )
+    assert out.count("$\\leftrightarrow$") == 2
+    assert out.count("\\begin{scope}[shift=") == 3
+
+
+def test_newline_vertical_stacking():
+    """R-6：NEWLINE 换行，主结构在上、共振式在下（上下排列）。"""
+    out = _render(
+        "[COMPOSITE:row]"
+        "[STRUCT:CC(=O)[O-],label=羧酸根]"
+        "[NEWLINE]"
+        "[STRUCT:CC(=O)[O-]][RESARROW][STRUCT:CC([O-])=O]"
+        "[/COMPOSITE]"
+    )
+    assert out.count("$\\leftrightarrow$") == 1
+    scopes = re.findall(
+        r"\\begin\{scope\}\[shift=\{\(([-\d.]+),([-\d.]+)\)\}\]", out)
+    assert len(scopes) == 3
+    ys = [float(y) for _, y in scopes]
+    assert ys[0] > ys[1] and ys[0] > ys[2]   # 第一行在第二行上方
+    assert abs(ys[1] - ys[2]) < abs(ys[0] - ys[1])  # 第二行两个分子同高（或接近）
+
+
 def test_registry_dispatch_and_injection():
     """集成：注册表分派 + 注入器整串替换。"""
     text = f"SN2 反应机理如下：\n{SN2_DEMO}\n以上。"

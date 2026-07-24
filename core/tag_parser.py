@@ -82,6 +82,8 @@ _INNER_OPENERS = {
 _INNER_TOKENS = {
     "PLUS": "[PLUS]",
     "RXNARROW": "[RXNARROW]",
+    "RESARROW": "[RESARROW]",
+    "NEWLINE": "[NEWLINE]",
 }
 
 

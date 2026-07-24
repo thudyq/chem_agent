@@ -117,7 +117,8 @@
       [/COMPOSITE]
     布局：reaction_mech（反应式+机理，必须含 [RXNARROW]）；row（纯横向排列，[RXNARROW] 可选）；
          energy（势能面+驻点结构：含一个 [ENERGY:点序列]，每个 STRUCT 用 at=点序号 挂到
-         驻点上，pos=above/below 可选，驻点标签优先取 STRUCT 的 label）。
+         驻点上，pos=above/below 可选，驻点标签优先取 STRUCT 的 label）；
+         resonance（共振式组合：连续 STRUCT 之间自动插入共振箭头 ↔，无需手写连接符）。
          头部可追加 ,numbering 打开原子序号标注，如 [COMPOSITE:reaction_mech,numbering]。
     容器内子标记：
       [STRUCT:SMILES,label=名称,id=引用名]   结构组件；id 省略时按顺序自动编号 r0/r1/...
@@ -129,6 +130,8 @@
       [HBOND:id|from-to,...]                组件内的氢键虚线
       [ENERGY:点序列]                       仅 energy 布局：势能面能量点（如 [ENERGY:0,108,-20]）
       [STRUCT:SMILES,at=点序号,pos=above]   仅 energy 布局：挂到指定驻点的结构
+      [RESARROW]                            共振箭头 ↔ 连接符（resonance 布局自动插入，无需手写）
+      [NEWLINE]                             换行（组件在多行中上下排列，如主结构在上、共振式在下）
     示例（SN2）：
       [COMPOSITE:reaction_mech]
       [STRUCT:CCl,label=CH3Cl][PLUS][STRUCT:[OH-],id=nu,label=OH-]
@@ -150,6 +153,11 @@
       [STRUCT:CCO,label=乙醇][RXNARROW:CuO, Δ]
       [STRUCT:CC=O,label=乙醛][RXNARROW:O2]
       [STRUCT:CC(=O)O,label=乙酸]
+      [/COMPOSITE]
+    示例 4（resonance 布局：苯的两个 Kekulé 式，自动 ↔ 连接）：
+      [COMPOSITE:resonance]
+      [STRUCT:C1=CC=CC=C1,label=Kekulé 式 I]
+      [STRUCT:C1C=CC=CC=1,label=Kekulé 式 II]
       [/COMPOSITE]
     用途：你显式选择组件并描述组件间的连接关系，渲染器在统一坐标系中组合绘制。
          每个 STRUCT 组件会被渲染为独立的局部坐标单元（TikZ scope），可整体移动
@@ -180,7 +188,7 @@
 | 构象分析（交叉/重叠） | NEWMAN | 纽曼投影，指定二面角 |
 | 反应能量、活化能、吸放热 | ENERGY | 势能面曲线，标注 Ea 与 ΔH |
 | 电子转移、反应机理 | MECH | 弯箭头，精确到原子级 |
-| 共振结构、离域 | RESONANCE | 多个极限式用 ↔ 连接，~ 分隔各 SMILES |
+| 共振结构、离域 | RESONANCE / COMPOSITE(resonance) | 多个极限式用 ↔ 连接；与主结构上下排列时加 [NEWLINE] |
 | 部分电荷 δ+/δ- | CHARGE | 在结构式上标注极性键的电荷偏移 |
 | 自由基、单电子转移 | MECH（>>语法） | 鱼钩箭头表示单电子转移 |
 | 氢键、分子间相互作用 | HBOND | 虚线标注氢键连接 |

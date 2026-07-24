@@ -22,13 +22,11 @@ LLM 在容器内显式列出结构组件、连接符与机理箭头，渲染器�
     reaction_mech: 反应式 + 机理场景，必须包含至少一个 [RXNARROW]；
     row: 纯横向组件排列（共振式、多步序列等），[RXNARROW] 可选。
     energy: 势能面 + 驻点结构（R-3）：容器内需一个 [ENERGY:点序列]，
-        每个 STRUCT 用 at=点序号 挂到驻点上（pos=above/below 可选，默认 above）：
-        [COMPOSITE:energy]
-        [ENERGY:0,108,-20]
-        [STRUCT:CCl.[OH-],label=反应物,at=0]
-        [STRUCT:CCl.[OH-],label=过渡态,at=1,pos=above]
-        [STRUCT:CO.[Cl-],label=产物,at=2]
-        [/COMPOSITE]
+        每个 STRUCT 用 at=点序号 挂到驻点上（pos=above/below 可选，默认 above）。
+    resonance: 共振式组合（R-6）：连续 STRUCT 之间自动插入共振箭头 ↔，
+        无需手写连接符：[COMPOSITE:resonance][STRUCT:式1][STRUCT:式2][/COMPOSITE]。
+    通用连接符（row / resonance 均可显式使用）：
+        [RESARROW] 共振箭头 ↔；[NEWLINE] 换行（组件在多行中上下排列）。
     头部可追加标志：[COMPOSITE:reaction_mech,numbering] 打开原子序号标注
     （默认不显示；仅在碳原子较多、需要指明参与反应的原子时使用）。
 
@@ -71,7 +69,7 @@ if __name__ == "__main__":
     )
     from renderers.layout import (
         energy_annotation_placement, energy_point_coords, layout_row,
-        molecule_scope_lines, place_bbox,
+        layout_rows, molecule_scope_lines, place_bbox,
     )
 else:
     from .mol_primitives import (
@@ -82,7 +80,7 @@ else:
     )
     from .layout import (
         energy_annotation_placement, energy_point_coords, layout_row,
-        molecule_scope_lines, place_bbox,
+        layout_rows, molecule_scope_lines, place_bbox,
     )
 
 
@@ -100,7 +98,7 @@ _STRUCT_ID_RE = re.compile(r",id=([A-Za-z0-9_]+)")
 _STRUCT_AT_RE = re.compile(r",at=(\d+)")
 _STRUCT_POS_RE = re.compile(r",pos=(above|below)")
 
-_SUPPORTED_LAYOUTS = ("reaction_mech", "row", "energy")
+_SUPPORTED_LAYOUTS = ("reaction_mech", "row", "energy", "resonance")
 
 
 def _parse_mech_arrows(specs):
@@ -138,6 +136,10 @@ def _collect_components(children):
             sequence.append(("mol", len(structs) - 1))
         elif child.type == "PLUS":
             sequence.append(("plus",))
+        elif child.type == "RESARROW":
+            sequence.append(("resarrow",))
+        elif child.type == "NEWLINE":
+            sequence.append(("newline",))
         elif child.type == "RXNARROW":
             cond = child.args[0].strip() if child.args else ""
             sequence.append(("arrow", cond))
@@ -296,23 +298,38 @@ def render_composite(layout: str, children: list) -> str:
         return _render_energy_layout(energy_child.args[0], structs, mols,
                                      show_numbers)
 
-    # 统一布局引擎：组件序列 → 位置/加号/箭头（视觉包围盒防重叠）
+    # resonance 布局：连续 mol 之间自动插入共振箭头 ↔
+    if layout_name == "resonance":
+        new_seq = []
+        for el in sequence:
+            if el[0] == "mol" and new_seq and new_seq[-1][0] == "mol":
+                new_seq.append(("resarrow",))
+            new_seq.append(el)
+        sequence = new_seq
+
+    # 统一布局引擎：组件序列 → 位置/加号/共振箭头/反应箭头（视觉包围盒防重叠）
     items = []
     for el in sequence:
         if el[0] == "mol":
             cid = structs[el[1]]["id"]
             items.append(("mol", cid, mols[cid]["mol"]))
-        elif el[0] == "plus":
-            items.append(("plus",))
+        elif el[0] in ("plus", "resarrow", "newline"):
+            items.append((el[0],))
         elif el[0] == "arrow":
             items.append(("arrow", el[1]))
-    layout = layout_row(items, mol_gap=_MOL_GAP, plus_w=_PLUS_W,
-                        arrow_w=_ARR_W, arrow_pad=_ARR_PAD)
-    for placed in layout.mols:
-        mols[placed.key]["shift"] = placed.shift
-        mols[placed.key]["bbox"] = placed.bbox
-    plus_positions = layout.pluses
-    main_arrows = [[a.x1, a.x2, a.condition] for a in layout.arrows]
+    rows, y_offsets = layout_rows(items, mol_gap=_MOL_GAP, plus_w=_PLUS_W,
+                                  arrow_w=_ARR_W, arrow_pad=_ARR_PAD)
+    plus_positions = []      # (x, yoff)
+    res_positions = []       # (x, yoff)
+    main_arrows = []         # [x1, x2, cond, yoff]
+    for row_layout, yoff in zip(rows, y_offsets):
+        for placed in row_layout.mols:
+            mols[placed.key]["shift"] = (placed.shift[0], placed.shift[1] - yoff)
+            mols[placed.key]["bbox"] = placed.bbox
+        plus_positions.extend((px, yoff) for px in row_layout.pluses)
+        res_positions.extend((rx, yoff) for rx in row_layout.resarrows)
+        main_arrows.extend([a.x1, a.x2, a.condition, yoff]
+                           for a in row_layout.arrows)
 
     if global_cond:
         for arr in main_arrows:
@@ -361,18 +378,21 @@ def render_composite(layout: str, children: list) -> str:
                 f"{{{format_chem_text(label)}}};"
             )
 
-    for px in plus_positions:
-        lines.append(f"  \\node at ({px:.2f},0) {{$+$}};")
+    for px, yoff in plus_positions:
+        lines.append(f"  \\node at ({px:.2f},{-yoff:.2f}) {{$+$}};")
 
-    for x1, x2, cond in main_arrows:
+    for rx, yoff in res_positions:
+        lines.append(f"  \\node[font=\\large] at ({rx:.2f},{-yoff:.2f}) {{$\\leftrightarrow$}};")
+
+    for x1, x2, cond, yoff in main_arrows:
         cond_text = format_chem_text(cond)
         if cond_text:
             lines.append(
-                f"  \\draw[->, very thick] ({x1:.2f},0) -- ({x2:.2f},0) "
+                f"  \\draw[->, very thick] ({x1:.2f},{-yoff:.2f}) -- ({x2:.2f},{-yoff:.2f}) "
                 f"node[midway, above] {{{cond_text}}};"
             )
         else:
-            lines.append(f"  \\draw[->, very thick] ({x1:.2f},0) -- ({x2:.2f},0);")
+            lines.append(f"  \\draw[->, very thick] ({x1:.2f},{-yoff:.2f}) -- ({x2:.2f},{-yoff:.2f});")
 
     for src_id, src_pt, dst_id, dst_pt, kind in _parse_mech_arrows(mech_specs):
         if src_id not in mols or dst_id not in mols:
@@ -464,6 +484,21 @@ if __name__ == "__main__":
             "[STRUCT:CCl.[OH-],label=反应物,at=0]"
             "[STRUCT:CCl.[OH-],label=过渡态,at=1]"
             "[STRUCT:CO.[Cl-],label=产物,at=2]"
+            "[/COMPOSITE]",
+        ),
+        (
+            "resonance 布局：苯的两个 Kekulé 式（自动 ↔）",
+            "[COMPOSITE:resonance]"
+            "[STRUCT:C1=CC=CC=C1,label=Kekulé 式 I]"
+            "[STRUCT:C1C=CC=CC=1,label=Kekulé 式 II]"
+            "[/COMPOSITE]",
+        ),
+        (
+            "NEWLINE 多行：主结构在上、共振式在下",
+            "[COMPOSITE:row]"
+            "[STRUCT:CC(=O)[O-],label=羧酸根]"
+            "[NEWLINE]"
+            "[STRUCT:CC(=O)[O-]][RESARROW][STRUCT:CC([O-])=O]"
             "[/COMPOSITE]",
         ),
     ]
