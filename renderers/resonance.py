@@ -41,7 +41,8 @@ def render_resonance(content: str) -> str:
 
     mols = []
     for smi in smiles_list:
-        mol = prepare_mol(smi)
+        # 共振极限式必须保留显式键级（跳过芳香化），否则会被统一成同一结构
+        mol = prepare_mol(smi, allow_aromatic=False)
         if mol is None:
             return f"（共振式渲染失败：无效 SMILES「{smi}」）"
         scale_mol_coords(mol, _MOL_SCALE)

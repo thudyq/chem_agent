@@ -91,3 +91,37 @@ def test_resonance_error_paths():
     assert "内容为空" in render_resonance("")
     assert "至少需要 2 个" in render_resonance("CC")
     assert "无效 SMILES" in render_resonance("CC~XYZ_INVALID")
+
+
+def test_resonance_kekule_forms_differ():
+    """两个 Kekulé 式双键位置不同（跳过芳香化，不被统一成同一结构）。"""
+    from renderers.mol_primitives import prepare_mol
+    from renderers.resonance import render_resonance
+
+    def doubles(m):
+        return {tuple(sorted((b.GetBeginAtomIdx(), b.GetEndAtomIdx())))
+                for b in m.GetBonds() if b.GetBondTypeAsDouble() >= 1.5}
+
+    m1 = prepare_mol("C1=CC=CC=C1", allow_aromatic=False)
+    m2 = prepare_mol("C1C=CC=CC=1", allow_aromatic=False)
+    assert doubles(m1) != doubles(m2)
+
+    out = render_resonance("C1=CC=CC=C1~C1C=CC=CC=1")
+    scopes = out.split("\\begin{scope}")[1:]
+    assert len(scopes) == 2
+    assert scopes[0] != scopes[1]                # 两式绘制内容不同
+
+
+def test_composite_resonance_forms_differ():
+    """COMPOSITE resonance 布局同样保留显式键级（两式不同）。"""
+    from core.tag_parser import parse_tags
+    from renderers.composite import render_composite
+    out = render_composite(*parse_tags(
+        "[COMPOSITE:resonance]"
+        "[STRUCT:C1=CC=CC=C1]"
+        "[STRUCT:C1C=CC=CC=1]"
+        "[/COMPOSITE]"
+    )[0].args)
+    scopes = out.split("\\begin{scope}")[1:]
+    assert len(scopes) == 2
+    assert scopes[0] != scopes[1]

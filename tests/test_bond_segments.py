@@ -37,6 +37,30 @@ def test_benzene_double_bonds_inside_ring():
         assert _dist(_seg_mid(offset), center) < _dist(_seg_mid(main), center)
 
 
+def test_benzene_inner_bond_length_formula():
+    """内双键长度 = 距中心距离 × 2/√3，且端点与中心、顶点三点共线。"""
+    mol = prepare_mol("c1ccccc1")
+    ring = [a.GetIdx() for a in mol.GetAtoms()]
+    cx = sum(atom_pos(mol, i)[0] for i in ring) / len(ring)
+    cy = sum(atom_pos(mol, i)[1] for i in ring) / len(ring)
+    center = (cx, cy)
+    verts = [(atom_pos(mol, i)[0], atom_pos(mol, i)[1]) for i in ring]
+
+    for main, offset in [s for s in bond_segments(mol) if len(s) == 2]:
+        d_center = _dist(_seg_mid(offset), center)
+        length = _dist((offset[0], offset[1]), (offset[2], offset[3]))
+        expected = d_center * 2 / math.sqrt(3)
+        assert abs(length - expected) < 0.05, \
+            f"内双键长度 {length:.3f} ≠ 距离×2/√3 {expected:.3f}"
+        # 共线性：内线端点应与中心、某个顶点共线（叉积 ≈ 0）
+        for ex, ey in ((offset[0], offset[1]), (offset[2], offset[3])):
+            cross = min(
+                abs((ex - cx) * (vy - cy) - (ey - cy) * (vx - cx))
+                for vx, vy in verts
+            )
+            assert cross < 0.02, f"端点 ({ex:.2f},{ey:.2f}) 不在中心→顶点射线上"
+
+
 def test_chain_double_bond_kept():
     """链上双键（乙烯）仍生成两条平行线，不崩溃。"""
     mol = prepare_mol("C=C")

@@ -297,7 +297,8 @@ def mol_visual_bbox(mol, labeler=condensed_atom_label,
     return min(xs), min(ys), max(xs), max(ys)
 
 
-def prepare_mol(smiles: str, *, add_hs: bool = False, kekulize: bool = False, use_prepare: bool = True):
+def prepare_mol(smiles: str, *, add_hs: bool = False, kekulize: bool = False,
+                use_prepare: bool = True, allow_aromatic: bool = True):
     """SMILES → RDKit Mol：解析、可选加氢/Kekulize、计算 2D 坐标。
 
     参数:
@@ -306,6 +307,9 @@ def prepare_mol(smiles: str, *, add_hs: bool = False, kekulize: bool = False, us
         kekulize: 是否 Kekulize（Lewis 需要明确单双键）。
         use_prepare: 是否优先用 rdMolDraw2D.PrepareMolForDrawing；
                      为 False 时直接用 AllChem.Compute2DCoords。
+        allow_aromatic: 为 False 时跳过芳香化判定与再 Kekulé 化，
+                     保留输入的显式键级——共振极限式（如两个 Kekulé 苯）
+                     必须如此，否则会被统一芳香化成同一结构。
 
     返回:
         RDKit Mol 对象；解析失败返回 None。
@@ -317,7 +321,18 @@ def prepare_mol(smiles: str, *, add_hs: bool = False, kekulize: bool = False, us
     except ImportError:
         return None
 
-    mol = Chem.MolFromSmiles(smiles) if smiles else None
+    if allow_aromatic:
+        mol = Chem.MolFromSmiles(smiles) if smiles else None
+    else:
+        mol = Chem.MolFromSmiles(smiles, sanitize=False) if smiles else None
+        if mol is not None:
+            mol.UpdatePropertyCache(strict=False)
+            Chem.SanitizeMol(
+                mol,
+                Chem.SanitizeFlags.SANITIZE_ALL
+                ^ Chem.SanitizeFlags.SANITIZE_SETAROMATICITY
+                ^ Chem.SanitizeFlags.SANITIZE_KEKULIZE,
+            )
     if mol is None:
         return None
 
@@ -374,6 +389,40 @@ def bond_type_order(bond) -> int:
     return 1
 
 
+def _inner_double_segment(xi, yi, xj, yj, cx, cy, gap):
+    """环内双键的内侧平行线（教科书式内缩短双键）。
+
+    从键中点朝环质心方向偏移 gap；端点钳制在「质心 → 两顶点」的
+    射线上（中心、双键端点、顶点三点共线），长度自然满足
+    长度 = 距中心距离 × 2/√3（正多边形几何）。
+    退化（质心在键上/射线平行）返回 None，由调用方回退简单偏移。
+    """
+    mx, my = (xi + xj) / 2.0, (yi + yj) / 2.0
+    vx, vy = cx - mx, cy - my
+    dist = math.hypot(vx, vy)
+    if dist < 1e-6:
+        return None
+    sx, sy = vx / dist, vy / dist
+    dx, dy = xj - xi, yj - yi
+    L = math.hypot(dx, dy) or 1.0
+    ux, uy = dx / L, dy / L
+    nx, ny = mx + sx * gap, my + sy * gap
+
+    def _ray_hit(vx_, vy_):
+        ddx, ddy = vx_ - cx, vy_ - cy
+        det = -ddx * uy + ddy * ux
+        if abs(det) < 1e-9:
+            return None
+        t = (-(nx - cx) * uy + (ny - cy) * ux) / det
+        return cx + ddx * t, cy + ddy * t
+
+    p1 = _ray_hit(xi, yi)
+    p2 = _ray_hit(xj, yj)
+    if p1 is None or p2 is None:
+        return None
+    return p1[0], p1[1], p2[0], p2[1]
+
+
 def bond_segments(mol, *, label_margin: float = 0.25, bond_gap: float = 0.08,
                   labeler=atom_label, margin_fn=None):
     """把分子中所有化学键转换为 TikZ 线段坐标列表。
@@ -392,7 +441,8 @@ def bond_segments(mol, *, label_margin: float = 0.25, bond_gap: float = 0.08,
         labeler: 原子标签函数（默认 atom_label；机理场景用 condensed_atom_label）。
         margin_fn: 按标签文本计算留白距离的函数；缺省统一用 label_margin。
 
-    环内双键的平行线朝环质心偏移（画在环内，而非环外）。
+    环内双键的平行线朝环质心偏移：双键为内缩短线（端点在中心→顶点
+    射线上，内缩量 0.18×键长）；三键保持等长双侧平行线。
     """
     def _margin(a):
         lab = labeler(a)
@@ -436,16 +486,25 @@ def bond_segments(mol, *, label_margin: float = 0.25, bond_gap: float = 0.08,
         else:
             # 偏移侧：环内双键朝环质心，链上双键保持原方向
             sx, sy = px, py
+            center = None
             if b.IsInRing():
                 mx, my = (xi + xj) / 2.0, (yi + yj) / 2.0
                 for atoms, cx, cy in ring_centers:
                     if i in atoms and j in atoms:
+                        center = (cx, cy)
                         if (cx - mx) * px + (cy - my) * py < 0:
                             sx, sy = -px, -py
                         break
             segs = [(x1, y1, x2, y2)]
-            segs.append((x1 + sx * bond_gap, y1 + sy * bond_gap,
-                         x2 + sx * bond_gap, y2 + sy * bond_gap))
+            inner = None
+            if order == 2 and center is not None:
+                inner = _inner_double_segment(xi, yi, xj, yj,
+                                              center[0], center[1], 0.18 * L)
+            if inner is not None:
+                segs.append(inner)
+            else:
+                segs.append((x1 + sx * bond_gap, y1 + sy * bond_gap,
+                             x2 + sx * bond_gap, y2 + sy * bond_gap))
             if order == 3:
                 segs.append((x1 - sx * bond_gap, y1 - sy * bond_gap,
                              x2 - sx * bond_gap, y2 - sy * bond_gap))

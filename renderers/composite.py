@@ -276,9 +276,16 @@ def render_composite(layout: str, children: list) -> str:
     if layout_name == "reaction_mech" and not any(el[0] == "arrow" for el in sequence):
         return "（COMPOSITE 渲染失败：reaction_mech 布局需要 [RXNARROW] 标记主反应箭头位置）"
 
+    # resonance 布局/含共振箭头时，极限式必须保留显式键级（跳过芳香化），
+    # 否则不同 Kekulé 式会被统一芳香化成同一结构
+    allow_aromatic = not (
+        layout_name == "resonance"
+        or any(el[0] == "resarrow" for el in sequence)
+    )
+
     mols = {}
     for comp in structs:
-        mol = prepare_mol(comp["smiles"])
+        mol = prepare_mol(comp["smiles"], allow_aromatic=allow_aromatic)
         if mol is None:
             return f"（COMPOSITE 渲染失败：无效 SMILES「{comp['smiles']}」（组件 {comp['id']}）"
         scale_mol_coords(mol, _MOL_SCALE)
