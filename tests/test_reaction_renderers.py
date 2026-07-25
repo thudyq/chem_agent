@@ -60,12 +60,16 @@ def test_arrow_error_paths():
 
 
 def test_retro_open_arrow():
-    """RETRO：空心三角箭头（fill=white 三角）+ transform 标注（上方）。"""
+    """RETRO：双线推导箭头 ⇒（双线杆+实心尖，较粗），长度与普通反应箭头一致。"""
     out = render_retro("O=Cc1ccccc1", "c1ccccc1", "formylation")
     assert out.count("\\begin{scope}[shift=") == 2
-    assert "fill=white" in out and "-- cycle;" in out   # 空心三角
+    assert "double distance" in out                      # 双线杆
+    assert re.search(r"\\fill \([-\d.]+,0\) -- \([-\d.]+,0.13\) -- \([-\d.]+,-0.13\) -- cycle;", out)
+    assert "\\draw[->" not in out                        # 非实心箭头
+    m = re.search(r"double distance=1.8pt, line width=0.9pt\] \(([-\d.]+),0\) -- \(([-\d.]+),0\)", out)
+    assert m is not None
+    assert abs((float(m.group(2)) + 0.22 - float(m.group(1))) - 1.3) < 0.01   # 含尖端总长 1.3
     assert "\\itshape formylation" in out
-    assert "\\draw[->" not in out                       # 非实心箭头
 
 
 def test_retro_error_paths():

@@ -19,8 +19,8 @@ else:
     from .layout import layout_row, molecule_scope_lines
 
 
-_ARR_W = 3.0
-_ARR_PAD = 0.5
+_ARR_W = 2.6        # 与 REACTION/COMPOSITE 主反应箭头一致的占位宽
+_ARR_PAD = 0.65     # 实际箭头长度 = 2.6 - 2×0.65 = 1.3
 _MOL_SCALE = 0.8
 
 
