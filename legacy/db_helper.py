@@ -23,6 +23,11 @@ from pathlib import Path
 
 import requests
 
+try:
+    from .http_utils import http_get
+except ImportError:
+    from http_utils import http_get
+
 # 项目根目录 / data 目录
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _DATA_DIR = _PROJECT_ROOT / "data"
@@ -151,8 +156,8 @@ def _fetch_core_properties(en_name: str):
     """PUG REST 取核心计算属性（可靠）。失败返回 None。"""
     url = _PUBCHEM_PROPERTY_URL.format(name=requests.utils.quote(en_name))
     try:
-        resp = requests.get(url, timeout=_PUBCHEM_TIMEOUT)
-    except requests.exceptions.RequestException as e:
+        resp = http_get(url, timeout=_PUBCHEM_TIMEOUT)
+    except Exception as e:
         print(f"[_fetch_core_properties] {en_name!r} 网络异常: {e}")
         return None
     if resp.status_code == 404:
@@ -184,8 +189,8 @@ def _fetch_experimental(cid):
         return {}
     url = _PUGVIEW_URL.format(cid=cid)
     try:
-        resp = requests.get(url, timeout=_PUBCHEM_TIMEOUT)
-    except requests.exceptions.RequestException:
+        resp = http_get(url, timeout=_PUBCHEM_TIMEOUT)
+    except Exception:
         return {}
     if resp.status_code != 200:
         return {}

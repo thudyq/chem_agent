@@ -15,13 +15,16 @@ Day 2-3 任务：
 """
 
 import sys
-import time
 from pathlib import Path
+from urllib.parse import quote
 
 if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import requests
+try:
+    from .http_utils import http_get
+except ImportError:
+    from http_utils import http_get
 
 # PubChem PUG REST 端点：按名称查询 CanonicalSMILES（返回纯文本 TXT）。
 # 注意：AGENT.md 原写的 .../{name}/SMILES 会被判为非法 operation（返回 400），
@@ -31,25 +34,6 @@ PUBCHEM_TEMPLATE = (
     "/property/CanonicalSMILES/TXT"
 )
 DEFAULT_TIMEOUT = 10  # 秒；兼顾网络抖动与用户等待体验
-_503_RETRIES = 3      # PubChem 限流（503）时的最大重试次数
-
-
-def _http_get(url: str, timeout: int):
-    """HTTP GET：优先 curl_cffi（浏览器 TLS 指纹）。
-
-    PubChem 按 TLS ClientHello 指纹分级限流：python-requests 的 OpenSSL
-    指纹会被归入机器人流量，持续返回 503（PUGREST.ServerBusy）；
-    浏览器指纹（curl_cffi impersonate）可正常访问。curl_cffi 未安装时
-    回退 requests（保留原行为）。
-    """
-    try:
-        from curl_cffi import requests as creq
-        return creq.get(url, timeout=timeout, impersonate="chrome")
-    except ImportError:
-        pass
-    return requests.get(
-        url, timeout=timeout, headers={"User-Agent": "chem_agent/1.0"}
-    )
 
 
 # --------------------------------------------------------------------------- #
@@ -69,34 +53,14 @@ def pubchem_to_smiles(name: str, timeout: int = DEFAULT_TIMEOUT):
         print("[pubchem_to_smiles] 输入名称为空或类型错误。")
         return None
 
-    url = PUBCHEM_TEMPLATE.format(name=requests.utils.quote(name))
+    url = PUBCHEM_TEMPLATE.format(name=quote(name))
     print(f"[pubchem_to_smiles] 请求 PubChem: {url}")
-    resp = None
-    for attempt in range(1, _503_RETRIES + 1):
-        try:
-            resp = _http_get(url, timeout)
-        except requests.exceptions.Timeout:
-            print(f"[pubchem_to_smiles] 请求超时（>{timeout}s），将尝试备选路径。")
-            return None
-        except requests.exceptions.RequestException as e:
-            # 覆盖连接错误、DNS 失败、SSL 错误等所有 requests 异常
-            print(f"[pubchem_to_smiles] 网络异常: {e}")
-            return None
-        except Exception as e:
-            # curl_cffi 的异常类型与 requests 不同名，一并兜底
-            print(f"[pubchem_to_smiles] 网络异常: {e}")
-            return None
-        if resp.status_code != 503:
-            break
-        # 限流：按 Retry-After 等待后重试（封顶 30s）
-        try:
-            wait = int(resp.headers.get("Retry-After", "10") or 10)
-        except (TypeError, ValueError):
-            wait = 10
-        wait = min(wait, 30)
-        print(f"[pubchem_to_smiles] PubChem 限流（503），{wait}s 后重试"
-              f"（第 {attempt}/{_503_RETRIES} 次）...")
-        time.sleep(wait)
+    try:
+        resp = http_get(url, timeout)
+    except Exception as e:
+        # 覆盖超时、连接错误、DNS 失败、SSL 错误等底层客户端异常
+        print(f"[pubchem_to_smiles] 网络异常: {e}")
+        return None
 
     if resp.status_code == 404:
         # PubChem 找不到该名称时返回 404
