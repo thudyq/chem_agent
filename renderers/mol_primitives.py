@@ -391,6 +391,8 @@ def bond_segments(mol, *, label_margin: float = 0.25, bond_gap: float = 0.08,
         bond_gap: 双键/三键平行线之间的间距。
         labeler: 原子标签函数（默认 atom_label；机理场景用 condensed_atom_label）。
         margin_fn: 按标签文本计算留白距离的函数；缺省统一用 label_margin。
+
+    环内双键的平行线朝环质心偏移（画在环内，而非环外）。
     """
     def _margin(a):
         lab = labeler(a)
@@ -399,6 +401,17 @@ def bond_segments(mol, *, label_margin: float = 0.25, bond_gap: float = 0.08,
         if margin_fn is not None:
             return margin_fn(lab)
         return label_margin
+
+    # 各环的原子集合与质心（环内双键内侧偏移用）
+    ring_centers = []
+    try:
+        atom_rings = mol.GetRingInfo().AtomRings()
+    except Exception:
+        atom_rings = []
+    for ring in atom_rings:
+        xs = [atom_pos(mol, i)[0] for i in ring]
+        ys = [atom_pos(mol, i)[1] for i in ring]
+        ring_centers.append((set(ring), sum(xs) / len(xs), sum(ys) / len(ys)))
 
     segments = []
     for b in mol.GetBonds():
@@ -421,13 +434,21 @@ def bond_segments(mol, *, label_margin: float = 0.25, bond_gap: float = 0.08,
         if order == 1:
             segments.append([(x1, y1, x2, y2)])
         else:
-            # 双键：两条线；三键：三条线
+            # 偏移侧：环内双键朝环质心，链上双键保持原方向
+            sx, sy = px, py
+            if b.IsInRing():
+                mx, my = (xi + xj) / 2.0, (yi + yj) / 2.0
+                for atoms, cx, cy in ring_centers:
+                    if i in atoms and j in atoms:
+                        if (cx - mx) * px + (cy - my) * py < 0:
+                            sx, sy = -px, -py
+                        break
             segs = [(x1, y1, x2, y2)]
-            segs.append((x1 + px * bond_gap, y1 + py * bond_gap,
-                         x2 + px * bond_gap, y2 + py * bond_gap))
+            segs.append((x1 + sx * bond_gap, y1 + sy * bond_gap,
+                         x2 + sx * bond_gap, y2 + sy * bond_gap))
             if order == 3:
-                segs.append((x1 - px * bond_gap, y1 - py * bond_gap,
-                             x2 - px * bond_gap, y2 - py * bond_gap))
+                segs.append((x1 - sx * bond_gap, y1 - sy * bond_gap,
+                             x2 - sx * bond_gap, y2 - sy * bond_gap))
             segments.append(segs)
 
     return segments
