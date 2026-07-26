@@ -62,26 +62,36 @@ def render_newman(smiles: str, angle="60") -> str:
 
     front_angles = [90.0, 210.0, 330.0]
     back_angles = [a + theta for a in front_angles]
-    R = 0.5    # 前碳空心圆半径
-    D = 1.1    # 取代基距圆心距离（前后碳一致）
+    R = 0.5              # 前碳空心圆半径
+    D = R * (1 + 2 / 3)  # 取代基距圆心：圆外键长统一为圆半径的 2/3
+    LBL = D * 1.25       # 标签距圆心（比键末端稍远）
+    _COLLIDE = 5.0       # 前后键角差小于该值视为重叠（重叠式）
+    _LABEL_SHIFT = 15.0  # 重叠式后标签顺时针偏移角（露出）
 
     def pt(length, deg):
         r = math.radians(deg)
         return length * math.cos(r), length * math.sin(r)
 
+    def _collides(deg):
+        return any(min(abs(deg - f) % 360.0,
+                       360.0 - abs(deg - f) % 360.0) < _COLLIDE
+                   for f in front_angles)
+
     lines = ["\\begin{tikzpicture}[scale=1.1]"]
-    # 后键：从圆周(R)向外到 D，先画（灰色，在后）
+    # 后键：从圆周(R)向外到 D（圆外部分 = 2R/3），先画（灰色、粗线与圆一致，在后）；
+    # 重叠式中后键与后标签同步顺时针偏移 15°，避免被前键完全遮挡
     for a, sub in zip(back_angles, back_subs):
-        x0, y0 = pt(R, a)
-        x1, y1 = pt(D, a)
-        lx, ly = pt(D * 1.12, a)
-        lines.append(f"  \\draw[gray] ({x0:.2f},{y0:.2f}) -- ({x1:.2f},{y1:.2f});")
+        ea = a - _LABEL_SHIFT if _collides(a) else a
+        x0, y0 = pt(R, ea)
+        x1, y1 = pt(D, ea)
+        lx, ly = pt(LBL, ea)
+        lines.append(f"  \\draw[thick, gray] ({x0:.2f},{y0:.2f}) -- ({x1:.2f},{y1:.2f});")
         lines.append(f"  \\node[gray] at ({lx:.2f},{ly:.2f}) {{\\small {sub}}};")
-    # 前键：从圆心(0,0)到 D
+    # 前键：从圆心(0,0)到 D（圆外部分 = 2R/3，粗线与圆一致）
     for a, sub in zip(front_angles, front_subs):
         x1, y1 = pt(D, a)
-        lx, ly = pt(D * 1.12, a)
-        lines.append(f"  \\draw (0,0) -- ({x1:.2f},{y1:.2f});")
+        lx, ly = pt(LBL, a)
+        lines.append(f"  \\draw[thick] (0,0) -- ({x1:.2f},{y1:.2f});")
         lines.append(f"  \\node at ({lx:.2f},{ly:.2f}) {{\\small {sub}}};")
     # 前碳：空心大圆（最后画，圆环压在键交叉之上，保持清晰）
     lines.append(f"  \\draw[thick] (0,0) circle ({R:.2f});")
