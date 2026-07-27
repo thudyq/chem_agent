@@ -62,12 +62,12 @@ Chem_Agent 将化学图示拆分为三大类、若干最小单元。这些符号
 Chem_Agent 的渲染引擎解析 LLM 输出中的标记，调用底层化学工具（RDKit、mol2chemfigPy3 等）生成对应的 TikZ 代码，最终嵌入回答中输出。
 
 ```mermaid
-flowchart LR
-    U[用户输入化学问题] --> L[LLM 推理<br>System Prompt 驱动]
-    L --> T[输出含标记的回答<br>如 [STRUCT:c1ccccc1]]
-    T --> P[标记解析器<br>提取 STRUCT/ARROW/NEWMAN/ENERGY]
-    P --> R[各渲染器<br>生成 TikZ 代码]
-    R --> O[图文混合回答<br>文字 + 化学图示]
+graph LR
+    U["用户输入化学问题"] --> L["LLM 推理<br>System Prompt 驱动"]
+    L --> T["输出含标记的回答<br>如 [STRUCT:c1ccccc1]"]
+    T --> P["标记解析器<br>提取 STRUCT/ARROW/NEWMAN/ENERGY"]
+    P --> R["各渲染器<br>生成 TikZ 代码"]
+    R --> O["图文混合回答<br>文字 + 化学图示"]
 ```
 
 ---
