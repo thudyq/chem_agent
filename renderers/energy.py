@@ -6,7 +6,7 @@
 驻点坐标由布局引擎（renderers/layout.py::energy_point_coords）计算。
 """
 
-from .layout import energy_annotation_placement, energy_point_coords
+from .layout import energy_annotation_placement, energy_point_coords, energy_point_roles
 
 
 def render_energy(points_str: str) -> str:
@@ -22,13 +22,15 @@ def render_energy(points_str: str) -> str:
 
     n = len(values)
     info = energy_point_coords(values)
-    max_idx = info["max_idx"]
     x_last = info["x_last"]
+    roles = energy_point_roles(values)
 
     # 驻点标签占用区域 → 标注框与纵轴高度（避免遮挡）
     occupied = []
     for i, v, x, y in info["points"]:
-        yoff = 0.35 if i == max_idx else -0.3
+        if i not in roles:
+            continue
+        yoff = 0.35 if roles[i] == "过渡态" else -0.3
         occupied.append((x - 0.85, y + yoff - 0.22, x + 0.85, y + yoff + 0.22))
     box_x, box_y, box_anchor, axis_top = energy_annotation_placement(
         occupied, x_last)
@@ -48,16 +50,14 @@ def render_energy(points_str: str) -> str:
     # 平滑曲线
     coords = " ".join(f"({x:.1f},{y:.2f})" for _, _, x, y in info["points"])
     lines.append(f"  \\draw[thick, blue, smooth] plot coordinates {{{coords}}};")
-    # 点 + 标签：每个驻点一个 scope（局部坐标，便于后续叠加结构组件）
-    role_map = {0: "反应物", n - 1: "产物"}
-    if max_idx not in role_map:
-        role_map[max_idx] = "过渡态"
+    # 点 + 标签：每个驻点一个 scope；过渡态标签在上方，其余在下方
+    roles = energy_point_roles(values)
     for i, v, x, y in info["points"]:
         lines.append(f"  \\begin{{scope}}[shift={{({x:.1f},{y:.2f})}}]")
         lines.append("    \\fill[blue] (0,0) circle (0.06);")
-        if i in role_map:
-            yoff = 0.35 if i == max_idx else -0.3
-            lines.append(f"    \\node[font=\\small] at (0,{yoff:.2f}) {{{role_map[i]} ({v:+.0f})}};")
+        if i in roles:
+            yoff = 0.35 if roles[i] == "过渡态" else -0.3
+            lines.append(f"    \\node[font=\\small] at (0,{yoff:.2f}) {{{roles[i]} ({v:+.0f})}};")
         lines.append("  \\end{scope}")
     # Ea / ΔH 标注框（净空带，anchor 定位）
     ea = max(values) - values[0]

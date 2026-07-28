@@ -197,6 +197,26 @@ def energy_point_coords(values: list, *, x0: float = 1.0, xstep: float = 1.5,
     }
 
 
+def energy_point_roles(values: list) -> dict:
+    """能量点角色判定（两步/多步反应标注）。
+
+    首点 → 反应物，尾点 → 产物，局部极大 → 过渡态，局部极小 → 反应中间体；
+    平台段（与相邻等值）不标注。
+    """
+    n = len(values)
+    roles = {}
+    if n < 2:
+        return roles
+    roles[0] = "反应物"
+    roles[n - 1] = "产物"
+    for i in range(1, n - 1):
+        if values[i] > values[i - 1] and values[i] > values[i + 1]:
+            roles[i] = "过渡态"
+        elif values[i] < values[i - 1] and values[i] < values[i + 1]:
+            roles[i] = "反应中间体"
+    return roles
+
+
 def place_bbox(bbox: Tuple[float, float, float, float], x: float, y: float,
                side: str = "above", margin: float = 0.5) -> Tuple[float, float]:
     """把组件包围盒放到 (x, y) 的指定方位，返回 scope shift。

@@ -68,8 +68,8 @@ if __name__ == "__main__":
         scale_mol_coords,
     )
     from renderers.layout import (
-        energy_annotation_placement, energy_point_coords, layout_row,
-        layout_rows, molecule_scope_lines, place_bbox,
+        energy_annotation_placement, energy_point_coords, energy_point_roles,
+        layout_row, layout_rows, molecule_scope_lines, place_bbox,
     )
 else:
     from .mol_primitives import (
@@ -79,8 +79,8 @@ else:
         scale_mol_coords,
     )
     from .layout import (
-        energy_annotation_placement, energy_point_coords, layout_row,
-        layout_rows, molecule_scope_lines, place_bbox,
+        energy_annotation_placement, energy_point_coords, energy_point_roles,
+        layout_row, layout_rows, molecule_scope_lines, place_bbox,
     )
 
 
@@ -171,11 +171,8 @@ def _render_energy_layout(points_str: str, structs: list, mols: dict,
 
     n = len(values)
     info = energy_point_coords(values)
-    max_idx = info["max_idx"]
     x_last = info["x_last"]
-    role_map = {0: "反应物", n - 1: "产物"}
-    if max_idx not in role_map:
-        role_map[max_idx] = "过渡态"
+    roles = energy_point_roles(values)
 
     at_map = {}
     for comp in structs:
@@ -199,7 +196,10 @@ def _render_energy_layout(points_str: str, structs: list, mols: dict,
         occupied.append((bbox[0] + shift[0], bbox[1] + shift[1],
                          bbox[2] + shift[0], bbox[3] + shift[1]))
     for i, v, x, y in info["points"]:
-        yoff = 0.35 if i == max_idx else -0.3
+        label = at_map[i]["label"] if (i in at_map and at_map[i]["label"]) else roles.get(i)
+        if not label:
+            continue
+        yoff = 0.35 if roles.get(i) == "过渡态" else -0.3
         occupied.append((x - 0.85, y + yoff - 0.22, x + 0.85, y + yoff + 0.22))
 
     box_x, box_y, box_anchor, axis_top = energy_annotation_placement(
@@ -220,11 +220,11 @@ def _render_energy_layout(points_str: str, structs: list, mols: dict,
 
     for i, v, x, y in info["points"]:
         comp = at_map.get(i)
-        label = comp["label"] if (comp and comp["label"]) else role_map.get(i)
+        label = comp["label"] if (comp and comp["label"]) else roles.get(i)
         lines.append(f"  \\begin{{scope}}[shift={{({x:.1f},{y:.2f})}}]")
         lines.append("    \\fill[blue] (0,0) circle (0.06);")
         if label:
-            yoff = 0.35 if i == max_idx else -0.3
+            yoff = 0.35 if roles.get(i) == "过渡态" else -0.3
             lines.append(f"    \\node[font=\\small] at (0,{yoff:.2f}) {{{label} ({v:+.0f})}};")
         lines.append("  \\end{scope}")
 
