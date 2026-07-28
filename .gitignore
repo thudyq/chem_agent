@@ -16,6 +16,7 @@ portfolio/
 # 测试文件
 latex_tests/
 fast_test/
+fast_test.py
 
 # 其他常见的临时文件
 *.tmp

@@ -45,12 +45,14 @@ def test_sn2_full_scene():
     out = _render(SN2_DEMO)
     assert out.startswith("\\begin{tikzpicture}")
     assert out.endswith("\\end{tikzpicture}")
-    assert out.count("$+$") == 2          # 两个 PLUS 连接符
+    assert len(re.findall(r"\\node at \([-\d.]+,[-\d.]+\) \{\$\+\$\}", out)) == 2   # 两个 PLUS
     assert "SN$_2$" in out                # CONDITION 标注到主箭头（数字自动下标）
     assert out.count("\\draw[->, very thick]") == 1   # 一个主反应箭头
     assert out.count("\\draw[->, thick, red]") == 2   # 两条双电子弯箭头
     assert "CH$_{3}$" in out              # 非环碳按结构简式写出
-    assert "OH$^{-}$" in out and "Cl$^{-}$" in out
+    # 电荷为右上角圆圈节点（规范第 3 条），OH- 与 Cl- 各一个
+    assert out.count("\\node[draw, circle") == 2
+    assert out.count("{OH}") >= 1
     assert "\\node[font=\\tiny, gray" not in out      # 默认不显示原子序号
     assert "\\node[below]" not in out     # 纯化学式 label 不重复显示（分子本身已是简式）
     # 孤对电子点：OH-(3对)+CH3Cl的Cl(3对)+CH3OH的O(2对)+Cl-(4对)=12对=24点
@@ -91,11 +93,11 @@ def test_numbering_flag():
 def test_lone_pair_origin_offset():
     """进攻箭头起点落在孤对电子点上（点距 0.30，绕元素符号中心）。"""
     out = _render(SN2_DEMO)
-    o_pos = _resolve_node_positions(out, "OH$^{-}$")
+    o_pos = _resolve_node_positions(out, "OH")
     assert o_pos
     ox, oy = o_pos[0]
-    # "OH-" 后缀宽 2 字符 -> 符号中心左移 0.26；正上方槽位，点距 0.30
-    expected = (ox - 0.26, oy + 0.30)
+    # "OH" 后缀宽 1 字符 -> 符号中心左移 0.13；正上方槽位，点距 0.30
+    expected = (ox - 0.13, oy + 0.30)
     m = re.search(r"\\draw\[->, thick, red\] \(([-\d.]+),([-\d.]+)\)", out)
     assert m is not None
     start = (float(m.group(1)), float(m.group(2)))
@@ -106,13 +108,13 @@ def test_lone_pair_origin_offset():
 def test_lone_pairs_orthogonal_placement():
     """OH- 的孤对电子点正交摆放（上/左/下，无斜向），且绕 O 符号中心。"""
     out = _render(SN2_DEMO)
-    o_pos = _resolve_node_positions(out, "OH$^{-}$")
+    o_pos = _resolve_node_positions(out, "OH")
     assert o_pos
     ox, oy = o_pos[0]
-    cx, cy = ox - 0.26, oy          # 元素符号中心
+    cx, cy = ox - 0.13, oy          # 元素符号中心（主标签 "OH" 后缀 1 字符）
     scope_with_o = re.search(
         r"\\begin\{scope\}\[shift=\{\(([-\d.]+),([-\d.]+)\)\}\]"
-        r"(?:(?!\\end\{scope\}).)*OH\$\^\{-\}\$.*?\\end\{scope\}", out, re.DOTALL,
+        r"(?:(?!\\end\{scope\}).)*\{OH\}.*?\\end\{scope\}", out, re.DOTALL,
     )
     assert scope_with_o
     sx, sy = float(scope_with_o.group(1)), float(scope_with_o.group(2))

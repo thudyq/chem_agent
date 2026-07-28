@@ -21,7 +21,7 @@ def test_reaction_basic_layout():
                           "O=[N+]([O-])c1ccccc1;O", "H2SO4, 浓HNO3")
     assert out.startswith("\\begin{tikzpicture}")
     assert out.count("\\begin{scope}[shift=") == 4     # 4 个分子组件
-    assert out.count("$+$") == 2                       # 两侧各一个加号
+    assert len(re.findall(r"\\node at \([-\d.]+,[-\d.]+\) \{\$\+\$\}", out)) == 2   # 两侧各一个加号
     assert out.count("\\draw[->, very thick]") == 1
     assert "H$_2$SO$_4$, 浓HNO$_3$" in out             # 条件自动下标
     assert "\\fill" not in out                         # 普通方程式不画孤对电子
@@ -79,13 +79,13 @@ def test_retro_error_paths():
 
 
 def test_resonance_basic():
-    """RESONANCE（布局引擎迁移）：极限式 scope 化 + ↔ + 孤对电子点。"""
+    """RESONANCE（布局引擎迁移）：极限式 scope 化 + ↔ + 孤对电子点 + 圆圈电荷。"""
     from renderers.resonance import render_resonance
     out = render_resonance("CC(=O)[O-]~CC([O-])=O")
     assert out.startswith("\\begin{tikzpicture}")
     assert out.count("\\begin{scope}[shift=") == 2
     assert out.count("$\\leftrightarrow$") == 1
-    assert "O$^{-}$" in out
+    assert out.count("\\node[draw, circle") == 2       # 两个 O- 的圆圈电荷
     assert "\\fill" in out                            # 共振场景画出孤对电子
 
 

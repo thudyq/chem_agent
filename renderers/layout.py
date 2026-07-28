@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any, Hashable, List, Tuple
 
 from .mol_primitives import (
-    atom_pos, bond_segments, condensed_atom_label, label_bond_margin,
+    atom_main_label, atom_pos, bond_segments, charge_tikz, label_bond_margin,
     lone_pair_tikz, mol_visual_bbox,
 )
 
@@ -149,17 +149,20 @@ def molecule_scope_lines(mol, shift: Tuple[float, float], *,
     lines = [
         f"  \\begin{{scope}}[shift={{({shift[0]:.2f},{shift[1]:.2f})}}]"
     ]
-    for segs in bond_segments(mol, labeler=condensed_atom_label,
+    for segs in bond_segments(mol, labeler=atom_main_label,
                               margin_fn=label_bond_margin):
         for x1, y1, x2, y2 in segs:
             lines.append(f"    \\draw ({x1:.2f},{y1:.2f}) -- ({x2:.2f},{y2:.2f});")
     for atom in mol.GetAtoms():
         x, y = atom_pos(mol, atom.GetIdx())
-        lab = condensed_atom_label(atom)
+        lab = atom_main_label(atom)
         if lab:
             lines.append(
                 f"    \\node[fill=white, inner sep=1pt] at ({x:.2f},{y:.2f}) {{{lab}}};"
             )
+        charge = charge_tikz(mol, atom.GetIdx())
+        if charge:
+            lines.append(f"    {charge}")
         if show_numbers:
             lines.append(
                 f"    \\node[font=\\tiny, gray, below right] at ({x:.2f},{y:.2f}) "

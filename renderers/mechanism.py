@@ -15,21 +15,12 @@ Bezier 弯箭头。原子索引按 SMILES 出现顺序（0 起）。
 """
 
 from .mol_primitives import (
-    atom_pos, bond_segments, condensed_atom_label, label_plain_len,
+    atom_main_label, atom_pos, bond_segments, charge_tikz, label_bond_margin,
     lone_pair_tikz, mech_arrow_between, mech_arrow_origin, prepare_mol,
     scale_mol_coords,
 )
 
 _MOL_SCALE = 0.8    # 分子坐标缩放因子（与其他机理渲染器一致）
-
-
-def _bond_margin(label: str) -> float:
-    n = label_plain_len(label)
-    if n <= 2:
-        return 0.30
-    if n == 3:
-        return 0.45
-    return 0.58
 
 
 def _parse_arrows(arrows_str):
@@ -70,16 +61,19 @@ def render_mechanism(smiles: str, arrows_str: str = "", flags: str = "") -> str:
 
     lines = ["\\begin{tikzpicture}"]
 
-    for segs in bond_segments(mol, labeler=condensed_atom_label,
-                              margin_fn=_bond_margin):
+    for segs in bond_segments(mol, labeler=atom_main_label,
+                              margin_fn=label_bond_margin):
         for x1, y1, x2, y2 in segs:
             lines.append(f"  \\draw ({x1:.2f},{y1:.2f}) -- ({x2:.2f},{y2:.2f});")
 
     for atom in mol.GetAtoms():
         x, y = atom_pos(mol, atom.GetIdx())
-        lab = condensed_atom_label(atom)
+        lab = atom_main_label(atom)
         if lab:
             lines.append(f"  \\node[fill=white, inner sep=1pt] at ({x:.2f},{y:.2f}) {{{lab}}};")
+        charge = charge_tikz(mol, atom.GetIdx())
+        if charge:
+            lines.append(f"  {charge}")
         if show_numbers:
             lines.append(f"  \\node[font=\\tiny, gray, below right] at ({x:.2f},{y:.2f}) {{{atom.GetIdx()}}};")
 

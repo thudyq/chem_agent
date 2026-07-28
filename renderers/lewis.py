@@ -9,7 +9,10 @@
 共享同一套逻辑（renderers/mol_primitives.py）。
 """
 
-from .mol_primitives import atom_label, atom_pos, prepare_mol, bond_segments, lone_pair_tikz
+from .mol_primitives import (
+    atom_main_label, atom_pos, bond_segments, charge_tikz, lone_pair_tikz,
+    prepare_mol,
+)
 
 
 def render_lewis(smiles: str) -> str:
@@ -30,12 +33,15 @@ def render_lewis(smiles: str) -> str:
         for x1, y1, x2, y2 in segs:
             lines.append(f"  \\draw ({x1:.2f},{y1:.2f}) -- ({x2:.2f},{y2:.2f});")
 
-    # 原子标签
+    # 原子标签（主标签不含电荷）+ 圆圈电荷（右上角）
     for atom in mol.GetAtoms():
-        lab = atom_label(atom)
+        lab = atom_main_label(atom)
         if lab:
             x, y = atom_pos(mol, atom.GetIdx())
             lines.append(f"  \\node[fill=white,inner sep=1pt] at ({x:.2f},{y:.2f}) {{{lab}}};")
+        charge = charge_tikz(mol, atom.GetIdx())
+        if charge:
+            lines.append(f"  {charge}")
 
     # 孤对电子点（共享逻辑：正交优先、点距 0.30、绕元素符号中心）
     for atom in mol.GetAtoms():

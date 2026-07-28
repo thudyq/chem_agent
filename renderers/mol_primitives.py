@@ -139,10 +139,20 @@ _DIAG = [45.0, 135.0, 225.0, 315.0]     # 斜向槽位（正交占满时兜底�
 _CHAR_HALF_W = 0.13       # 标签单字符半宽估计（用于元素符号中心修正）
 
 
+def _implicit_shown_hs(atom) -> int:
+    """以标签后缀形式显示的 H 数（= 总 H 数 − 已显式画出的 H 邻居数）。
+
+    带电原子（如 [OH-]）的 GetNumImplicitHs() 可能返回 0，但标签仍显示 H，
+    因此用 totalHs − 显式 H 邻居数作为阻挡/计数依据。
+    """
+    explicit_h = sum(1 for n in atom.GetNeighbors() if n.GetAtomicNum() == 1)
+    return max(0, atom.GetTotalNumHs() - explicit_h)
+
+
 def lone_pair_count(atom) -> tuple[int, int]:
     """返回 (孤对电子对数, 单电子数)。
 
-    非键电子数 = 价电子 - 键级和 - 形式电荷 - 自由基电子数 - 隐含氢数；
+    非键电子数 = 价电子 - 键级和 - 形式电荷 - 自由基电子数 - 标签氢数；
     不在表中的元素（金属等）返回 (0, 0)。
     """
     ve = _VALENCE_ELECTRONS.get(atom.GetAtomicNum())
@@ -151,7 +161,7 @@ def lone_pair_count(atom) -> tuple[int, int]:
     bonds = sum(int(round(b.GetBondTypeAsDouble())) for b in atom.GetBonds())
     radicals = atom.GetNumRadicalElectrons()
     nonbonding = max(0, ve - bonds - atom.GetFormalCharge() - radicals
-                     - atom.GetNumImplicitHs())
+                     - _implicit_shown_hs(atom))
     return nonbonding // 2, radicals
 
 
@@ -169,23 +179,141 @@ def _ang_diff(a: float, b: float) -> float:
     return min(d, 360.0 - d)
 
 
-def _blocked_angles(mol, idx: int) -> list:
-    """孤对电子的阻挡方向：显式键方向 + 标签右侧（隐含氢写在元素符号右侧）。"""
+def _bond_blocks(mol, idx: int) -> list:
+    """规范定义的 block：直接相连的化学键和原子方向 + 标签氢方向（右侧）。
+
+    电荷不是 block（规范仅要求电荷与孤对电子不重叠），单独作为避让约束。
+    """
     blocked = _bond_angles(mol, idx)
-    if mol.GetAtomWithIdx(idx).GetNumImplicitHs() > 0:
+    if _implicit_shown_hs(mol.GetAtomWithIdx(idx)) > 0:
         blocked.append(0.0)
     return blocked
+
+
+def _blocked_angles(mol, idx: int) -> list:
+    """孤对电子的避让方向全集：block + 电荷位置（45°/135°）。"""
+    blocked = _bond_blocks(mol, idx)
+    if mol.GetAtomWithIdx(idx).GetFormalCharge() != 0:
+        blocked.append(_charge_angle(mol, idx))
+    return blocked
+
+
+def _nudge_from_avoid(ang: float, avoid: list) -> float:
+    """角度与避让方向过近（≤30°）时，向 ±30°/±60°/90° 微调至安全位置。"""
+    if _min_ang_diff(ang, avoid) > 30:
+        return ang
+    for delta in (30.0, -30.0, 60.0, -60.0, 90.0, -90.0):
+        cand = (ang + delta) % 360.0
+        if _min_ang_diff(cand, avoid) > 30:
+            return cand
+    return ang
+
+
+def _cardinal(ang: float) -> float:
+    """角度归入上下左右四个方位（倾斜键归入左/右）。"""
+    a = ang % 360.0
+    if 45.0 <= a < 135.0:
+        return 90.0
+    if 135.0 <= a < 225.0:
+        return 180.0
+    if 225.0 <= a < 315.0:
+        return 270.0
+    return 0.0
+
+
+def _min_ang_diff(ang: float, blocked: list) -> float:
+    return min((_ang_diff(ang, b) for b in blocked), default=180.0)
+
+
+def _separate_cardinals(count: int, blocked: list, taken: list) -> list:
+    """核心原则兜底：正交四向优先、斜向补充，避开阻挡与已占槽位（>30°）。"""
+    result = list(taken)
+    for cand in (90.0, 180.0, 270.0, 0.0, 45.0, 135.0, 225.0, 315.0):
+        if len(result) >= count + len(taken):
+            break
+        if (_min_ang_diff(cand, blocked) > 30
+                and _min_ang_diff(cand, result) > 30):
+            result.append(cand)
+    return result[len(taken):]
+
+
+def _place_pairs(pairs: int, blocked: list) -> list:
+    """按《孤对电子标注规范》（Drawbacks 第 3 条）摆放 pairs 对孤对电子。
+
+    规则按 (pairs, block 数) 分派；未列出者按核心原则（正交、尽量分离）。
+    """
+    n_blocks = len(blocked)
+    if pairs == 3 and n_blocks == 1:
+        # 按 block 方位分离（如 block 左 → 上右下）
+        b = _cardinal(blocked[0])
+        return [c for c in (90.0, 0.0, 270.0, 180.0) if c != b][:3]
+    if pairs == 2 and n_blocks == 2:
+        a1, a2 = blocked[0] % 360.0, blocked[1] % 360.0
+        # 特例：左右两根倾斜键同朝上（水型）→ 左下/右下张开45°；朝下同理
+        # （角度带 ±10° 容差，兼容 RDKit 浮点坐标）
+        if all(20.0 <= a <= 160.0 for a in (a1, a2)):
+            return [225.0, 315.0]
+        if all(200.0 <= a <= 340.0 for a in (a1, a2)):
+            return [45.0, 135.0]
+        b1, b2 = _cardinal(a1), _cardinal(a2)
+        return [c for c in (90.0, 180.0, 270.0, 0.0) if c not in (b1, b2)][:2]
+    if pairs == 2 and n_blocks == 1:
+        # 三者夹角 ≈120°（三角对称 ±120°，允许 30° 整数倍）
+        b = blocked[0] % 360.0
+        return [(b - 120.0) % 360.0, (b + 120.0) % 360.0]
+    if pairs == 1 and n_blocks == 3:
+        # 正交四向中取未被 block 方位占用者
+        bs = {_cardinal(a) for a in blocked}
+        for c in (90.0, 180.0, 270.0, 0.0):
+            if c not in bs:
+                return [c]
+        return [90.0]
+    if pairs == 1 and n_blocks == 2:
+        # 30° 整数倍中离两个 block 最远（理想与两者各成 120°）
+        best, best_score = 90.0, -1.0
+        for cand in range(0, 360, 30):
+            score = min(_ang_diff(float(cand), b % 360.0) for b in blocked)
+            if score > best_score:
+                best, best_score = float(cand), score
+        return [best]
+    if pairs == 1 and n_blocks == 1:
+        # block 正对侧
+        return [(blocked[0] + 180.0) % 360.0]
+    return _separate_cardinals(pairs, blocked, [])
+
+
+def lone_pair_angles(mol, idx: int) -> list:
+    """孤对电子的放置角度（按规范规则；block 为键与标签氢，电荷仅避让）。"""
+    atom = mol.GetAtomWithIdx(idx)
+    pairs, _ = lone_pair_count(atom)
+    if pairs == 0:
+        return []
+    avoid = [_charge_angle(mol, idx)] if atom.GetFormalCharge() != 0 else []
+    angles = _place_pairs(pairs, _bond_blocks(mol, idx))
+    if avoid:
+        angles = [_nudge_from_avoid(a, avoid) for a in angles]
+    return angles
+
+
+def single_electron_angles(mol, idx: int) -> list:
+    """单电子（自由基）的放置角度，规则同孤对电子并避开已占电子点。"""
+    _, singles = lone_pair_count(mol.GetAtomWithIdx(idx))
+    if singles == 0:
+        return []
+    taken = lone_pair_angles(mol, idx)
+    blocked = _blocked_angles(mol, idx) + list(taken)
+    return _separate_cardinals(singles, blocked, taken)[:singles]
 
 
 def _dot_center(mol, idx: int) -> tuple[float, float]:
     """孤对电子点的环绕中心：元素符号在标签内的估计位置。
 
-    标签后缀（H、电荷）使元素符号偏离标签中心向左，
+    标签后缀（H 计数部分）使元素符号偏离标签中心向左，
     按后缀可视宽度的一半左移修正（如 OH 的点绕 O 而非绕 OH 整体）。
     """
     atom = mol.GetAtomWithIdx(idx)
     x, y = atom_pos(mol, idx)
-    lab = condensed_atom_label(atom)
+    lab = atom_main_label(atom)
     if lab:
         sym = atom.GetSymbol()
         sym = sym[0].upper() + sym[1:]
@@ -195,36 +323,64 @@ def _dot_center(mol, idx: int) -> tuple[float, float]:
     return x, y
 
 
-def _pick_angles(blocked: list, taken: list, count: int) -> list:
-    """正交优先、斜向兜底，从空槽位中选 count 个角度（避开阻挡与已占槽位）。"""
-    result = list(taken)
-    for pool in (_ORTHO, _DIAG):
-        for ang in pool:
-            if len(result) >= count + len(taken):
-                break
-            if (all(_ang_diff(ang, b) > 30 for b in blocked)
-                    and all(_ang_diff(ang, t) > 30 for t in result)):
-                result.append(ang)
-        if len(result) >= count + len(taken):
-            break
-    return result[len(taken):]
+def atom_main_label(atom) -> str | None:
+    """主标签（元素符号 + H 计数，**不含电荷**；纯碳环原子返回 None）。
+
+    电荷由 atom_charge_label 单独给出，以圆圈形式标注在原子右上角
+    （规范：电荷在右上角、不与孤对电子重叠、外加圈）。
+    """
+    if atom.GetAtomicNum() == 6 and atom.IsInRing():
+        return None
+    if atom.GetAtomicNum() == 6:
+        sym = "C"
+    else:
+        sym = atom.GetSymbol()
+        sym = sym[0].upper() + sym[1:]
+    h = atom.GetTotalNumHs()
+    parts = sym
+    if h == 1:
+        parts += "H"
+    elif h > 1:
+        parts += f"H$_{{{h}}}$"
+    return parts
 
 
-def lone_pair_angles(mol, idx: int) -> list:
-    """孤对电子的放置角度：正交优先，避开键与标签氢的方向。"""
-    pairs, _ = lone_pair_count(mol.GetAtomWithIdx(idx))
-    if pairs == 0:
-        return []
-    return _pick_angles(_blocked_angles(mol, idx), [], pairs)
+def atom_charge_label(atom) -> str | None:
+    """电荷标签（+/−/2+/2−），无形式电荷返回 None。"""
+    fc = atom.GetFormalCharge()
+    if not fc:
+        return None
+    num = str(abs(fc)) if abs(fc) > 1 else ""
+    sign = "+" if fc > 0 else "-"
+    return f"${num}{sign}$"
 
 
-def single_electron_angles(mol, idx: int) -> list:
-    """单电子（自由基）的放置角度，避开键、标签氢与孤对电子。"""
-    _, singles = lone_pair_count(mol.GetAtomWithIdx(idx))
-    if singles == 0:
-        return []
-    return _pick_angles(_blocked_angles(mol, idx),
-                        lone_pair_angles(mol, idx), singles)
+_CHARGE_POS_DIST = 0.42    # 电荷到元素符号中心的距离（不与孤对电子重叠）
+_CHARGE_SCALE = 0.5        # 电荷圈缩放（为默认大小的一半）
+
+
+def _charge_angle(mol, idx: int) -> float:
+    """电荷圈方位角：右侧有标签氢阻碍且左侧无阻碍时在左上（135°），
+    否则在右上（45°）（左右都有阻碍时保持右上）。"""
+    if _implicit_shown_hs(mol.GetAtomWithIdx(idx)) == 0:
+        return 45.0
+    left_blocked = any(
+        _ang_diff(a, 180.0) <= 45.0 for a in _bond_angles(mol, idx)
+    )
+    return 45.0 if left_blocked else 135.0
+
+
+def charge_tikz(mol, idx: int, shift=(0.0, 0.0)) -> str | None:
+    r"""圆圈电荷节点（右上/左上角，draw circle，半尺寸）；无电荷返回 None。"""
+    text = atom_charge_label(mol.GetAtomWithIdx(idx))
+    if text is None:
+        return None
+    cx, cy = _dot_center(mol, idx)
+    r = math.radians(_charge_angle(mol, idx))
+    x = cx + shift[0] + _CHARGE_POS_DIST * math.cos(r)
+    y = cy + shift[1] + _CHARGE_POS_DIST * math.sin(r)
+    return (f"\\node[draw, circle, inner sep=0.6pt, font=\\scriptsize, "
+            f"scale={_CHARGE_SCALE}] at ({x:.2f},{y:.2f}) {{{text}}};")
 
 
 def lone_pair_dot_groups(mol, idx: int, shift=(0.0, 0.0)):
@@ -286,6 +442,10 @@ def mol_visual_bbox(mol, labeler=condensed_atom_label,
             hh = 0.18
         xs += [x - hw, x + hw]
         ys += [y - hh, y + hh]
+        if atom.GetFormalCharge() != 0:
+            r = math.radians(_charge_angle(mol, atom.GetIdx()))
+            xs.append(x + _CHARGE_POS_DIST * math.cos(r) + 0.1 * math.cos(r))
+            ys.append(y + _CHARGE_POS_DIST * math.sin(r) + 0.1)
         if include_lone_pairs:
             groups, singles = lone_pair_dot_groups(mol, atom.GetIdx())
             for (x1, y1), (x2, y2) in groups:
