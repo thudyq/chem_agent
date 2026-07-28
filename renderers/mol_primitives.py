@@ -457,6 +457,48 @@ def mol_visual_bbox(mol, labeler=condensed_atom_label,
     return min(xs), min(ys), max(xs), max(ys)
 
 
+def _regularize_kekule(mol) -> None:
+    """全芳香单环按几何规则重排交替单双键（同类环画法一致）。
+
+    PrepareMolForDrawing 的 Kekulé 由原子规范序决定，同一苯环在不同分子
+    （苯 / 苯胺 / 硝基苯）中可能得到不同键型，反应前后看起来像两个共振式。
+    改为按环键中点绕环质心的角度排序，从最小角起 0/2/4 位设双键——
+    同类环几何一致则键型一致。仅处理全芳香原子组成的单环（不碰并环）。
+    """
+    try:
+        from rdkit import Chem
+    except ImportError:
+        return
+    ring_info = mol.GetRingInfo()
+    for ring in ring_info.AtomRings():
+        if not all(mol.GetAtomWithIdx(i).GetIsAromatic() for i in ring):
+            continue
+        if any(ring_info.NumAtomRings(i) != 1 for i in ring):
+            continue
+        xs = [atom_pos(mol, i)[0] for i in ring]
+        ys = [atom_pos(mol, i)[1] for i in ring]
+        cx, cy = sum(xs) / len(xs), sum(ys) / len(ys)
+        bonds = []
+        for k, ai in enumerate(ring):
+            aj = ring[(k + 1) % len(ring)]
+            b = mol.GetBondBetweenAtoms(ai, aj)
+            if b is None:
+                bonds = None
+                break
+            x1, y1 = atom_pos(mol, ai)
+            x2, y2 = atom_pos(mol, aj)
+            ang = math.degrees(
+                math.atan2((y1 + y2) / 2 - cy, (x1 + x2) / 2 - cx)) % 360.0
+            bonds.append((ang, b))
+        if bonds is None:
+            continue
+        bonds.sort()
+        for k, (_, b) in enumerate(bonds):
+            b.SetBondType(Chem.BondType.DOUBLE if k % 2 == 0
+                          else Chem.BondType.SINGLE)
+            b.SetIsAromatic(False)
+
+
 def prepare_mol(smiles: str, *, add_hs: bool = False, kekulize: bool = False,
                 use_prepare: bool = True, allow_aromatic: bool = True):
     """SMILES → RDKit Mol：解析、可选加氢/Kekulize、计算 2D 坐标。
@@ -515,6 +557,8 @@ def prepare_mol(smiles: str, *, add_hs: bool = False, kekulize: bool = False,
     else:
         AllChem.Compute2DCoords(mol)
 
+    if allow_aromatic:
+        _regularize_kekule(mol)
     return mol
 
 

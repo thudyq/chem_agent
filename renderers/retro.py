@@ -45,15 +45,19 @@ else:
 _ARR_W = 2.6        # 与普通反应箭头一致的占位宽
 _ARR_PAD = 0.65     # 实际箭头长度 = 2.6 - 2×0.65 = 1.3
 _MOL_SCALE = 0.8
-_TIP_LEN = 0.22     # 箭头尖长度
+_TIP_LEN = 0.23     # 箭头尖长度
+_ADD_LEN = 0.14     # 向前伸长长度
 
 
 def _retro_arrow_lines(x1: float, x2: float) -> list:
-    """双线推导箭头（⇒）：double 双线杆 + 实心三角箭头尖（较粗，无库依赖）。"""
+    """双线推导箭头（⇒，arrow.png 样式）：普通粗细双线杆 + 开放式折线
+    箭头尖（两条斜线，无封口竖线），总长 1.3 不变。"""
     base = x2 - _TIP_LEN
+    tail = base + _ADD_LEN
     return [
-        f"  \\draw[double distance=1.8pt, line width=0.9pt] ({x1:.2f},0) -- ({base:.2f},0);",
-        f"  \\fill ({x2:.2f},0) -- ({base:.2f},0.13) -- ({base:.2f},-0.13) -- cycle;",
+        f"  \\draw ({x1:.2f},0.05) -- ({tail:.2f},0.05);",
+        f"  \\draw ({x1:.2f},-0.05) -- ({tail:.2f},-0.05);",
+        f"  \\draw ({base:.2f},0.13) -- ({x2:.2f},0) -- ({base:.2f},-0.13);",
     ]
 
 

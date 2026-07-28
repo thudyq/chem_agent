@@ -91,3 +91,27 @@ def test_substituted_ring_offsets_inside():
         checked += 1
         assert _dist(_seg_mid(segs[1]), center) < _dist(_seg_mid(segs[0]), center)
     assert checked >= 2
+
+
+def test_kekule_pattern_consistent_across_molecules():
+    """几何 Kekulé 规整：苯/苯胺/硝基苯的双键位置一致（不像共振式）。"""
+    def ring_double_angles(mol):
+        ri = mol.GetRingInfo()
+        ring = ri.AtomRings()[0]
+        cx = sum(atom_pos(mol, i)[0] for i in ring) / len(ring)
+        cy = sum(atom_pos(mol, i)[1] for i in ring) / len(ring)
+        angs = []
+        for k, ai in enumerate(ring):
+            aj = ring[(k + 1) % len(ring)]
+            b = mol.GetBondBetweenAtoms(ai, aj)
+            if b.GetBondTypeAsDouble() >= 1.5:
+                x1, y1 = atom_pos(mol, ai)
+                x2, y2 = atom_pos(mol, aj)
+                angs.append(round(math.degrees(
+                    math.atan2((y1 + y2) / 2 - cy, (x1 + x2) / 2 - cx)) % 360))
+        return sorted(angs)
+
+    ref = ring_double_angles(prepare_mol("c1ccccc1"))
+    assert len(ref) == 3
+    assert ring_double_angles(prepare_mol("c1ccccc1N")) == ref
+    assert ring_double_angles(prepare_mol("O=[N+]([O-])c1ccccc1")) == ref
