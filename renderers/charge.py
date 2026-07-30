@@ -2,12 +2,13 @@
 """renderers/charge.py — [CHARGE] 标记渲染器：结构式 + 部分电荷标注。
 
 RDKit 2D 坐标自绘分子骨架，在指定原子旁标注 δ+/δ-（红色）。
+标注以元素符号中心为基准（与孤对电子同一基准，而非整个基团标签中心）。
 标记格式：[CHARGE:SMILES|0:δ+,1:δ-,...]
 """
 
 from .mol_primitives import (
     atom_label, atom_pos, format_partial_charge, parse_charge_pairs,
-    prepare_mol, bond_segments,
+    prepare_mol, bond_segments, symbol_center,
 )
 
 
@@ -38,11 +39,11 @@ def render_charge(smiles: str, charges_str: str = "") -> str:
             x, y = atom_pos(mol, atom.GetIdx())
             lines.append(f"  \\node[fill=white, inner sep=1pt] at ({x:.2f},{y:.2f}) {{{lab}}};")
 
-    # 部分电荷标注（红色，置于原子右上方）
+    # 部分电荷标注（红色，以元素符号中心为基准，置于其右上方）
     for idx, raw_label in charges.items():
         if idx >= mol.GetNumAtoms():
             continue
-        x, y = atom_pos(mol, idx)
+        x, y = symbol_center(mol, idx)
         label = format_partial_charge(raw_label)
         lines.append(f"  \\node[font=\\small, red] at ({x+0.30:.2f},{y+0.25:.2f}) {{{label}}};")
 

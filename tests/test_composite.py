@@ -277,7 +277,7 @@ def test_unknown_mech_ref_skipped():
 
 
 def test_charge_annotation_child():
-    """R-2：CHARGE 子标记在对应组件上标注部分电荷（红色 δ）。"""
+    """R-2：CHARGE 子标记在对应组件上标注部分电荷（红色 δ，绕元素符号中心）。"""
     out = _render(
         "[COMPOSITE:row]"
         "[STRUCT:OCC,label=乙醇,id=et]"
@@ -286,6 +286,19 @@ def test_charge_annotation_child():
     )
     assert "$\\delta^-$" in out and "$\\delta^+$" in out
     assert "red" in out
+    # δ- 标注在 O（标签 "OH"）的元素符号中心右上：符号中心 = 标签中心左移 0.13
+    import renderers.mol_primitives as mp
+    mol = mp.prepare_mol("OCC")
+    cx, cy = mp.symbol_center(mol, 0)
+    ox, oy = mp.atom_pos(mol, 0)
+    assert abs(cx - (ox - 0.13)) < 0.01          # 基准修正存在（绕 O 而非绕 OH）
+    # 输出中 δ- 节点的 x 应接近"符号中心+shift+0.30"而非"标签中心+shift+0.30"
+    dnode = re.search(r"\\node\[font=\\small, red\] at \(([-\d.]+),([-\d.]+)\) \{\$\\delta\^-\$\}", out)
+    assert dnode is not None
+    dx = float(dnode.group(1))
+    o_node = _resolve_node_positions(out, "OH")
+    assert o_node
+    assert abs(dx - (o_node[0][0] - 0.13 + 0.30)) < 0.15
 
 
 def test_hbond_annotation_child():

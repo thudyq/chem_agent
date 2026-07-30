@@ -60,19 +60,22 @@ def test_arrow_error_paths():
 
 
 def test_retro_open_arrow():
-    """RETRO：双线推导箭头 ⇒（双线杆 + 开放折线尖，无封口竖线），总长不变。"""
+    """RETRO：双线推导箭头 ⇒（±0.05 平行双线杆 + 开放折线尖），总长 1.3。"""
     out = render_retro("O=Cc1ccccc1", "c1ccccc1", "formylation")
     assert out.count("\\begin{scope}[shift=") == 2
-    assert "double distance" in out                      # 双线杆（间距不变）
-    assert "line width" not in out                       # 普通粗细
+    # 双线杆：两条 y=±0.05 的平行线（等距间距，普通粗细）
+    shaft = re.findall(r"\\draw \([-\d.]+,(0\.05|-0\.05)\) -- \([-\d.]+,\1\);", out)
+    assert sorted(s for s in shaft) == ["-0.05", "0.05"]
+    # 开放式折线尖（无封口竖线、无填充、非实心箭头）
     assert re.search(
         r"\\draw \([-\d.]+,0.13\) -- \([-\d.]+,0\) -- \([-\d.]+,-0.13\);", out)
-    assert "cycle" not in out                            # 无封口竖线（不闭合）
-    assert "\\fill" not in out                           # 无填充
-    assert "\\draw[->" not in out                        # 非实心箭头
-    m = re.search(r"double distance=1.8pt\] \(([-\d.]+),0\) -- \(([-\d.]+),0\)", out)
-    assert m is not None
-    assert abs((float(m.group(2)) + 0.22 - float(m.group(1))) - 1.3) < 0.01   # 含尖端总长 1.3
+    assert "cycle" not in out
+    assert "\\fill" not in out
+    assert "\\draw[->" not in out
+    # 总长：杆起点 → 尖端 = 1.3
+    m1 = re.search(r"\\draw \(([-\d.]+),0.05\) -- \([-\d.]+,0.05\);", out)
+    m2 = re.search(r"-- \(([-\d.]+),0\) -- \([-\d.]+,-0.13\);", out)
+    assert abs((float(m2.group(1)) - float(m1.group(1))) - 1.3) < 0.01
     assert "\\itshape formylation" in out
 
 

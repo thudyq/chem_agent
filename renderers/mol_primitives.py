@@ -323,6 +323,11 @@ def _dot_center(mol, idx: int) -> tuple[float, float]:
     return x, y
 
 
+def symbol_center(mol, idx: int) -> tuple[float, float]:
+    """元素符号中心坐标（孤对电子/部分电荷等标注的环绕中心）。"""
+    return _dot_center(mol, idx)
+
+
 def atom_main_label(atom) -> str | None:
     """主标签（元素符号 + H 计数，**不含电荷**；纯碳环原子返回 None）。
 

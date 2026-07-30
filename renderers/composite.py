@@ -65,7 +65,7 @@ if __name__ == "__main__":
         format_chem_text, format_partial_charge, hbond_line_tikz,
         mech_arrow_between, mech_arrow_origin, mol_visual_bbox,
         parse_charge_pairs, parse_hbond_pairs, atom_pos, prepare_mol,
-        scale_mol_coords,
+        scale_mol_coords, symbol_center,
     )
     from renderers.layout import (
         energy_annotation_placement, energy_point_coords, energy_point_roles,
@@ -76,7 +76,7 @@ else:
         format_chem_text, format_partial_charge, hbond_line_tikz,
         mech_arrow_between, mech_arrow_origin, mol_visual_bbox,
         parse_charge_pairs, parse_hbond_pairs, atom_pos, prepare_mol,
-        scale_mol_coords,
+        scale_mol_coords, symbol_center,
     )
     from .layout import (
         energy_annotation_placement, energy_point_coords, energy_point_roles,
@@ -355,7 +355,8 @@ def render_composite(layout: str, children: list) -> str:
         for idx, raw_label in info["charges"].items():
             if idx >= mol.GetNumAtoms():
                 continue
-            x, y = atom_pos(mol, idx)
+            # 部分电荷以元素符号中心为基准（与孤对电子同一基准）
+            x, y = symbol_center(mol, idx)
             x += info["shift"][0]
             y += info["shift"][1]
             lines.append(
