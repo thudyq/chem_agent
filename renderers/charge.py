@@ -45,7 +45,7 @@ def render_charge(smiles: str, charges_str: str = "") -> str:
             continue
         x, y = symbol_center(mol, idx)
         label = format_partial_charge(raw_label)
-        lines.append(f"  \\node[font=\\small, red] at ({x+0.30:.2f},{y+0.25:.2f}) {{{label}}};")
+        lines.append(f"  \\node[font=\\small, red] at ({x+0.30:.2f},{y+0.30:.2f}) {{{label}}};")
 
     lines.append("\\end{tikzpicture}")
     return "\n".join(lines)
