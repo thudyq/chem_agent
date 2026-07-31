@@ -9,10 +9,12 @@ import math
 import re
 
 
-def atom_label(atom) -> str | None:
+def atom_label(atom, explicit_hs: int = 0) -> str | None:
     """生成非隐式碳原子的标签（如 OH、NH₂、Cl、$^{+}$ 等）。
 
-    纯碳原子（原子序 6、形式电荷 0）返回 None，表示不显示标签。
+    纯碳原子（原子序 6、形式电荷 0）返回 None，表示不显示标签（键线式）。
+    explicit_hs：已显式画出的 H 数（[XH]/氢键给体），从标签 H 计数中
+    扣除，保证"标签 H + 画出 H"总数正确（如 OH 画出 H 后标签为 O）。
     """
     z = atom.GetAtomicNum()
     if z == 6 and atom.GetFormalCharge() == 0:
@@ -20,7 +22,7 @@ def atom_label(atom) -> str | None:
 
     sym = atom.GetSymbol()
     sym = sym[0].upper() + sym[1:]
-    h = atom.GetTotalNumHs()
+    h = max(0, atom.GetTotalNumHs() - explicit_hs)
     parts = sym
     if h == 1:
         parts += "H"
@@ -119,15 +121,170 @@ def parse_hbond_pairs(pairs_str: str) -> list:
     return pairs
 
 
-def hbond_line_tikz(fx: float, fy: float, tx: float, ty: float,
-                    margin: float = 0.25) -> str:
-    r"""生成一条氢键虚线（teal dashed，两端内缩避免压住原子标签）。"""
+def _bond_path(mol, x_idx: int, y_idx: int) -> list | None:
+    """两原子间的最短键路径（BFS），返回原子序号列表；不连通返回 None。"""
+    from collections import deque
+    prev = {x_idx: None}
+    dq = deque([x_idx])
+    while dq:
+        a = dq.popleft()
+        if a == y_idx:
+            break
+        for n in mol.GetAtomWithIdx(a).GetNeighbors():
+            ni = n.GetIdx()
+            if ni not in prev:
+                prev[ni] = a
+                dq.append(ni)
+    if y_idx not in prev:
+        return None
+    path = [y_idx]
+    while path[-1] != x_idx:
+        path.append(prev[path[-1]])
+    return path[::-1]
+
+
+def adjust_hbond_conformation(mol, x_idx: int, y_idx: int) -> None:
+    """氢键场景的构象调整（规范：把给体与受体画到主链同一侧）。
+
+    找给体 X → 受体 Y 的最短键路径，若 Y 与 X 在路径中间键异侧，
+    把受体侧片段绕中间键反射（2D 镜像，保距）到 X 同侧，
+    便于在骨架外侧画出不穿越结构的氢键。原地修改 2D 坐标。
+    """
+    path = _bond_path(mol, x_idx, y_idx)
+    if not path or len(path) < 3:
+        return
+    mid = len(path) // 2
+    a1, a2 = path[mid - 1], path[mid]
+    # 受体侧片段：从 a2 出发不经过 a1 的可达原子
+    frag, stack = set(), [a2]
+    while stack:
+        a = stack.pop()
+        if a in frag:
+            continue
+        frag.add(a)
+        for n in mol.GetAtomWithIdx(a).GetNeighbors():
+            if n.GetIdx() != a1:
+                stack.append(n.GetIdx())
+    ax, ay = atom_pos(mol, a1)
+    bx, by = atom_pos(mol, a2)
+    dx, dy = bx - ax, by - ay
+
+    def _side(i):
+        px, py = atom_pos(mol, i)
+        return dx * (py - ay) - dy * (px - ax)
+
+    if _side(x_idx) * _side(y_idx) >= 0:
+        return  # 已同侧
+    length = math.hypot(dx, dy) or 1.0
+    ux, uy = dx / length, dy / length
+    conf = mol.GetConformer()
+    for i in frag:
+        px, py = atom_pos(mol, i)
+        rx, ry = px - ax, py - ay
+        proj = rx * ux + ry * uy           # 轴向投影（保持）
+        perp = -rx * uy + ry * ux          # 法向投影（镜像取反）
+        p = conf.GetAtomPosition(i)
+        conf.SetAtomPosition(i, (ax + proj * ux + perp * uy,
+                                 ay + proj * uy - perp * ux, p.z))
+
+
+def place_explicit_hs(mol, idx: int, count: int = 1,
+                      toward: tuple[float, float] | None = None,
+                      h_len: float = 0.75) -> list:
+    """原子 idx 上 count 个显式 H 的位置（互不重叠的空档方向扇形分配）。
+
+    toward 非空时首个 H 优先沿该方向（氢键 X—H···Y 直线）；其余按
+    最大空档角平分线依次分配，同一空档内多根 H 扇形展开 ±20°。
+    """
+    x, y = atom_pos(mol, idx)
+    blocked = sorted(a % 360.0 for a in _bond_angles(mol, idx))
+    gaps = []
+    if not blocked:
+        gaps.append((360.0, 0.0))
+    for i, a1 in enumerate(blocked):
+        a2 = blocked[(i + 1) % len(blocked)] if i + 1 < len(blocked) \
+            else blocked[0] + 360.0
+        gaps.append((a2 - a1, (a1 + (a2 - a1) / 2.0) % 360.0))
+    gaps.sort(reverse=True)
+
+    angles = []
+    if toward is not None:
+        ang = math.degrees(math.atan2(toward[1] - y, toward[0] - x)) % 360.0
+        if all(_ang_diff(ang, b) > 30.0 for b in blocked):
+            angles.append(ang)
+    for gi, (gap, mid) in enumerate(gaps):
+        if len(angles) >= count:
+            break
+        if any(_ang_diff(mid, a) < 25.0 for a in angles):
+            continue
+        slots = min(count - len(angles),
+                    max(1, int(gap // 40) if gap < 360 else count))
+        for s in range(slots):
+            off = (s - (slots - 1) / 2.0) * 20.0
+            angles.append((mid + off) % 360.0)
+
+    return [(x + h_len * math.cos(math.radians(a)),
+             y + h_len * math.sin(math.radians(a))) for a in angles[:count]]
+
+
+def place_donor_h(mol, x_idx: int, y_pos: tuple[float, float],
+                  h_len: float = 0.75) -> tuple[float, float]:
+    """给体 X 的显式 H 位置（规范：X—H 用实线画出）。
+
+    优先取 X→Y 方向（X—H···Y 尽量呈直线）；该方向与已有键过近（<30°）
+    时改取最大空档的角平分线，避免与骨架重叠。
+    """
+    return place_explicit_hs(mol, x_idx, 1, toward=y_pos, h_len=h_len)[0]
+
+
+def label_edge_point(mol, idx: int, toward: tuple[float, float], *,
+                     labeler=atom_label, margin_fn=label_bond_margin
+                     ) -> tuple[float, float]:
+    """原子 idx 指向 toward 方向的标签边缘点（新增化学键的起笔点）。
+
+    有可见标签的原子（如 O、OH）从标签边缘起笔，避免新画出的键压住标签；
+    键线式碳原子（atom_label 返回 None）无标签，从原子中心起笔。
+    供 [XH] 显式氢、氢键 X—H 实线等新增键使用，与骨架键同一留白逻辑。
+    """
+    x, y = atom_pos(mol, idx)
+    tx, ty = toward
+    dx, dy = tx - x, ty - y
+    L = math.hypot(dx, dy) or 1.0
+    ux, uy = dx / L, dy / L
+    lab = labeler(mol.GetAtomWithIdx(idx))
+    m = margin_fn(lab) if lab else 0.0
+    return x + ux * m, y + uy * m
+
+
+def hbond_dots_tikz(fx: float, fy: float, tx: float, ty: float, *,
+                    spacing: float = 0.3, radius: float = 0.028,
+                    inset_start: float = 0.18, inset_end: float = 0.25,
+                    max_dots: int = 10) -> list:
+    r"""氢键 H···Y 点状虚线（teal 圆点，3~10 点）。
+
+    从 (fx,fy)（给体 H）到 (tx,ty)（受体 Y）均匀布点；起点内缩 inset_start
+    避免首点落在给体 H 标签中心，末端内缩 inset_end 避免压住受体标签。
+    全图点径 radius 与间距 spacing 固定一致，距离远时自动增加点数
+    （封顶 max_dots，规范第 4 条）。两端内缩各不超过总长 1/4，
+    保证 H 与 Y 过近时仍有可布点区间。
+    """
     dx, dy = tx - fx, ty - fy
     length = math.hypot(dx, dy) or 1.0
     ux, uy = dx / length, dy / length
-    x1, y1 = fx + ux * margin, fy + uy * margin
-    x2, y2 = tx - ux * margin, ty - uy * margin
-    return f"\\draw[dashed, teal, thick] ({x1:.2f},{y1:.2f}) -- ({x2:.2f},{y2:.2f});"
+    inset_start = min(inset_start, length * 0.25)
+    inset_end = min(inset_end, length * 0.25)
+    sx, sy = fx + ux * inset_start, fy + uy * inset_start
+    ex, ey = tx - ux * inset_end, ty - uy * inset_end
+    seg = math.hypot(ex - sx, ey - sy)
+    n = max(3, min(max_dots, round(seg / spacing) + 1))
+    lines = []
+    for k in range(n):
+        t = k / (n - 1)
+        lines.append(
+            f"\\fill[teal] ({sx + (ex - sx) * t:.2f},{sy + (ey - sy) * t:.2f}) "
+            f"circle ({radius});"
+        )
+    return lines
 
 
 _VALENCE_ELECTRONS = {1: 1, 5: 3, 6: 4, 7: 5, 8: 6, 9: 7,
@@ -305,15 +462,16 @@ def single_electron_angles(mol, idx: int) -> list:
     return _separate_cardinals(singles, blocked, taken)[:singles]
 
 
-def _dot_center(mol, idx: int) -> tuple[float, float]:
+def _dot_center(mol, idx: int, explicit_hs: int = 0) -> tuple[float, float]:
     """孤对电子点的环绕中心：元素符号在标签内的估计位置。
 
     标签后缀（H 计数部分）使元素符号偏离标签中心向左，
     按后缀可视宽度的一半左移修正（如 OH 的点绕 O 而非绕 OH 整体）。
+    explicit_hs 已显式画出的 H 会同步缩小后缀宽度。
     """
     atom = mol.GetAtomWithIdx(idx)
     x, y = atom_pos(mol, idx)
-    lab = atom_main_label(atom)
+    lab = atom_main_label(atom, explicit_hs)
     if lab:
         sym = atom.GetSymbol()
         sym = sym[0].upper() + sym[1:]
@@ -323,16 +481,17 @@ def _dot_center(mol, idx: int) -> tuple[float, float]:
     return x, y
 
 
-def symbol_center(mol, idx: int) -> tuple[float, float]:
+def symbol_center(mol, idx: int, explicit_hs: int = 0) -> tuple[float, float]:
     """元素符号中心坐标（孤对电子/部分电荷等标注的环绕中心）。"""
-    return _dot_center(mol, idx)
+    return _dot_center(mol, idx, explicit_hs)
 
 
-def atom_main_label(atom) -> str | None:
+def atom_main_label(atom, explicit_hs: int = 0) -> str | None:
     """主标签（元素符号 + H 计数，**不含电荷**；纯碳环原子返回 None）。
 
-    电荷由 atom_charge_label 单独给出，以圆圈形式标注在原子右上角
-    （规范：电荷在右上角、不与孤对电子重叠、外加圈）。
+    explicit_hs：已显式画出的 H 数（[XH]/氢键给体），从标签 H 计数中
+    扣除，保证"标签 H + 画出 H"总数正确（如 OH 画出 H 后标签为 O）。
+    电荷由 atom_charge_label 单独给出（圆圈形式标注）。
     """
     if atom.GetAtomicNum() == 6 and atom.IsInRing():
         return None
@@ -341,7 +500,7 @@ def atom_main_label(atom) -> str | None:
     else:
         sym = atom.GetSymbol()
         sym = sym[0].upper() + sym[1:]
-    h = atom.GetTotalNumHs()
+    h = max(0, atom.GetTotalNumHs() - explicit_hs)
     parts = sym
     if h == 1:
         parts += "H"
@@ -375,12 +534,12 @@ def _charge_angle(mol, idx: int) -> float:
     return 45.0 if left_blocked else 135.0
 
 
-def charge_tikz(mol, idx: int, shift=(0.0, 0.0)) -> str | None:
+def charge_tikz(mol, idx: int, shift=(0.0, 0.0), explicit_hs: int = 0) -> str | None:
     r"""圆圈电荷节点（右上/左上角，draw circle，半尺寸）；无电荷返回 None。"""
     text = atom_charge_label(mol.GetAtomWithIdx(idx))
     if text is None:
         return None
-    cx, cy = _dot_center(mol, idx)
+    cx, cy = _dot_center(mol, idx, explicit_hs)
     r = math.radians(_charge_angle(mol, idx))
     x = cx + shift[0] + _CHARGE_POS_DIST * math.cos(r)
     y = cy + shift[1] + _CHARGE_POS_DIST * math.sin(r)
@@ -388,17 +547,18 @@ def charge_tikz(mol, idx: int, shift=(0.0, 0.0)) -> str | None:
             f"scale={_CHARGE_SCALE}] at ({x:.2f},{y:.2f}) {{{text}}};")
 
 
-def lone_pair_dot_groups(mol, idx: int, shift=(0.0, 0.0)):
+def lone_pair_dot_groups(mol, idx: int, shift=(0.0, 0.0), explicit_hs: int = 0):
     """孤对电子点的画布坐标。
 
-    点以元素符号为中心（_dot_center），距离固定 _LP_DIST。
+    点以元素符号为中心（_dot_center，explicit_hs 已显式画出的 H 会同步
+    缩小标签后缀），距离固定 _LP_DIST。
     返回:
         (groups, singles)：groups 为每对电子的两个点坐标列表
         [((x1,y1),(x2,y2)), ...]，singles 为单电子点坐标列表 [(x,y), ...]。
     """
     atom = mol.GetAtomWithIdx(idx)
     pairs, _ = lone_pair_count(atom)
-    cx0, cy0 = _dot_center(mol, idx)
+    cx0, cy0 = _dot_center(mol, idx, explicit_hs)
     cx0 += shift[0]
     cy0 += shift[1]
     groups = []
@@ -417,9 +577,9 @@ def lone_pair_dot_groups(mol, idx: int, shift=(0.0, 0.0)):
     return groups, singles
 
 
-def lone_pair_tikz(mol, idx: int, shift=(0.0, 0.0)) -> list:
+def lone_pair_tikz(mol, idx: int, shift=(0.0, 0.0), explicit_hs: int = 0) -> list:
     r"""生成孤对电子点的 \fill 圆点线条列表（裸行，缩进由调用方决定）。"""
-    groups, singles = lone_pair_dot_groups(mol, idx, shift)
+    groups, singles = lone_pair_dot_groups(mol, idx, shift, explicit_hs)
     lines = []
     for (x1, y1), (x2, y2) in groups:
         lines.append(f"\\fill ({x1:.2f},{y1:.2f}) circle (0.028);")
@@ -720,6 +880,23 @@ def bond_segments(mol, *, label_margin: float = 0.25, bond_gap: float = 0.08,
             segments.append(segs)
 
     return segments
+
+
+def bond_segments_for(mol, a: int, b: int, *, labeler=atom_label,
+                      margin_fn=None, bond_gap: float = 0.08) -> list | None:
+    """指定原子对 (a, b) 的键线段坐标（与 bond_segments 同一修剪逻辑）。
+
+    返回与骨架完全一致（含标签留白修剪、双键偏移）的线段列表；
+    原子对不存在键时返回 None。供 [BOND] 突出覆盖、[XH] 校验等复用，
+    保证新增线条与已有骨架键完全对齐、不压标签。
+    """
+    segs_all = bond_segments(mol, labeler=labeler, margin_fn=margin_fn,
+                             bond_gap=bond_gap)
+    for bi, bond in enumerate(mol.GetBonds()):
+        if (bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()) in ((a, b), (b, a)):
+            if bi < len(segs_all):
+                return segs_all[bi]
+    return None
 
 
 def fmt_coord(x: float, y: float) -> str:

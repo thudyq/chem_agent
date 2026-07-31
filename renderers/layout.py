@@ -13,8 +13,8 @@ from dataclasses import dataclass, field
 from typing import Any, Hashable, List, Tuple
 
 from .mol_primitives import (
-    atom_main_label, atom_pos, bond_segments, charge_tikz, label_bond_margin,
-    lone_pair_tikz, mol_visual_bbox,
+    atom_label, atom_main_label, atom_pos, bond_segments, charge_tikz,
+    label_bond_margin, lone_pair_tikz, mol_visual_bbox,
 )
 
 
@@ -140,37 +140,47 @@ def layout_rows(items: list, *, row_gap: float = 1.2, **kwargs):
 
 def molecule_scope_lines(mol, shift: Tuple[float, float], *,
                          show_numbers: bool = False,
-                         show_lone_pairs: bool = True) -> List[str]:
+                         show_lone_pairs: bool = True,
+                         explicit_hs: dict | None = None,
+                         bond_line: bool = False) -> List[str]:
     r"""分子组件的 scope 绘制行（内部全部局部坐标，位置由 shift 决定）。
 
     普通方程式（show_lone_pairs=False）不画孤对电子点；
     机理场景（show_lone_pairs=True）画出电子点；show_numbers 显示原子序号。
+    explicit_hs：{原子序号: 已显式画出 H 数}，标签 H 计数自动扣减
+    （[XH] 显式氢 / 氢键给体，保证"标签 H + 画出 H"总数正确）。
+    bond_line=True：键线式标签（碳原子不标 CHn，仅杂原子带 H 标签），
+    用于带 [XH]/[BOND]/[HBOND] 标注的分子，保证原有键线式逻辑不变。
     """
+    hs = explicit_hs or {}
+    labeler = (lambda a: atom_label(a, hs.get(a.GetIdx(), 0))) if bond_line \
+        else (lambda a: atom_main_label(a, hs.get(a.GetIdx(), 0)))
     lines = [
         f"  \\begin{{scope}}[shift={{({shift[0]:.2f},{shift[1]:.2f})}}]"
     ]
-    for segs in bond_segments(mol, labeler=atom_main_label,
-                              margin_fn=label_bond_margin):
+    for segs in bond_segments(mol, labeler=labeler, margin_fn=label_bond_margin):
         for x1, y1, x2, y2 in segs:
             lines.append(f"    \\draw ({x1:.2f},{y1:.2f}) -- ({x2:.2f},{y2:.2f});")
     for atom in mol.GetAtoms():
         x, y = atom_pos(mol, atom.GetIdx())
-        lab = atom_main_label(atom)
+        idx = atom.GetIdx()
+        lab = labeler(atom)
         if lab:
             lines.append(
                 f"    \\node[fill=white, inner sep=1pt] at ({x:.2f},{y:.2f}) {{{lab}}};"
             )
-        charge = charge_tikz(mol, atom.GetIdx())
+        charge = charge_tikz(mol, idx, explicit_hs=hs.get(idx, 0))
         if charge:
             lines.append(f"    {charge}")
         if show_numbers:
             lines.append(
                 f"    \\node[font=\\tiny, gray, below right] at ({x:.2f},{y:.2f}) "
-                f"{{{atom.GetIdx()}}};"
+                f"{{{idx}}};"
             )
     if show_lone_pairs:
         for atom in mol.GetAtoms():
-            for dot_line in lone_pair_tikz(mol, atom.GetIdx()):
+            idx = atom.GetIdx()
+            for dot_line in lone_pair_tikz(mol, idx, explicit_hs=hs.get(idx, 0)):
                 lines.append(f"    {dot_line}")
     lines.append("  \\end{scope}")
     return lines

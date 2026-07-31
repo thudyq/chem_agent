@@ -75,6 +75,8 @@ _INNER_OPENERS = {
     "RXNARROW": "[RXNARROW:",
     "CHARGE": "[CHARGE:",
     "HBOND": "[HBOND:",
+    "XH": "[XH:",
+    "BOND": "[BOND:",
     "ENERGY": "[ENERGY:",
 }
 
@@ -165,6 +167,11 @@ def _parse_content(tag_type: str, content: str) -> list:
         return parts
     if tag_type in ("MECHARROW", "CONDITION", "RXNARROW"):
         return [content.strip()]
+    if tag_type in ("XH", "BOND"):
+        if "|" in content:
+            ref, _, spec = content.partition("|")
+            return [ref.strip(), spec.strip()]
+        return [content.strip(), ""]
     return [content]  # ENERGY / 其他
 
 

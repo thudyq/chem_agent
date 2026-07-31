@@ -62,10 +62,12 @@ if __name__ == "__main__":
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from renderers.mol_primitives import (
-        format_chem_text, format_partial_charge, hbond_line_tikz,
+        format_chem_text, format_partial_charge, hbond_dots_tikz,
         mech_arrow_between, mech_arrow_origin, mol_visual_bbox,
-        parse_charge_pairs, parse_hbond_pairs, atom_pos, prepare_mol,
-        scale_mol_coords, symbol_center,
+        parse_charge_pairs, parse_hbond_pairs, atom_label, atom_main_label,
+        bond_segments_for, label_bond_margin, label_edge_point,
+        prepare_mol, scale_mol_coords, symbol_center, atom_pos,
+        place_donor_h, place_explicit_hs, adjust_hbond_conformation,
     )
     from renderers.layout import (
         energy_annotation_placement, energy_point_coords, energy_point_roles,
@@ -73,10 +75,12 @@ if __name__ == "__main__":
     )
 else:
     from .mol_primitives import (
-        format_chem_text, format_partial_charge, hbond_line_tikz,
+        format_chem_text, format_partial_charge, hbond_dots_tikz,
         mech_arrow_between, mech_arrow_origin, mol_visual_bbox,
-        parse_charge_pairs, parse_hbond_pairs, atom_pos, prepare_mol,
-        scale_mol_coords, symbol_center,
+        parse_charge_pairs, parse_hbond_pairs, atom_label, atom_main_label,
+        bond_segments_for, label_bond_margin, label_edge_point,
+        prepare_mol, scale_mol_coords, symbol_center, atom_pos,
+        place_donor_h, place_explicit_hs, adjust_hbond_conformation,
     )
     from .layout import (
         energy_annotation_placement, energy_point_coords, energy_point_roles,
@@ -152,6 +156,17 @@ def _collect_components(children):
         elif child.type in ("CHARGE", "HBOND") and len(child.args) >= 2:
             ref = child.args[0].strip()
             annotations.setdefault(ref, {})[child.type.lower()] = child.args[1]
+        elif child.type == "XH" and len(child.args) >= 2:
+            ref = child.args[0].strip()
+            try:
+                a = int(child.args[1])
+                annotations.setdefault(ref, {}).setdefault("xh", []).append(a)
+            except ValueError:
+                pass
+        elif child.type == "BOND" and len(child.args) >= 2:
+            ref = child.args[0].strip()
+            annotations.setdefault(ref, {}).setdefault("bonds", []).append(
+                child.args[1].strip())
     return structs, sequence, mech_specs, global_cond, annotations
 
 
@@ -290,13 +305,31 @@ def render_composite(layout: str, children: list) -> str:
             return f"（COMPOSITE 渲染失败：无效 SMILES「{comp['smiles']}」（组件 {comp['id']}）"
         scale_mol_coords(mol, _MOL_SCALE)
         anno = annotations.get(comp["id"], {})
+        # 显式 H 对账：XH 子标记 + 氢键给体/受体，标签 H 计数自动扣减
+        explicit_hs = {}
+        for a in anno.get("xh", []):
+            explicit_hs[a] = explicit_hs.get(a, 0) + 1
+        for fi, _ in parse_hbond_pairs(anno.get("hbond", "")):
+            explicit_hs[fi] = explicit_hs.get(fi, 0) + 1
+        for _, ti in parse_hbond_pairs(anno.get("hbond", "")):
+            explicit_hs[ti] = explicit_hs.get(ti, 0) + 1
         mols[comp["id"]] = {
             "mol": mol,
             "label": comp["label"],
             "shift": (0.0, 0.0),
             "charges": parse_charge_pairs(anno.get("charge", "")),
             "hbonds": parse_hbond_pairs(anno.get("hbond", "")),
+            "xh": anno.get("xh", []),
+            "bonds": anno.get("bonds", []),
+            "explicit_hs": explicit_hs,
         }
+
+    # 氢键场景构象调整（布局前）：给体与受体折到主链同一侧
+    for comp in structs:
+        mol = mols[comp["id"]]["mol"]
+        for fi, ti in mols[comp["id"]]["hbonds"]:
+            if fi < mol.GetNumAtoms() and ti < mol.GetNumAtoms():
+                adjust_hbond_conformation(mol, fi, ti)
 
     if layout_name == "energy":
         energy_child = next((c for c in children if c.type == "ENERGY"), None)
@@ -346,17 +379,34 @@ def render_composite(layout: str, children: list) -> str:
 
     lines = [r"\begin{tikzpicture}"]
 
+    # 键线式默认不标孤对电子（规范第 3 条）；仅机理场景（弯箭头起点）、
+    # 共振场景（孤对电子参与共轭）自动画出
+    show_lone_pairs = (
+        bool(mech_specs)
+        or layout_name == "resonance"
+        or any(el[0] == "resarrow" for el in sequence)
+    )
+
     # 每个分子一个 scope（布局引擎积木），组件级标注（电荷/氢键）随分子移动
     for comp in structs:
         info = mols[comp["id"]]
         mol = info["mol"]
+        hs = info["explicit_hs"]
+        # 带 [XH]/[BOND]/[HBOND] 标注的分子按键线式绘制（碳原子不标 CHn，
+        # 只在反应位点画出显式键），普通分子保持结构简式（原有逻辑不变）
+        bond_line = bool(info["xh"] or info["bonds"] or info["hbonds"])
+        labeler = (lambda a: atom_label(a, hs.get(a.GetIdx(), 0))) if bond_line \
+            else (lambda a: atom_main_label(a, hs.get(a.GetIdx(), 0)))
         lines.extend(molecule_scope_lines(mol, info["shift"],
-                                          show_numbers=show_numbers))
+                                          show_numbers=show_numbers,
+                                          show_lone_pairs=show_lone_pairs,
+                                          explicit_hs=hs,
+                                          bond_line=bond_line))
         for idx, raw_label in info["charges"].items():
             if idx >= mol.GetNumAtoms():
                 continue
             # 部分电荷以元素符号中心为基准（与孤对电子同一基准）
-            x, y = symbol_center(mol, idx)
+            x, y = symbol_center(mol, idx, hs.get(idx, 0))
             x += info["shift"][0]
             y += info["shift"][1]
             lines.append(
@@ -366,12 +416,73 @@ def render_composite(layout: str, children: list) -> str:
         for fi, ti in info["hbonds"]:
             if fi >= mol.GetNumAtoms() or ti >= mol.GetNumAtoms():
                 continue
-            fx, fy = atom_pos(mol, fi)
-            tx, ty = atom_pos(mol, ti)
+            # X—H 实线（从标签边缘起笔，不压标签）+ H···Y 点状虚线
+            tx, ty = symbol_center(mol, ti, hs.get(ti, 0))
+            hx, hy = place_donor_h(mol, fi, (tx, ty))
+            sx, sy = label_edge_point(mol, fi, (hx, hy), labeler=labeler)
+            tx += info["shift"][0]
+            ty += info["shift"][1]
+            hx += info["shift"][0]
+            hy += info["shift"][1]
+            sx += info["shift"][0]
+            sy += info["shift"][1]
+            lines.append(f"  \\draw ({sx:.2f},{sy:.2f}) -- ({hx:.2f},{hy:.2f});")
             lines.append(
-                "  " + hbond_line_tikz(fx + info["shift"][0], fy + info["shift"][1],
-                                       tx + info["shift"][0], ty + info["shift"][1])
+                f"  \\node[fill=white, inner sep=1pt] at ({hx:.2f},{hy:.2f}) {{H}};"
             )
+            for dot_line in hbond_dots_tikz(hx, hy, tx, ty):
+                lines.append(f"  {dot_line}")
+            # 受体显式 H：朝向远离给体方向（避开氢键点线），标签已扣减
+            ax, ay = atom_pos(mol, ti)
+            ahx, ahy = place_explicit_hs(mol, ti, 1,
+                                         toward=(2 * ax - tx, 2 * ay - ty))[0]
+            asx, asy = label_edge_point(mol, ti, (ahx, ahy), labeler=labeler)
+            ahx += info["shift"][0]
+            ahy += info["shift"][1]
+            asx += info["shift"][0]
+            asy += info["shift"][1]
+            lines.append(f"  \\draw ({asx:.2f},{asy:.2f}) -- ({ahx:.2f},{ahy:.2f});")
+            lines.append(
+                f"  \\node[fill=white, inner sep=1pt] at ({ahx:.2f},{ahy:.2f}) {{H}};"
+            )
+        # [XH] 显式氢：标签已按 explicit_hs 扣减，此处画出 X—H 实线 + H 节点
+        xh_counts = {}
+        for a in info["xh"]:
+            xh_counts[a] = xh_counts.get(a, 0) + 1
+        for a, count in xh_counts.items():
+            if a >= mol.GetNumAtoms():
+                continue
+            for hx, hy in place_explicit_hs(mol, a, count):
+                sx, sy = label_edge_point(mol, a, (hx, hy), labeler=labeler)
+                hx += info["shift"][0]
+                hy += info["shift"][1]
+                sx += info["shift"][0]
+                sy += info["shift"][1]
+                lines.append(f"  \\draw ({sx:.2f},{sy:.2f}) -- ({hx:.2f},{hy:.2f});")
+                lines.append(
+                    f"  \\node[fill=white, inner sep=1pt] at ({hx:.2f},{hy:.2f}) {{H}};"
+                )
+        # [BOND] 反应位点键突出：复用骨架修剪段，红色粗线与原键完全对齐
+        for spec in info["bonds"]:
+            if "-" not in spec:
+                continue
+            sa, _, sb = spec.partition("-")
+            try:
+                a, b = int(sa), int(sb)
+            except ValueError:
+                continue
+            if a >= mol.GetNumAtoms() or b >= mol.GetNumAtoms():
+                continue
+            segs = bond_segments_for(mol, a, b, labeler=labeler,
+                                     margin_fn=label_bond_margin)
+            if segs is None:
+                continue
+            for x1, y1, x2, y2 in segs:
+                lines.append(
+                    f"  \\draw[very thick, red] "
+                    f"({x1 + info['shift'][0]:.2f},{y1 + info['shift'][1]:.2f}) -- "
+                    f"({x2 + info['shift'][0]:.2f},{y2 + info['shift'][1]:.2f});"
+                )
 
     for comp in structs:
         info = mols[comp["id"]]
@@ -431,6 +542,7 @@ if __name__ == "__main__":
     from pathlib import Path
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     from core.tag_parser import parse_tags
 
     demos = [

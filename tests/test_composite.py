@@ -4,6 +4,7 @@
 运行: python -m pytest tests/test_composite.py -v
 """
 
+import math
 import re
 
 import pytest
@@ -302,14 +303,221 @@ def test_charge_annotation_child():
 
 
 def test_hbond_annotation_child():
-    """R-2：HBOND 子标记在对应组件内画氢键虚线（teal dashed）。"""
+    """R-2：HBOND 子标记——O—H 实线 + H 标签 + 3~10 个均匀 teal 点。"""
     out = _render(
         "[COMPOSITE:row]"
-        "[STRUCT:OCO,id=diol]"
-        "[HBOND:diol|0-2]"
+        "[STRUCT:OCCO,label=乙二醇,id=diol]"
+        "[HBOND:diol|0-3]"
         "[/COMPOSITE]"
     )
-    assert "\\draw[dashed, teal, thick]" in out
+    # 供体 O—H 共价键用实线画出并带 H 标签（规范第 4 条）
+    assert re.search(r"\\node\[fill=white, inner sep=1pt\] at \([-\d.]+,[-\d.]+\) \{H\}", out)
+    dots = re.findall(r"\\fill\[teal\] \(([-\d.]+),([-\d.]+)\) circle", out)
+    assert 3 <= len(dots) <= 10                 # 点数 3~10（不过密）
+    # 点间距一致（规范：全图点大小、点间距完全一致）
+    dists = [math.hypot(float(dots[i+1][0]) - float(dots[i][0]),
+                        float(dots[i+1][1]) - float(dots[i][1]))
+             for i in range(len(dots) - 1)]
+    assert max(dists) - min(dists) < 0.02
+
+
+def test_hbond_donor_label_no_double_h():
+    """氢键给体与受体标签 H 计数 -1：显式 H 不与标签 H 重复（双 H bug 修复）。"""
+    out = _render(
+        "[COMPOSITE:row]"
+        "[STRUCT:OCCO,label=乙二醇,id=diol]"
+        "[HBOND:diol|0-3]"
+        "[/COMPOSITE]"
+    )
+    # 给体 O(0) 与受体 O(3) 的标签均应为 "O"（H 已显式画出），不是 "OH"
+    labels = re.findall(r"\\node\[fill=white, inner sep=1pt\] at \([-\d.]+,[-\d.]+\) \{(OH|O)\}", out)
+    assert labels.count("OH") == 0               # 无残留 OH 标签
+    assert labels.count("O") == 2                # 给体一个 O + 受体一个 O
+    # 两个显式 H 节点：给体 H（朝受体）+ 受体 H（远离给体）
+    h_nodes = re.findall(r"\\node\[fill=white, inner sep=1pt\] at \(([-\d.]+),([-\d.]+)\) \{H\}", out)
+    assert len(h_nodes) == 2
+
+
+def test_hbond_acceptor_h_away_from_donor():
+    """受体羟基同样画成 -O-H：受体 H 朝向远离给体方向（避开氢键点线）。"""
+    import renderers.mol_primitives as mp
+    out = _render(
+        "[COMPOSITE:row]"
+        "[STRUCT:OCCO,label=乙二醇,id=diol]"
+        "[HBOND:diol|0-3]"
+        "[/COMPOSITE]"
+    )
+    mol = mp.prepare_mol("OCCO")
+    mp.scale_mol_coords(mol, 0.8)
+    mp.adjust_hbond_conformation(mol, 0, 3)
+    shift = re.search(
+        r"\\begin\{scope\}\[shift=\{\(([-\d.]+),([-\d.]+)\)\}\]", out)
+    sx, sy = float(shift.group(1)), float(shift.group(2))
+    ax, ay = mp.atom_pos(mol, 3)
+    dx, dy = mp.atom_pos(mol, 0)[0] - ax, mp.atom_pos(mol, 0)[1] - ay
+    # 受体 H 节点（两个 H 节点中离 O(3) 更近的那个）
+    h_nodes = [(float(x), float(y)) for x, y in re.findall(
+        r"\\node\[fill=white, inner sep=1pt\] at \(([-\d.]+),([-\d.]+)\) \{H\}", out)]
+    assert len(h_nodes) == 2
+    ah = min(h_nodes, key=lambda p: math.hypot(p[0] - sx - ax, p[1] - sy - ay))
+    v = (ah[0] - sx - ax, ah[1] - sy - ay)
+    cos = (v[0] * -dx + v[1] * -dy) / (math.hypot(*v) * math.hypot(dx, dy) or 1.0)
+    assert cos > 0.5                      # 受体 H 指向远离给体的一侧
+    assert abs(math.hypot(*v) - 0.75) < 0.01   # O—H 键长 0.75
+
+
+def test_hbond_first_dot_inset_from_h():
+    """氢键首点内缩：不落在给体 H 标签中心（起点沿 H→Y 外移 ≥0.15）。"""
+    out = _render(
+        "[COMPOSITE:row]"
+        "[STRUCT:OCCO,label=乙二醇,id=diol]"
+        "[HBOND:diol|0-3]"
+        "[/COMPOSITE]"
+    )
+    h_nodes = [(float(x), float(y)) for x, y in re.findall(
+        r"\\node\[fill=white, inner sep=1pt\] at \(([-\d.]+),([-\d.]+)\) \{H\}", out)]
+    dots = re.findall(r"\\fill\[teal\] \(([-\d.]+),([-\d.]+)\) circle", out)
+    assert h_nodes and len(dots) >= 3
+    donor_h = min(h_nodes, key=lambda p: min(
+        math.hypot(p[0] - float(d[0]), p[1] - float(d[1])) for d in dots))
+    dists = sorted(math.hypot(donor_h[0] - float(d[0]), donor_h[1] - float(d[1]))
+                   for d in dots)
+    assert dists[0] >= 0.15              # 首点距 H 标签中心至少 0.15
+
+
+def test_static_composite_no_lone_pairs():
+    """静态键线式（XH/BOND/HBOND，无机理箭头）默认不画孤对电子点。"""
+    out = _render(
+        "[COMPOSITE:row]"
+        "[STRUCT:OCCO,label=乙二醇,id=diol]"
+        "[HBOND:diol|0-3]"
+        "[XH:diol|0]"
+        "[/COMPOSITE]"
+    )
+    # 孤对电子点是裸 \fill；氢键点是 \fill[teal]，二者需区分
+    assert "\\fill (" not in out and "\\fill  (" not in out
+    assert out.count("\\fill[teal]") >= 3
+
+
+def test_xh_explicit_hydrogen():
+    """[XH] 显式氢：α-碳按键线式（不标 CHn），画出 1 个 H 节点 + X—H 实线。"""
+    out = _render(
+        "[COMPOSITE:row]"
+        "[STRUCT:CCC=O,id=pr]"
+        "[XH:pr|1]"
+        "[/COMPOSITE]"
+    )
+    # 键线式：α-碳（idx 1）不标 CH/CH2（带 XH 标注的分子碳原子不写标签）
+    assert "CH$_{2}$" not in out
+    assert "{CH}" not in out
+    # 显式 H 节点存在（实线 + H 标签）
+    assert re.search(r"\\node\[fill=white, inner sep=1pt\] at \([-\d.]+,[-\d.]+\) \{H\}", out)
+    # X—H 实线从 α-碳原子中心起笔（无标签无留白），落在 H 节点上
+    h_node = re.search(r"\\node\[fill=white, inner sep=1pt\] at \(([-\d.]+),([-\d.]+)\) \{H\}", out)
+    assert h_node is not None
+    # 找出终点与 H 节点重合的 \draw（X—H 实线；骨架键不与该 H 节点重合）
+    xh_end = f"({float(h_node.group(1)):.2f},{float(h_node.group(2)):.2f})"
+    xh_line = re.search(r"\\draw \(([-\d.]+),([-\d.]+)\) -- " + re.escape(xh_end) + ";", out)
+    assert xh_line is not None
+
+
+def test_xh_stacking_multiple():
+    """[XH] 多根叠加：α-碳画 2 个 H（扇形不重叠），键线式无碳标签。"""
+    out = _render(
+        "[COMPOSITE:row]"
+        "[STRUCT:CCC=O,id=pr]"
+        "[XH:pr|1]"
+        "[XH:pr|1]"
+        "[/COMPOSITE]"
+    )
+    h_nodes = re.findall(r"\\node\[fill=white, inner sep=1pt\] at \(([-\d.]+),([-\d.]+)\) \{H\}", out)
+    assert len(h_nodes) == 2
+    # 两个 H 位置不同（扇形展开）
+    assert h_nodes[0] != h_nodes[1]
+    # 键线式：碳原子无 CH/CH2/CH3 标签
+    assert "CH$_{2}$" not in out
+    assert re.search(r"\\node\[fill=white, inner sep=1pt\] at \([-\d.]+,[-\d.]+\) \{C\}", out) is None
+
+
+def test_bond_highlight():
+    """[BOND] 反应位点键突出：红色粗线从原子中心起笔（键线式无碳标签留白），
+    与原键完全重合（全局坐标 = 局部骨架键 + scope shift）。"""
+    out = _render(
+        "[COMPOSITE:row]"
+        "[STRUCT:CCC=O,id=pr]"
+        "[BOND:pr|1-2]"
+        "[/COMPOSITE]"
+    )
+    red = re.search(
+        r"\\draw\[very thick, red\] \(([-\d.]+),([-\d.]+)\) -- \(([-\d.]+),([-\d.]+)\);",
+        out,
+    )
+    assert red is not None
+    rx1, ry1, rx2, ry2 = map(float, red.groups())
+    # 取分子 scope 的 shift，把红色全局坐标换算回局部，再与骨架键线段比对
+    import renderers.mol_primitives as mp
+    mol = mp.prepare_mol("CCC=O")
+    mp.scale_mol_coords(mol, 0.8)
+    shift = re.search(
+        r"\\begin\{scope\}\[shift=\{\(([-\d.]+),([-\d.]+)\)\}\]", out)
+    sx, sy = float(shift.group(1)), float(shift.group(2))
+    lx1, ly1, lx2, ly2 = rx1 - sx, ry1 - sy, rx2 - sx, ry2 - sy
+    # 局部坐标必须与骨架键线段一致（.2f 精度）
+    assert f"\\draw ({lx1:.2f},{ly1:.2f}) -- ({lx2:.2f},{ly2:.2f});" in out
+    # 起点 = α-碳原子中心（键线式无标签 → 无留白修剪）
+    ax, ay = mp.atom_pos(mol, 1)
+    assert abs(lx1 - ax) < 0.01 and abs(ly1 - ay) < 0.01
+
+
+def test_annotated_mol_bond_line_plain_condensed():
+    """键线式恢复：带 XH 标注的分子碳原子不标 CHn，无标注分子保持结构简式。"""
+    annotated = _render(
+        "[COMPOSITE:row]"
+        "[STRUCT:CCC=O,id=pr]"
+        "[XH:pr|1]"
+        "[/COMPOSITE]"
+    )
+    plain = _render("[COMPOSITE:row][STRUCT:CCC=O][/COMPOSITE]")
+    assert "CH$_{2}$" not in annotated
+    assert "CH$_{3}$" not in annotated
+    assert "CH$_{2}$" in plain
+    assert "CH$_{3}$" in plain
+
+
+def test_hbond_conformation_folding():
+    """HBOND 构象调整：两个羟基折到 C—C 键同一侧。"""
+    import renderers.mol_primitives as mp
+    mol = mp.prepare_mol("OCCO")
+    mp.scale_mol_coords(mol, 0.8)
+    mp.adjust_hbond_conformation(mol, 0, 3)
+
+    ax, ay = mp.atom_pos(mol, 1)
+    bx, by = mp.atom_pos(mol, 2)
+    dx, dy = bx - ax, by - ay
+
+    def side(i):
+        px, py = mp.atom_pos(mol, i)
+        return dx * (py - ay) - dy * (px - ax)
+
+    assert side(0) * side(3) > 0                # 同侧
+    # 键长保持（反射保距）
+    assert abs(math.dist(mp.atom_pos(mol, 1), mp.atom_pos(mol, 2)) - 1.2) < 0.1
+
+
+def test_donor_h_explicit_placement():
+    """显式 H：O—H 长度 0.75，方向沿给体→受体（X—H···Y 直线）。"""
+    import renderers.mol_primitives as mp
+    mol = mp.prepare_mol("OCCO")
+    mp.adjust_hbond_conformation(mol, 0, 3)
+    hx, hy = mp.place_donor_h(mol, 0, mp.atom_pos(mol, 3))
+    x0, y0 = mp.atom_pos(mol, 0)
+    assert abs(math.dist((x0, y0), (hx, hy)) - 0.75) < 0.01
+    # H、O0、O3 近似共线（夹角 > 170°）
+    v1 = (hx - x0, hy - y0)
+    x3, y3 = mp.atom_pos(mol, 3)
+    v2 = (x3 - x0, y3 - y0)
+    cos = (v1[0]*v2[0] + v1[1]*v2[1]) / (math.hypot(*v1) * math.hypot(*v2))
+    assert cos > 0.98
 
 
 def test_annotation_unknown_ref_ignored():

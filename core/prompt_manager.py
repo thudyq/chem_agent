@@ -13,6 +13,9 @@ _STRUCTURE_INSTRUCTION_PATH = (
 _ELECTRONS_INSTRUCTION_PATH = (
     Path(__file__).resolve().parent.parent / "prompts" / "Instruction-for-Electrons.md"
 )
+_HBOND_INSTRUCTION_PATH = (
+    Path(__file__).resolve().parent.parent / "prompts" / "Instruction-for-Hbonds.md"
+)
 
 
 def _load_instruction(path: Path) -> str:
@@ -35,6 +38,11 @@ def load_structure_instructions() -> str:
 def load_electrons_instructions() -> str:
     """加载孤对电子与电荷标注规范。"""
     return _load_instruction(_ELECTRONS_INSTRUCTION_PATH)
+
+
+def load_hbond_instructions() -> str:
+    """加载氢键绘制规范。"""
+    return _load_instruction(_HBOND_INSTRUCTION_PATH)
 
 
 def load_system_prompt() -> str:
@@ -78,6 +86,17 @@ def load_system_prompt() -> str:
             + "孤对电子与电荷标注规范（来自 prompts/Instruction-for-Electrons.md）\n"
             + "============================================================\n\n"
             + electrons_instructions
+        )
+
+    hbond_instructions = load_hbond_instructions()
+    if hbond_instructions:
+        system_prompt = (
+            system_prompt
+            + "\n\n"
+            + "============================================================\n"
+            + "氢键绘制规范（来自 prompts/Instruction-for-Hbonds.md）\n"
+            + "============================================================\n\n"
+            + hbond_instructions
         )
 
     return system_prompt

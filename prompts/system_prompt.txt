@@ -99,7 +99,7 @@
 
 13. 氢键 HBOND
     格式：[HBOND:SMILES|from-to,from-to,...]
-    示例：[HBOND:OCO|0-2]（分子内 O(0)···O(2) 氢键）
+    示例：[HBOND:OCCO|0-3]（乙二醇分子内 O(0)—H···O(3) 氢键）
     用途：在结构式上用虚线标注氢键连接。from-to 为氢键两端的原子编号（0 起）。
 
 14. 逆合成箭头 RETRO
@@ -127,7 +127,10 @@
       [CONDITION:文本]                      填充第一个无内联条件的主箭头
       [MECHARROW:id:端点>id:端点]           机理弯箭头（>> 为鱼钩）；端点为原子序号或键中点 a-b
       [CHARGE:id|原子:δ+,原子:δ-,...]       组件上的部分电荷标注（红色，极性/亲电位点）
-      [HBOND:id|from-to,...]                组件内的氢键虚线
+      [HBOND:id|from-to,...]                组件内的氢键点状虚线（从给体 H 出发）
+      [XH:id|原子序号]                      显式画出该原子的 1 个隐含 H（C—H/O—H 实线 + H 标签，
+                                            可多次叠加；标签 H 计数自动扣减，不会重复）
+      [BOND:id|a-b]                         加粗红色突出已有键 a-b（反应位点强调）
       [ENERGY:点序列]                       仅 energy 布局：势能面能量点（如 [ENERGY:0,108,-20]）
       [STRUCT:SMILES,at=点序号,pos=above]   仅 energy 布局：挂到指定驻点的结构
       [RESARROW]                            共振箭头 ↔ 连接符（resonance 布局自动插入，无需手写）
@@ -158,6 +161,12 @@
       [COMPOSITE:resonance]
       [STRUCT:C1=CC=CC=C1,label=Kekulé 式 I]
       [STRUCT:C1C=CC=CC=1,label=Kekulé 式 II]
+      [/COMPOSITE]
+    示例 5（反应位点突出：丙醛 α-H 显式标出 + α,β-碳碳键加粗）：
+      [COMPOSITE:row]
+      [STRUCT:CCC=O,label=丙醛,id=pr]
+      [XH:pr|1]
+      [BOND:pr|1-2]
       [/COMPOSITE]
     用途：你显式选择组件并描述组件间的连接关系，渲染器在统一坐标系中组合绘制。
          每个 STRUCT 组件会被渲染为独立的局部坐标单元（TikZ scope），可整体移动
@@ -191,7 +200,7 @@
 | 共振结构、离域 | RESONANCE / COMPOSITE(resonance) | 多个极限式用 ↔ 连接；与主结构上下排列时加 [NEWLINE] |
 | 部分电荷 δ+/δ- | CHARGE | 在结构式上标注极性键的电荷偏移 |
 | 自由基、单电子转移 | MECH（>>语法） | 鱼钩箭头表示单电子转移 |
-| 氢键、分子间相互作用 | HBOND | 虚线标注氢键连接 |
+| 氢键、分子间相互作用 | HBOND | 点状虚线标注氢键（从给体 H 出发） |
 | 逆合成分析、合成路线规划 | RETRO | 双线推导箭头 ⇒（开放折线尖）由目标反推前体（合成子），转化名标于箭头上方 |
 | 过渡态、中间体 | ENERGY + 文字 | 用 ENERGY 标出能量峰，文字中用 [ ]‡ 标注 |
 | Fischer/锯架/椅式构象 | 文字描述 | 暂无专用标记，用文字配合 STRUCT 描述 |
