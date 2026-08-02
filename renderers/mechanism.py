@@ -15,9 +15,10 @@ Bezier 弯箭头。原子索引按 SMILES 出现顺序（0 起）。
 """
 
 from .mol_primitives import (
-    atom_main_label, atom_pos, bond_segments, charge_tikz, label_bond_margin,
+    _ARROW_LABEL_GAP, _ARROW_POINT_GAP, _LABEL_TEXT_HALF_H, atom_main_label,
+    atom_pos, bond_order_of, bond_segments, charge_tikz, label_bond_margin,
     lone_pair_tikz, mech_arrow_between, mech_arrow_origin, prepare_mol,
-    scale_mol_coords,
+    scale_mol_coords, symbol_center,
 )
 
 _MOL_SCALE = 0.8    # 分子坐标缩放因子（与其他机理渲染器一致）
@@ -86,13 +87,34 @@ def render_mechanism(smiles: str, arrows_str: str = "", flags: str = "") -> str:
         if p1 is None:
             continue
         p0 = mech_arrow_origin(mol, fs, toward=(p1[0], p1[1]),
-                               prefer_single=(atype == "fishhook"))
+                               prefer_single=(atype == "fishhook"),
+                               labeler=atom_main_label)
         if p0 is None:
             continue
-        inset_start = 0.0 if p0[3] else (0.05 if p0[2] else 0.15)
+        p1 = mech_arrow_origin(mol, ts, lone_pair_offset=False,
+                               toward=(p0[0], p0[1]),
+                               labeler=atom_main_label,
+                               bend_side=-1.0 if p0[2] else 1.0)
+        if p1 is None:
+            continue
+        bond_break = "-" in fs and bond_order_of(mol, fs) == 1
+        inset_start = (_ARROW_POINT_GAP if bond_break
+                       else (0.0 if (p0[2] or p0[3] or p0[4]) else 0.15))
+        aim_end = ("-" not in ts and p1[4]
+                   and mol.GetAtomWithIdx(int(ts)).GetAtomicNum() == 6)
+        tb = None
+        if aim_end:
+            da = mol.GetAtomWithIdx(int(ts))
+            ax, ay = symbol_center(mol, int(ts))
+            tb = (ax, ay, label_bond_margin(atom_main_label(da)),
+                  _LABEL_TEXT_HALF_H)
+        inset_end = (_ARROW_LABEL_GAP if aim_end
+                     else (0.0 if p1[4] else 0.10))
         lines.extend(
             mech_arrow_between(p0[0], p0[1], p1[0], p1[1], atype,
-                               from_bond=p0[2], inset_start=inset_start)
+                               from_bond=p0[2], inset_start=inset_start,
+                               inset_end=inset_end, bond_break=bond_break,
+                               aim_end=aim_end, text_box=tb)
         )
 
     lines.append("\\end{tikzpicture}")

@@ -291,6 +291,10 @@ _VALENCE_ELECTRONS = {1: 1, 5: 3, 6: 4, 7: 5, 8: 6, 9: 7,
                       14: 4, 15: 5, 16: 6, 17: 7, 35: 7, 53: 7}
 
 _LP_DIST = 0.30           # 孤对电子点到原子的固定距离
+_BOND_GAP = 0.08          # 双键/三键平行线间距（与 bond_segments 一致）
+_ARROW_LABEL_GAP = 0.05   # 机理箭头端点与"字母标签"（C/Cl 等文字）的空隙
+_ARROW_POINT_GAP = 0.05   # 机理箭头端点与"点/线"（孤对电子点、断键键线）的空隙
+_LABEL_TEXT_HALF_H = 0.15 # 标签文字半高估计（含上下标，垂直吸附基准）
 _ORTHO = [90.0, 180.0, 270.0, 0.0]      # 正交槽位（优先）
 _DIAG = [45.0, 135.0, 225.0, 315.0]     # 斜向槽位（正交占满时兜底）
 _CHAR_HALF_W = 0.13       # 标签单字符半宽估计（用于元素符号中心修正）
@@ -610,7 +614,12 @@ def mol_visual_bbox(mol, labeler=condensed_atom_label,
         if atom.GetFormalCharge() != 0:
             r = math.radians(_charge_angle(mol, atom.GetIdx()))
             xs.append(x + _CHARGE_POS_DIST * math.cos(r) + 0.1 * math.cos(r))
-            ys.append(y + _CHARGE_POS_DIST * math.sin(r) + 0.1)
+            dy = _CHARGE_POS_DIST * math.sin(r) + 0.1
+            ys.append(y + dy)
+            # 电荷圈总在上半部（45°/135°），只计入上界会把包围盒中心抬高、
+            # 使带电分子整体下移（OH⁻/Cl⁻ 标签比中性分子低 ~0.05）；镜像
+            # 下界抵消单侧偏移，让包围盒中心仍落在原子线上。
+            ys.append(y - dy)
         if include_lone_pairs:
             groups, singles = lone_pair_dot_groups(mol, atom.GetIdx())
             for (x1, y1), (x2, y2) in groups:
@@ -927,9 +936,23 @@ def format_chem_text(text: str) -> str:
     return _SUBSCRIPT_RE.sub(r"\1$_\2$", text) + charge
 
 
+def bond_order_of(mol, spec: str) -> int:
+    """"a-b" 键引用对应的键级（1/2/3）；非法或不存在返回 0。"""
+    a, _, b = spec.partition("-")
+    try:
+        ia, ib = int(a), int(b)
+    except ValueError:
+        return 0
+    if ia >= mol.GetNumAtoms() or ib >= mol.GetNumAtoms():
+        return 0
+    bond = mol.GetBondBetweenAtoms(ia, ib)
+    return bond_type_order(bond) if bond is not None else 0
+
+
 def mech_arrow_origin(mol, spec: str, shift=(0.0, 0.0),
                       lone_pair_offset: bool = True, toward=None,
-                      prefer_single: bool = False):
+                      prefer_single: bool = False, labeler=None,
+                      label_gap: float = 0.11, bend_side: float = 1.0):
     """解析机理箭头端点引用为画布坐标。
 
     参数:
@@ -939,12 +962,22 @@ def mech_arrow_origin(mol, spec: str, shift=(0.0, 0.0),
         lone_pair_offset: 为 True 且端点是有孤对电子的杂原子时，坐标落在
             孤对电子点上（教科书风格）；箭头终点应为 False。
         toward: 箭头另一端点的画布坐标 (x, y)，用于选择朝向目标的孤对槽位；
-            同朝向槽位中优先取靠近正上方（90°）者。
+            同朝向槽位中优先取靠近正上方（90°）者。纯原子端点且给出
+            labeler 时，还用于把端点吸附到标签边缘（见 labeler）。
         prefer_single: 为 True（鱼钩箭头）且原子有单电子时，落在单电子点上。
+        labeler: 提供后，纯原子端点（非键中点、非电子点）吸附到标签边缘，
+            复用元素符号定位逻辑（symbol_center，与孤对电子/部分电荷同源）：
+            碳原子标签（CH₃/CH₂/CH）目标端返回元素符号中心（C 字形位置），
+            由 mech_arrow_tikz 沿末端切线内缩 _ARROW_LABEL_GAP，使终点坐标
+            适配切线、尖端指向原子中心；杂原子标签沿入射方向吸附在标签
+            文字前的空隙（margin - label_gap）。
+        label_gap: 杂原子沿向吸附相对键线留白（label_bond_margin）的内收量。
+        bend_side: 保留参数（兼容旧调用），碳标签已改为切线内缩定位，不再使用。
 
     返回:
-        (x, y, from_bond, on_electron)；spec 无效或原子越界返回 None。
-        on_electron 为 True 时调用方不应再内缩起点（已在电子点上）。
+        (x, y, from_bond, on_electron, on_label)；spec 无效或原子越界返回 None。
+        on_electron 为 True 时调用方不应再内缩起点（已在电子点上）；
+        on_label 为 True 时端点已吸附到标签边缘（调用方不应再内缩）。
     """
     spec = spec.strip()
     if "-" in spec:
@@ -957,7 +990,31 @@ def mech_arrow_origin(mol, spec: str, shift=(0.0, 0.0),
             return None
         xa, ya = atom_pos(mol, ia)
         xb, yb = atom_pos(mol, ib)
-        return (xa + xb) / 2.0 + shift[0], (ya + yb) / 2.0 + shift[1], True, False
+        mx, my = (xa + xb) / 2.0, (ya + yb) / 2.0
+        bond = mol.GetBondBetweenAtoms(ia, ib)
+        if bond is not None and bond_type_order(bond) >= 2:
+            # π 键电子云位于双键两杠之间：沿垂直方向偏移 bond_gap/2
+            dx, dy = xb - xa, yb - ya
+            L = math.hypot(dx, dy) or 1.0
+            ux, uy = dx / L, dy / L
+            px, py = -uy, ux
+            if bond.IsInRing():
+                # 环内双键的第二条平行线朝向环质心（与 bond_segments 同侧）
+                try:
+                    rings = mol.GetRingInfo().AtomRings()
+                except Exception:
+                    rings = []
+                for ring in rings:
+                    if ia in ring and ib in ring:
+                        cxs = [atom_pos(mol, i)[0] for i in ring]
+                        cys = [atom_pos(mol, i)[1] for i in ring]
+                        cx, cy = sum(cxs) / len(cxs), sum(cys) / len(cys)
+                        if (cx - mx) * px + (cy - my) * py < 0:
+                            px, py = -px, -py
+                        break
+            mx += px * _BOND_GAP / 2
+            my += py * _BOND_GAP / 2
+        return (mx + shift[0], my + shift[1], True, False, False)
     try:
         ia = int(spec)
     except ValueError:
@@ -984,27 +1041,70 @@ def mech_arrow_origin(mol, spec: str, shift=(0.0, 0.0),
                 cands = angles
             best = min(cands, key=lambda a: _ang_diff(a, 90.0))
             r = math.radians(best)
-            return (cx + _LP_DIST * math.cos(r),
-                    cy + _LP_DIST * math.sin(r), False, True)
-    return x + shift[0], y + shift[1], False, False
+            # 箭头起点沿槽位方向再外移 _ARROW_POINT_GAP，使其不与电子点完全重合
+            # （顶部槽位时即"起点比电子点高 0.05"）。
+            d = _LP_DIST + _ARROW_POINT_GAP
+            return (cx + d * math.cos(r), cy + d * math.sin(r), False, True, False)
+    if labeler is not None and toward is not None:
+        lab = labeler(atom)
+        if lab:
+            sx, sy = symbol_center(mol, ia)
+            gx, gy = sx + shift[0], sy + shift[1]
+            if atom.GetAtomicNum() == 6:
+                # 碳原子（CH₃/CH₂/CH）：目标端取元素符号中心（C 字形位置），
+                # 由 mech_arrow_tikz 沿末端切线内缩 _ARROW_LABEL_GAP，
+                # 让终点坐标适配切线方向、尖端指向原子中心（不强行改切线）。
+                return (gx, gy, False, False, True)
+            tx, ty = toward
+            dx, dy = tx - gx, ty - gy
+            L = math.hypot(dx, dy) or 1.0
+            m = label_bond_margin(lab) - label_gap
+            return (gx + dx / L * m,
+                    gy + dy / L * m, False, False, True)
+    return x + shift[0], y + shift[1], False, False, False
 
 
 def mech_arrow_between(fx: float, fy: float, tx: float, ty: float,
                        kind: str = "standard", from_bond: bool = False,
-                       inset_start: float = 0.15, inset_end: float = 0.10) -> list:
+                       inset_start: float = 0.15, inset_end: float = 0.10,
+                       bond_break: bool = False, aim_end: bool = False,
+                       text_box=None) -> list:
     """按教科书风格生成弯箭头：键中点出发的箭头向下弯（断键方向），
     孤对电子/原子出发的箭头向上弯（进攻方向）；弧线贴近分子，
-    弯曲幅度随跨度自适应（上限 0.6）。"""
+    弯曲幅度随跨度自适应（上限 0.6）。
+
+    bond_break（σ 断键源）的起点 inset 改为纵坐标向下偏移 inset_start
+    （贴近键线下方），而非沿箭头方向内缩；aim_end（字母标签目标）让
+    终点沿末端切线退到 text_box 外 inset_end 处，尖端指向原子中心且不压标签。"""
+    if bond_break:
+        fy -= inset_start
+        inset_start = 0.0
     dist = math.hypot(tx - fx, ty - fy)
-    mag = min(0.22 * dist + 0.15, 0.6)
+    if aim_end:
+        mag = min(0.30 * dist + 0.15, 1.15)
+    else:
+        mag = min(0.22 * dist + 0.15, 0.6)
     bend = -mag if from_bond else mag
     return mech_arrow_tikz(fx, fy, tx, ty, kind, bend=bend,
-                           inset_start=inset_start, inset_end=inset_end)
+                           inset_start=inset_start, inset_end=inset_end,
+                           aim_end=aim_end, text_box=text_box)
+
+
+def _text_extent_out(cx: float, cy: float, hw: float, hh: float,
+                     px: float, py: float, dx: float, dy: float) -> float:
+    """从盒内点 (px,py) 沿 (dx,dy) 方向到文本包围盒 [cx±hw]×[cy±hh] 边缘的距离。"""
+    tx_ = ((cx + hw - px) / dx) if dx > 1e-9 else (
+        ((cx - hw - px) / dx) if dx < -1e-9 else float("inf"))
+    ty_ = ((cy + hh - py) / dy) if dy > 1e-9 else (
+        ((cy - hh - py) / dy) if dy < -1e-9 else float("inf"))
+    t = min(tx_, ty_)
+    return t if t > 1e-9 else 0.0
 
 
 def mech_arrow_tikz(fx: float, fy: float, tx: float, ty: float,
                     kind: str = "standard", bend: float = 0.5,
-                    inset_start: float = 0.15, inset_end: float = 0.10) -> list:
+                    inset_start: float = 0.15, inset_end: float = 0.10,
+                    aim_end: bool = False, text_box=None) -> list:
     r"""生成一条电子推进弯箭头的 TikZ 线条列表。
 
     bend 为正向上弯、为负向下弯；起点内缩 inset_start、终点内缩 inset_end，
@@ -1016,12 +1116,18 @@ def mech_arrow_tikz(fx: float, fy: float, tx: float, ty: float,
         kind: "standard" 双电子全箭头 / "fishhook" 单电子鱼钩箭头。
         bend: 弯曲幅度（控制点到连线的垂直距离），符号决定弯向。
         inset_start / inset_end: 两端内缩距离。
+        aim_end: 为 True（字母标签目标，如 C）时，先按自然弯向求控制点，
+            再沿末端切线方向把终点内缩——终点坐标适配切线、尖端指向原子中心。
+        text_box: (cx, cy, hw, hh) 目标原子标签的文本包围盒；aim_end 时
+            终点在切线方向上退到盒外 inset_end（0.10）处，避免压住标签文字。
     """
     dx, dy = tx - fx, ty - fy
     length = math.hypot(dx, dy) or 1.0
     ux, uy = dx / length, dy / length
     sx, sy = fx + ux * inset_start, fy + uy * inset_start
-    ex, ey = tx - ux * inset_end, ty - uy * inset_end
+    ex, ey = tx, ty
+    if not aim_end:
+        ex, ey = tx - ux * inset_end, ty - uy * inset_end
     px, py = -uy, ux
     mid_x, mid_y = (sx + ex) / 2.0, (sy + ey) / 2.0
     mag = abs(bend)
@@ -1031,6 +1137,15 @@ def mech_arrow_tikz(fx: float, fy: float, tx: float, ty: float,
         mx, my = mx_a, my_a
     else:
         mx, my = mx_b, my_b
+    if aim_end:
+        ddx, ddy = tx - mx, ty - my
+        dl = math.hypot(ddx, ddy) or 1.0
+        ndx, ndy = ddx / dl, ddy / dl
+        ins = inset_end
+        if text_box is not None:
+            bcx, bcy, bhw, bhh = text_box
+            ins += _text_extent_out(bcx, bcy, bhw, bhh, tx, ty, -ndx, -ndy)
+        ex, ey = tx - ins * ndx, ty - ins * ndy
 
     lines = []
     if kind == "fishhook":

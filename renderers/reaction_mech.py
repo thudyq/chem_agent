@@ -43,14 +43,18 @@ if __name__ == "__main__":
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from renderers.mol_primitives import (
-        format_chem_text, mech_arrow_between, mech_arrow_origin,
-        prepare_mol, scale_mol_coords,
+        _ARROW_LABEL_GAP, _ARROW_POINT_GAP, _LABEL_TEXT_HALF_H,
+        atom_main_label, atom_pos, bond_order_of, format_chem_text,
+        label_bond_margin, mech_arrow_between, mech_arrow_origin, prepare_mol,
+        scale_mol_coords, symbol_center,
     )
     from renderers.layout import layout_row, molecule_scope_lines
 else:
     from .mol_primitives import (
-        format_chem_text, mech_arrow_between, mech_arrow_origin,
-        prepare_mol, scale_mol_coords,
+        _ARROW_LABEL_GAP, _ARROW_POINT_GAP, _LABEL_TEXT_HALF_H,
+        atom_main_label, atom_pos, bond_order_of, format_chem_text,
+        label_bond_margin, mech_arrow_between, mech_arrow_origin, prepare_mol,
+        scale_mol_coords,
     )
     from .layout import layout_row, molecule_scope_lines
 
@@ -170,13 +174,35 @@ def render_reaction_mech(reactants_str: str, products_str: str,
             continue
         p0 = mech_arrow_origin(sm, src_pt, shifts[src_mol],
                                toward=(p1[0], p1[1]),
-                               prefer_single=(kind == "fishhook"))
+                               prefer_single=(kind == "fishhook"),
+                               labeler=atom_main_label)
         if p0 is None:
             continue
-        inset_start = 0.0 if p0[3] else (0.05 if p0[2] else 0.15)
+        p1 = mech_arrow_origin(dm, dst_pt, shifts[dst_mol],
+                               lone_pair_offset=False,
+                               toward=(p0[0], p0[1]),
+                               labeler=atom_main_label,
+                               bend_side=-1.0 if p0[2] else 1.0)
+        if p1 is None:
+            continue
+        bond_break = "-" in src_pt and bond_order_of(sm, src_pt) == 1
+        inset_start = (_ARROW_POINT_GAP if bond_break
+                       else (0.0 if (p0[2] or p0[3] or p0[4]) else 0.15))
+        aim_end = ("-" not in dst_pt and p1[4]
+                   and dm.GetAtomWithIdx(int(dst_pt)).GetAtomicNum() == 6)
+        tb = None
+        if aim_end:
+            da = dm.GetAtomWithIdx(int(dst_pt))
+            ax, ay = symbol_center(dm, int(dst_pt))
+            tb = (ax + shifts[dst_mol][0], ay + shifts[dst_mol][1],
+                  label_bond_margin(atom_main_label(da)), _LABEL_TEXT_HALF_H)
+        inset_end = (_ARROW_LABEL_GAP if aim_end
+                     else (0.0 if p1[4] else 0.10))
         lines.extend(
             mech_arrow_between(p0[0], p0[1], p1[0], p1[1], kind,
-                               from_bond=p0[2], inset_start=inset_start)
+                               from_bond=p0[2], inset_start=inset_start,
+                               inset_end=inset_end, bond_break=bond_break,
+                               aim_end=aim_end, text_box=tb)
         )
 
     lines.append(r"\end{tikzpicture}")
@@ -213,7 +239,7 @@ if __name__ == "__main__":
         "C=C;[Br]",
         "[CH2]CBr",
         "hv 或 ROOR",
-        "1:0>>0:0,0:0>>0:1",
+        "1:0>>0:1,0:0-1>>0:1",
     ))
 
     print("\n[4] 空反应物错误")

@@ -62,12 +62,13 @@ if __name__ == "__main__":
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from renderers.mol_primitives import (
-        format_chem_text, format_partial_charge, hbond_dots_tikz,
-        mech_arrow_between, mech_arrow_origin, mol_visual_bbox,
-        parse_charge_pairs, parse_hbond_pairs, atom_label, atom_main_label,
-        bond_segments_for, label_bond_margin, label_edge_point,
-        prepare_mol, scale_mol_coords, symbol_center, atom_pos,
-        place_donor_h, place_explicit_hs, adjust_hbond_conformation,
+        _ARROW_LABEL_GAP, _ARROW_POINT_GAP, _LABEL_TEXT_HALF_H, bond_order_of, format_chem_text,
+        format_partial_charge,
+        hbond_dots_tikz, mech_arrow_between, mech_arrow_origin,
+        mol_visual_bbox, parse_charge_pairs, parse_hbond_pairs, atom_label,
+        atom_main_label, bond_segments_for, label_bond_margin,
+        label_edge_point, prepare_mol, scale_mol_coords, symbol_center,
+        atom_pos, place_donor_h, place_explicit_hs, adjust_hbond_conformation,
     )
     from renderers.layout import (
         energy_annotation_placement, energy_point_coords, energy_point_roles,
@@ -75,12 +76,13 @@ if __name__ == "__main__":
     )
 else:
     from .mol_primitives import (
-        format_chem_text, format_partial_charge, hbond_dots_tikz,
-        mech_arrow_between, mech_arrow_origin, mol_visual_bbox,
-        parse_charge_pairs, parse_hbond_pairs, atom_label, atom_main_label,
-        bond_segments_for, label_bond_margin, label_edge_point,
-        prepare_mol, scale_mol_coords, symbol_center, atom_pos,
-        place_donor_h, place_explicit_hs, adjust_hbond_conformation,
+        _ARROW_LABEL_GAP, _ARROW_POINT_GAP, _LABEL_TEXT_HALF_H, bond_order_of, format_chem_text,
+        format_partial_charge,
+        hbond_dots_tikz, mech_arrow_between, mech_arrow_origin,
+        mol_visual_bbox, parse_charge_pairs, parse_hbond_pairs, atom_label,
+        atom_main_label, bond_segments_for, label_bond_margin,
+        label_edge_point, prepare_mol, scale_mol_coords, symbol_center,
+        atom_pos, place_donor_h, place_explicit_hs, adjust_hbond_conformation,
     )
     from .layout import (
         energy_annotation_placement, energy_point_coords, energy_point_roles,
@@ -115,6 +117,15 @@ def _parse_mech_arrows(specs):
         kind = "fishhook" if sep == ">>" else "standard"
         arrows.append((src_id, src_pt, dst_id, dst_pt, kind))
     return arrows
+
+
+def _mech_labeler(info):
+    """组件级标签器（与分子绘制同款）：带 XH/BOND/HBOND 标注的分子按键线式
+    （碳原子不标 CHn），其余保持结构简式。供机理箭头端点吸附到标签边缘用。"""
+    hs = info["explicit_hs"]
+    if info["xh"] or info["bonds"] or info["hbonds"]:
+        return lambda a: atom_label(a, hs.get(a.GetIdx(), 0))
+    return lambda a: atom_main_label(a, hs.get(a.GetIdx(), 0))
 
 
 def _collect_components(children):
@@ -395,8 +406,7 @@ def render_composite(layout: str, children: list) -> str:
         # 带 [XH]/[BOND]/[HBOND] 标注的分子按键线式绘制（碳原子不标 CHn，
         # 只在反应位点画出显式键），普通分子保持结构简式（原有逻辑不变）
         bond_line = bool(info["xh"] or info["bonds"] or info["hbonds"])
-        labeler = (lambda a: atom_label(a, hs.get(a.GetIdx(), 0))) if bond_line \
-            else (lambda a: atom_main_label(a, hs.get(a.GetIdx(), 0)))
+        labeler = _mech_labeler(info)
         lines.extend(molecule_scope_lines(mol, info["shift"],
                                           show_numbers=show_numbers,
                                           show_lone_pairs=show_lone_pairs,
@@ -518,19 +528,45 @@ def render_composite(layout: str, children: list) -> str:
             continue
         sm = mols[src_id]
         dm = mols[dst_id]
+        slab = _mech_labeler(sm)
+        dlab = _mech_labeler(dm)
+        # 目标端先按原子中心定位（供源端选孤对槽位）；源端确定后，
+        # 再按实际源端把目标端吸附到标签边缘空隙（箭头尖不压标签）
         p1 = mech_arrow_origin(dm["mol"], dst_pt, dm["shift"],
                                lone_pair_offset=False)
         if p1 is None:
             continue
         p0 = mech_arrow_origin(sm["mol"], src_pt, sm["shift"],
                                toward=(p1[0], p1[1]),
-                               prefer_single=(kind == "fishhook"))
+                               prefer_single=(kind == "fishhook"),
+                               labeler=slab)
         if p0 is None:
             continue
-        inset_start = 0.0 if p0[3] else (0.05 if p0[2] else 0.15)
+        p1 = mech_arrow_origin(dm["mol"], dst_pt, dm["shift"],
+                               lone_pair_offset=False,
+                               toward=(p0[0], p0[1]), labeler=dlab,
+                               bend_side=-1.0 if p0[2] else 1.0)
+        if p1 is None:
+            continue
+        bond_break = ("-" in src_pt
+                      and bond_order_of(sm["mol"], src_pt) == 1)
+        inset_start = (_ARROW_POINT_GAP if bond_break
+                       else (0.0 if (p0[2] or p0[3] or p0[4]) else 0.15))
+        aim_end = ("-" not in dst_pt and p1[4]
+                   and dm["mol"].GetAtomWithIdx(int(dst_pt)).GetAtomicNum() == 6)
+        tb = None
+        if aim_end:
+            da = dm["mol"].GetAtomWithIdx(int(dst_pt))
+            ax, ay = symbol_center(dm["mol"], int(dst_pt))
+            tb = (ax + dm["shift"][0], ay + dm["shift"][1],
+                  label_bond_margin(dlab(da)), _LABEL_TEXT_HALF_H)
+        inset_end = (_ARROW_LABEL_GAP if aim_end
+                     else (0.0 if p1[4] else 0.10))
         lines.extend(
             mech_arrow_between(p0[0], p0[1], p1[0], p1[1], kind,
-                               from_bond=p0[2], inset_start=inset_start)
+                               from_bond=p0[2], inset_start=inset_start,
+                               inset_end=inset_end, bond_break=bond_break,
+                               aim_end=aim_end, text_box=tb)
         )
 
     lines.append(r"\end{tikzpicture}")
@@ -570,7 +606,7 @@ if __name__ == "__main__":
             "[STRUCT:C=C][PLUS][STRUCT:[Br],id=br]"
             "[RXNARROW:hv]"
             "[STRUCT:[CH2]CBr]"
-            "[MECHARROW:br:0>>r0:0,r0:0>>r0:1]"
+            "[MECHARROW:br:0>>r0:1,r0:0-1>>r0:1]"
             "[/COMPOSITE]",
         ),
         (
