@@ -71,9 +71,8 @@ def image_to_smiles(image_path: str) -> str:
     except (KeyError, ValueError):
         return None
     content = msg.get("content") or ""
-    if not content and msg.get("reasoning_content"):
-        content = msg["reasoning_content"]
-
+    # 不回退 reasoning_content：视觉模型思考过长时 content 为空，此时返回空
+    # 让 _extract_smiles 返回 None，而不是把思考过程当 SMILES。
     return _extract_smiles(content)
 
 

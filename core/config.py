@@ -76,7 +76,9 @@ class LLMConfig:
     base_url: str = field(default_factory=lambda: _get_str("BASE_URL").rstrip("/"))
     model_name: str = field(default_factory=lambda: _get_str_fallback("MODEL_NAME", "MODEL"))
     temperature: float = 0.2
-    max_tokens: int = 2048
+    # 推理模型（deepseek-reasoner 等）的 reasoning + content 共享 max_tokens 预算；
+    # 2048 会被长思考链吃光导致 content 为空/截断，提到 8192。
+    max_tokens: int = 8192
     timeout: int = 60
     retries: int = 3
 

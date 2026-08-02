@@ -70,16 +70,26 @@ def ask_llm(
         else:
             if resp.status_code == 200:
                 data = resp.json()
-                msg = data["choices"][0]["message"]
-                # reasoning 模型（如 deepseek-reasoner）可能把输出放 reasoning_content，content 为空
-                content = msg.get("content") or ""
-                if not content and msg.get("reasoning_content"):
-                    content = msg["reasoning_content"]
-                    print("[ask_llm] content 为空，回退 reasoning_content")
-                usage = data.get("usage", {})
-                print(f"[ask_llm] 成功（tokens: {usage.get('total_tokens', '?')}）")
-                return content
-            print(f"[ask_llm] 第 {attempt}/{retries} 次失败 HTTP {resp.status_code}: {resp.text[:200]}")
+                choice = data["choices"][0]
+                msg = choice.get("message", {})
+                content = (msg.get("content") or "").strip()
+                finish_reason = choice.get("finish_reason", "")
+                # 输出完整性校验：
+                # 1) content 为空——推理模型（deepseek-reasoner 等）思考过长吃光
+                #    token 预算时 content 为空；绝不可回退 reasoning_content
+                #    （被截断的思考过程混着草稿与半截标记，会把下游解析/渲染带崩）。
+                # 2) finish_reason=length——输出被 max_tokens 截断，同样视为失败。
+                # 两种情况都走统一重试逻辑。
+                if not content:
+                    print("[ask_llm] content 为空（推理模型思考过长或异常），视为失败")
+                elif finish_reason == "length":
+                    print("[ask_llm] 输出被 max_tokens 截断（finish_reason=length），视为失败")
+                else:
+                    usage = data.get("usage", {})
+                    print(f"[ask_llm] 成功（tokens: {usage.get('total_tokens', '?')}）")
+                    return content
+            else:
+                print(f"[ask_llm] 第 {attempt}/{retries} 次失败 HTTP {resp.status_code}: {resp.text[:200]}")
 
         if attempt < retries:
             backoff = attempt * 2
