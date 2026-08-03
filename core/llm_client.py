@@ -8,6 +8,7 @@ system_prompt 未传时自动加载 prompts/system_prompt.txt。
 
 import json
 import re
+import threading
 import time
 
 import requests
@@ -19,6 +20,10 @@ DEFAULT_TEMPERATURE = settings.llm.temperature
 DEFAULT_MAX_TOKENS = settings.llm.max_tokens
 DEFAULT_TIMEOUT = settings.llm.timeout
 DEFAULT_RETRIES = settings.llm.retries
+
+# B3 并发控制：Session 复用 TCP 连接（keep-alive），信号量限制同时调用数
+_SESSION = requests.Session()
+_SEMAPHORE = threading.BoundedSemaphore(settings.llm.max_concurrent)
 
 # 内容完整性校验：行尾残留的半截渲染标记（如 "[STRUCT:c1ccc" 无闭合 ]）
 _TRUNC_MARK_RE = re.compile(
@@ -76,7 +81,7 @@ def _stream_chat(url: str, headers: dict, payload: dict,
     content_parts = []
     reasoning_chars = 0
     finish_reason = ""
-    with requests.post(url, headers=headers, json=payload,
+    with _SESSION.post(url, headers=headers, json=payload,
                        stream=True, timeout=DEFAULT_TIMEOUT) as resp:
         if resp.status_code != 200:
             print(f"[ask_llm] HTTP {resp.status_code}: {resp.text[:200]}")
@@ -175,51 +180,52 @@ def ask_llm(
         models.append(fallback)
         print(f"[ask_llm] 回退模型已配置: {fallback}")
 
-    for model_i, current_model in enumerate(models):
-        payload["model"] = current_model
-        switched = False
-        for attempt in range(1, retries + 1):
-            try:
-                content, finish_reason, reasoning_chars = _stream_chat(
-                    url, headers, payload, on_piece=on_piece)
-            except requests.exceptions.Timeout as e:
-                print(f"[ask_llm] 第 {attempt}/{retries} 次请求超时"
-                      f"（数据间隔 >{DEFAULT_TIMEOUT}s，模型思考过久或网络慢）: {e}")
-            except requests.exceptions.RequestException as e:
-                print(f"[ask_llm] 第 {attempt}/{retries} 次请求异常: {e}")
-            else:
-                if content is None:
-                    if reasoning_chars and model_i < len(models) - 1:
-                        print(f"[ask_llm] 模型 {current_model} 思考过长"
-                              f"（{reasoning_chars} 字符）且无正式回答，"
-                              f"切换回退模型 {models[model_i + 1]} ...")
-                        switched = True
-                        break
-                    if reasoning_chars:
-                        print(f"[ask_llm] 第 {attempt}/{retries} 次失败"
-                              f"（无正式回答，模型仅输出思考 {reasoning_chars} 字符"
-                              f"——思考过长吃光预算，或模型未生成 content）")
-                    else:
-                        print(f"[ask_llm] 第 {attempt}/{retries} 次失败（无内容返回，"
-                              f"finish_reason={finish_reason or '无'}）")
-                elif finish_reason == "length":
-                    print(f"[ask_llm] 第 {attempt}/{retries} 次失败"
-                          "（输出被 max_tokens 截断，finish_reason=length）")
+    with _SEMAPHORE:  # B3：限流——同时最多 max_concurrent 个 LLM 调用
+        for model_i, current_model in enumerate(models):
+            payload["model"] = current_model
+            switched = False
+            for attempt in range(1, retries + 1):
+                try:
+                    content, finish_reason, reasoning_chars = _stream_chat(
+                        url, headers, payload, on_piece=on_piece)
+                except requests.exceptions.Timeout as e:
+                    print(f"[ask_llm] 第 {attempt}/{retries} 次请求超时"
+                          f"（数据间隔 >{DEFAULT_TIMEOUT}s，模型思考过久或网络慢）: {e}")
+                except requests.exceptions.RequestException as e:
+                    print(f"[ask_llm] 第 {attempt}/{retries} 次请求异常: {e}")
                 else:
-                    trunc = _is_truncated(content)
-                    if trunc:
+                    if content is None:
+                        if reasoning_chars and model_i < len(models) - 1:
+                            print(f"[ask_llm] 模型 {current_model} 思考过长"
+                                  f"（{reasoning_chars} 字符）且无正式回答，"
+                                  f"切换回退模型 {models[model_i + 1]} ...")
+                            switched = True
+                            break
+                        if reasoning_chars:
+                            print(f"[ask_llm] 第 {attempt}/{retries} 次失败"
+                                  f"（无正式回答，模型仅输出思考 {reasoning_chars} 字符"
+                                  f"——思考过长吃光预算，或模型未生成 content）")
+                        else:
+                            print(f"[ask_llm] 第 {attempt}/{retries} 次失败（无内容返回，"
+                                  f"finish_reason={finish_reason or '无'}）")
+                    elif finish_reason == "length":
                         print(f"[ask_llm] 第 {attempt}/{retries} 次失败"
-                              f"（内容完整性校验失败：{trunc}）")
+                              "（输出被 max_tokens 截断，finish_reason=length）")
                     else:
-                        print(f"[ask_llm] 成功（{len(content)} 字符，{current_model}）")
-                        return content
+                        trunc = _is_truncated(content)
+                        if trunc:
+                            print(f"[ask_llm] 第 {attempt}/{retries} 次失败"
+                                  f"（内容完整性校验失败：{trunc}）")
+                        else:
+                            print(f"[ask_llm] 成功（{len(content)} 字符，{current_model}）")
+                            return content
 
-            if attempt < retries:
-                backoff = attempt * 2
-                print(f"[ask_llm] {backoff}s 后重试 ...")
-                time.sleep(backoff)
-        if switched:
-            continue
+                if attempt < retries:
+                    backoff = attempt * 2
+                    print(f"[ask_llm] {backoff}s 后重试 ...")
+                    time.sleep(backoff)
+            if switched:
+                continue
 
     print(f"[ask_llm] {' → '.join(models)} 重试均失败。")
     return None

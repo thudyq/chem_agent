@@ -87,6 +87,11 @@ class LLMConfig:
     thinking_mode: str = field(
         default_factory=lambda: _get_str("THINKING_MODE").strip().lower()
     )
+    # 并发 LLM 调用上限（MAX_CONCURRENT_LLM，默认 4）：信号量限制同时进行的调用数，
+    # 超出的请求排队等待——避免多用户并发打爆 LLM API 限流与本地资源。
+    max_concurrent: int = field(
+        default_factory=lambda: int(_get_str("MAX_CONCURRENT_LLM") or 4)
+    )
     temperature: float = 0.2
     # 推理模型（deepseek-reasoner 等）的 reasoning + content 共享 max_tokens 预算；
     # 2048 会被长思考链吃光导致 content 为空/截断，提到 8192。
