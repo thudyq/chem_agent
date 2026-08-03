@@ -75,6 +75,18 @@ class LLMConfig:
     api_key: str = field(default_factory=lambda: _get_str("API_KEY"))
     base_url: str = field(default_factory=lambda: _get_str("BASE_URL").rstrip("/"))
     model_name: str = field(default_factory=lambda: _get_str_fallback("MODEL_NAME", "MODEL"))
+    # 回退模型（FALLBACK_MODEL_NAME）：主模型（常为带思考的推理模型）思考过长
+    # 只输出 reasoning_content 而无正式回答时，自动切换到此模型重试。
+    # 建议填非推理对话模型（如 deepseek-chat）。留空则不回退。
+    fallback_model_name: str = field(
+        default_factory=lambda: _get_str("FALLBACK_MODEL_NAME")
+    )
+    # 思考模式（THINKING_MODE）：enabled / disabled / 空（不传，用 API 默认）。
+    # DeepSeek 官方：请求体加 {"thinking": {"type": "enabled/disabled"}} 开关；
+    # 思考模式下 temperature/top_p 等参数不生效（设置了也被忽略）。
+    thinking_mode: str = field(
+        default_factory=lambda: _get_str("THINKING_MODE").strip().lower()
+    )
     temperature: float = 0.2
     # 推理模型（deepseek-reasoner 等）的 reasoning + content 共享 max_tokens 预算；
     # 2048 会被长思考链吃光导致 content 为空/截断，提到 8192。

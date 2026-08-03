@@ -117,7 +117,8 @@ if __name__ == "__main__":
     if "--questions-file" in sys.argv:
         i = sys.argv.index("--questions-file")
         with open(sys.argv[i + 1], encoding="utf-8") as f:
-            questions = [ln.strip() for ln in f if ln.strip()]
+            questions = [ln.strip() for ln in f
+                         if ln.strip() and not ln.strip().startswith("#")]
     else:
         questions = sys.argv[1:]
     if not questions:

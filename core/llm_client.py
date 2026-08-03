@@ -6,6 +6,7 @@
 system_prompt 未传时自动加载 prompts/system_prompt.txt。
 """
 
+import json
 import re
 import time
 
@@ -51,6 +52,60 @@ def _is_truncated(content: str) -> str | None:
     return None
 
 
+def _stream_chat(url: str, headers: dict, payload: dict) -> tuple[str | None, str, int]:
+    """SSE 流式调用：逐帧累积 content，返回 (content, finish_reason, reasoning_chars)。
+
+    流式下 requests 的 timeout 只作用于"两块数据之间的间隔"
+    （默认 180s 已足够），**总生成时间不受整体超时限制**——解决
+    8000+ tokens 长输出整体超时的问题（实测曾 3 次重试全超时）。
+
+    注意：带思考的模型（deepseek 系）在思考阶段只输出
+    `delta.reasoning_content` 帧、`content` 为空；若思考吃掉全部预算
+    或模型思考后未生成正式回答，content 永远为空——此时返回
+    reasoning_chars（思考字符数）供上层诊断，绝不把思考当回答。
+
+    返回:
+        content: 累积的正式回答；无任何 content 时为 None。
+        finish_reason: 最后一帧的 finish_reason（length 表示被截断）。
+        reasoning_chars: 收到的思考内容总字符数（诊断用）。
+    """
+    content_parts = []
+    reasoning_chars = 0
+    finish_reason = ""
+    with requests.post(url, headers=headers, json=payload,
+                       stream=True, timeout=DEFAULT_TIMEOUT) as resp:
+        if resp.status_code != 200:
+            print(f"[ask_llm] HTTP {resp.status_code}: {resp.text[:200]}")
+            return None, "", 0
+        for line in resp.iter_lines(decode_unicode=True):
+            if not line or not line.startswith("data:"):
+                continue
+            data_str = line[len("data:"):].strip()
+            if data_str == "[DONE]":
+                break
+            try:
+                chunk = json.loads(data_str)
+            except ValueError:
+                continue
+            choices = chunk.get("choices") or []
+            if not choices:
+                continue
+            delta = choices[0].get("delta") or {}
+            piece = delta.get("content") or ""
+            if piece:
+                content_parts.append(piece)
+            for key in ("reasoning_content", "reasoning"):
+                rp = delta.get(key) or ""
+                if rp:
+                    reasoning_chars += len(rp)
+                    break
+            fr = choices[0].get("finish_reason")
+            if fr:
+                finish_reason = fr
+    content = "".join(content_parts).strip()
+    return (content or None), finish_reason, reasoning_chars
+
+
 def ask_llm(
     user_question: str,
     system_prompt: str = None,
@@ -58,13 +113,13 @@ def ask_llm(
     max_tokens: int = DEFAULT_MAX_TOKENS,
     retries: int = DEFAULT_RETRIES,
 ) -> str:
-    """调用 LLM，返回回答文本。
+    """调用 LLM（SSE 流式），返回回答文本。
 
     参数:
         user_question: 用户问题。
         system_prompt: 系统提示；None 时自动加载 prompts/system_prompt.txt。
         temperature: 采样温度，默认 0.2（事实性强）。
-        max_tokens: 最大生成 token 数，默认 2048。
+        max_tokens: 最大生成 token 数，默认 8192。
         retries: 失败重试次数，默认 3。
 
     返回:
@@ -91,54 +146,69 @@ def ask_llm(
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
+        "stream": True,
     }
+    if config.thinking_mode in ("enabled", "disabled"):
+        # DeepSeek 思考模式开关（官方 OpenAI 格式参数）
+        payload["thinking"] = {"type": config.thinking_mode}
+        print(f"[ask_llm] 思考模式: {config.thinking_mode}")
 
-    print(f"[ask_llm] 调用 {model} @ {base_url}（temperature={temperature}）")
-    for attempt in range(1, retries + 1):
-        try:
-            resp = requests.post(url, headers=headers, json=payload,
-                                 timeout=DEFAULT_TIMEOUT)
-        except requests.exceptions.Timeout as e:
-            print(f"[ask_llm] 第 {attempt}/{retries} 次请求超时"
-                  f"（>{DEFAULT_TIMEOUT}s，模型输出较长或网络慢）: {e}")
-        except requests.exceptions.RequestException as e:
-            print(f"[ask_llm] 第 {attempt}/{retries} 次请求异常: {e}")
-        else:
-            if resp.status_code == 200:
-                data = resp.json()
-                choice = data["choices"][0]
-                msg = choice.get("message", {})
-                content = (msg.get("content") or "").strip()
-                finish_reason = choice.get("finish_reason", "")
-                # 输出完整性校验（三道防线）：
-                # 1) content 为空——推理模型（deepseek-reasoner 等）思考过长吃光
-                #    token 预算时 content 为空；绝不可回退 reasoning_content
-                #    （被截断的思考过程混着草稿与半截标记，会把下游解析/渲染带崩）。
-                # 2) finish_reason=length——输出被 max_tokens 截断。
-                # 3) 内容完整性自检——部分兼容接口不返回/谎报 finish_reason，
-                #    截断内容会被当作成功；检测未闭合 LaTeX 环境与半截标记兜底。
-                # 三种情况都走统一重试逻辑。
-                if not content:
-                    print("[ask_llm] content 为空（推理模型思考过长或异常），视为失败")
+    print(f"[ask_llm] 调用 {model} @ {base_url}（temperature={temperature}, 流式）")
+    # 模型回退链：主模型思考过长（仅 reasoning 无 content）时自动切回退模型。
+    # 主模型其他失败（超时/HTTP/截断）仍按 retries 重试后再切。
+    models = [model]
+    fallback = config.fallback_model_name.strip()
+    if fallback and fallback != model:
+        models.append(fallback)
+        print(f"[ask_llm] 回退模型已配置: {fallback}")
+
+    for model_i, current_model in enumerate(models):
+        payload["model"] = current_model
+        switched = False
+        for attempt in range(1, retries + 1):
+            try:
+                content, finish_reason, reasoning_chars = _stream_chat(
+                    url, headers, payload)
+            except requests.exceptions.Timeout as e:
+                print(f"[ask_llm] 第 {attempt}/{retries} 次请求超时"
+                      f"（数据间隔 >{DEFAULT_TIMEOUT}s，模型思考过久或网络慢）: {e}")
+            except requests.exceptions.RequestException as e:
+                print(f"[ask_llm] 第 {attempt}/{retries} 次请求异常: {e}")
+            else:
+                if content is None:
+                    if reasoning_chars and model_i < len(models) - 1:
+                        print(f"[ask_llm] 模型 {current_model} 思考过长"
+                              f"（{reasoning_chars} 字符）且无正式回答，"
+                              f"切换回退模型 {models[model_i + 1]} ...")
+                        switched = True
+                        break
+                    if reasoning_chars:
+                        print(f"[ask_llm] 第 {attempt}/{retries} 次失败"
+                              f"（无正式回答，模型仅输出思考 {reasoning_chars} 字符"
+                              f"——思考过长吃光预算，或模型未生成 content）")
+                    else:
+                        print(f"[ask_llm] 第 {attempt}/{retries} 次失败（无内容返回，"
+                              f"finish_reason={finish_reason or '无'}）")
                 elif finish_reason == "length":
-                    print("[ask_llm] 输出被 max_tokens 截断（finish_reason=length），视为失败")
+                    print(f"[ask_llm] 第 {attempt}/{retries} 次失败"
+                          "（输出被 max_tokens 截断，finish_reason=length）")
                 else:
                     trunc = _is_truncated(content)
                     if trunc:
-                        print(f"[ask_llm] 内容完整性校验失败（{trunc}），视为失败")
+                        print(f"[ask_llm] 第 {attempt}/{retries} 次失败"
+                              f"（内容完整性校验失败：{trunc}）")
                     else:
-                        usage = data.get("usage", {})
-                        print(f"[ask_llm] 成功（tokens: {usage.get('total_tokens', '?')}）")
+                        print(f"[ask_llm] 成功（{len(content)} 字符，{current_model}）")
                         return content
-            else:
-                print(f"[ask_llm] 第 {attempt}/{retries} 次失败 HTTP {resp.status_code}: {resp.text[:200]}")
 
-        if attempt < retries:
-            backoff = attempt * 2
-            print(f"[ask_llm] {backoff}s 后重试 ...")
-            time.sleep(backoff)
+            if attempt < retries:
+                backoff = attempt * 2
+                print(f"[ask_llm] {backoff}s 后重试 ...")
+                time.sleep(backoff)
+        if switched:
+            continue
 
-    print(f"[ask_llm] {retries} 次重试均失败。")
+    print(f"[ask_llm] {' → '.join(models)} 重试均失败。")
     return None
 
 
