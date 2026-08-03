@@ -96,7 +96,11 @@ def ask_llm(
     print(f"[ask_llm] 调用 {model} @ {base_url}（temperature={temperature}）")
     for attempt in range(1, retries + 1):
         try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT)
+            resp = requests.post(url, headers=headers, json=payload,
+                                 timeout=DEFAULT_TIMEOUT)
+        except requests.exceptions.Timeout as e:
+            print(f"[ask_llm] 第 {attempt}/{retries} 次请求超时"
+                  f"（>{DEFAULT_TIMEOUT}s，模型输出较长或网络慢）: {e}")
         except requests.exceptions.RequestException as e:
             print(f"[ask_llm] 第 {attempt}/{retries} 次请求异常: {e}")
         else:

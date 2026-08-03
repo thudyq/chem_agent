@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""app.py — 主入口：LLM → 标记解析 → 渲染 → 注入 的端到端管线。
+"""app.py — 主入口：LLM → 标记解析 → 校验 → 渲染 → 注入 的端到端管线。
 
-process_question(user_question) 是核心编排函数，后续 Day 17-18 的 FastAPI
-适配层会在此基础上包装 /chat/completions 端点。
+process_question(user_question) 是核心编排函数，FastAPI 适配层
+（api.py）在此基础上包装 /chat/completions 端点。
 """
 
 from core.llm_client import ask_llm
@@ -11,44 +11,99 @@ from core.tag_injector import inject_tags_into_text
 from core.tag_validator import degrade_text, validate_tags
 from renderers.registry import RENDERER_REGISTRY
 
+# 渲染器失败串的统一前缀（各渲染器内部约定："（XX渲染失败：原因）"）
+_RENDER_ERROR_PREFIX = "（"
 
-def process_question(user_question: str) -> str:
+
+def _build_correction_prompt(user_question: str, original: str,
+                             failures: list) -> str:
+    """构造 P2 修正 prompt：原始问题 + 失败标记清单 + 修正要求。
+
+    failures: [(RenderTag, 失败原因字符串), ...]。
+    """
+    lines = [
+        "你刚才的回答中有一些化学标记无法渲染。请修正后重新输出完整的回答。",
+        "",
+        "原始用户问题：",
+        user_question,
+        "",
+        "你的上一个回答：",
+        original,
+        "",
+        "渲染失败的标记及原因：",
+    ]
+    for tag, err in failures[:10]:
+        lines.append(f"- {tag.raw}：{err}")
+    lines += [
+        "",
+        "修正要求：",
+        "1. 保持回答的内容和结构不变，只修正上述失败标记"
+        "（SMILES、原子编号、组件引用、格式等）。",
+        "2. 不要新增或删除其他标记。",
+        "3. 修正后的标记必须严格遵循标记语法。",
+    ]
+    return "\n".join(lines)
+
+
+def process_question(user_question: str, max_corrections: int = 1) -> str:
     """端到端处理用户问题，返回含渲染后图示代码的文本。
 
-    流程：LLM 生成 → 解析标记 → 标记契约校验（P1）→ 逐标记渲染 → 注入替换。
-    LLM 失败、无标记、部分标记未注册或校验失败均优雅降级。
+    流程：LLM 生成 → 解析标记 → 契约校验（P1）→ 逐标记渲染 → 注入替换。
+    P2 渲染反馈闭环：首次渲染若有失败（校验拦截 / 渲染器失败），携带失败
+    清单回传 LLM 自动修正（最多 max_corrections 次），修正版重新走管线；
+    仍失败则降级（校验失败标记 → 友好提示，渲染失败标记 → 渲染器错误串）。
     """
     # 1. 调用 LLM（自动加载 system prompt，含标记协议）
     full_response = ask_llm(user_question)
     if not full_response:
         return "（LLM 调用失败，请检查 .env 配置与网络）"
 
-    # 2. 解析标记
-    tags = parse_tags(full_response)
-    if not tags:
-        return full_response  # 纯文本回答，无需渲染
+    for attempt in range(max_corrections + 1):
+        # 2. 解析标记
+        tags = parse_tags(full_response)
+        if not tags:
+            return full_response  # 纯文本回答，无需渲染
 
-    # 2.5 标记契约校验（P1）：渲染前拦截坏参数（非法 SMILES / 越界引用 /
-    #    超长 label / 格式错误），降级为友好提示，坏参数不进渲染器
-    valid_tags, invalid = validate_tags(tags)
-    degraded = {r.tag.raw: degrade_text(r.tag, r.reason) for r in invalid}
+        # 2.5 标记契约校验（P1）：渲染前拦截坏参数（非法 SMILES / 越界引用 /
+        #    超长 label / 格式错误），降级为友好提示，坏参数不进渲染器
+        valid_tags, invalid = validate_tags(tags)
+        degraded = {r.tag.raw: degrade_text(r.tag, r.reason) for r in invalid}
 
-    # 3. 逐标记渲染（REASONING 无渲染器，由注入器特殊处理）
-    rendered = {}
-    for tag in valid_tags:
-        if tag.type == "REASONING":
-            continue
-        renderer = RENDERER_REGISTRY.get(tag.type)
-        if renderer is None:
-            continue  # 未注册类型（如 NEWMAN/ENERGY 暂未实现），注入时保留原标记
-        try:
-            rendered[tag.raw] = renderer(*tag.args)
-        except Exception as e:
-            rendered[tag.raw] = f"（{tag.type} 渲染失败：{e}）"
+        # 3. 逐标记渲染（REASONING 无渲染器，由注入器特殊处理）
+        rendered, failures = {}, []
+        for tag in valid_tags:
+            if tag.type == "REASONING":
+                continue
+            renderer = RENDERER_REGISTRY.get(tag.type)
+            if renderer is None:
+                continue  # 未注册类型，注入时保留原标记
+            try:
+                out = renderer(*tag.args)
+            except Exception as e:
+                out = f"（{tag.type} 渲染失败：{e}）"
+            if out.startswith(_RENDER_ERROR_PREFIX):
+                failures.append((tag, out))
+            else:
+                rendered[tag.raw] = out
 
-    # 4. 校验失败标记注入降级提示（否则注入器会保留原始标记文本）
-    rendered.update(degraded)
-    return inject_tags_into_text(full_response, tags, rendered)
+        # 3.5 P2 渲染反馈闭环：有失败（校验拦截或渲染失败）且还有修正机会
+        #     → 回传 LLM 修正重试
+        problems = [(r.tag, r.reason) for r in invalid] + failures
+        if problems and attempt < max_corrections:
+            correction = _build_correction_prompt(
+                user_question, full_response, problems)
+            fixed = ask_llm(correction)
+            if fixed:
+                full_response = fixed
+                continue
+
+        # 4. 注入：校验失败 → 降级提示；渲染失败（重试机会耗尽）→ 渲染器错误串
+        rendered.update(degraded)
+        for tag, err in failures:
+            rendered.setdefault(tag.raw, err)
+        return inject_tags_into_text(full_response, tags, rendered)
+
+    return "（LLM 调用失败，请检查 .env 配置与网络）"
 
 
 if __name__ == "__main__":

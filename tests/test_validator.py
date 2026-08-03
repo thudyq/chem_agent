@@ -1,54 +1,15 @@
 # -*- coding: utf-8 -*-
 """core/tag_validator.py 标记契约校验层单元测试（P1）。
 
-用假 rdkit（SimpleNamespace）解耦真实 RDKit，保证测试在任何环境行为一致：
-_KNOWN_SMILES 中的 SMILES 视为合法，其余视为非法。
+用假 rdkit（conftest.py 的 fake_rdkit fixture）解耦真实 RDKit，
+保证测试在任何环境行为一致。
 """
-
-import types
 
 import pytest
 
 import core.tag_validator as tv
-from core.tag_parser import parse_tags
 from app import process_question
-from renderers import registry
-
-
-class _FakeMol:
-    def __init__(self, n_atoms):
-        self._n = n_atoms
-
-    def GetNumAtoms(self):
-        return self._n
-
-
-_KNOWN_SMILES = {
-    "CCl": _FakeMol(2), "CO": _FakeMol(2), "[OH-]": _FakeMol(2),
-    "c1ccccc1": _FakeMol(6), "CCO": _FakeMol(3), "CC[OH2+]": _FakeMol(3),
-    "CC[OH+]CC": _FakeMol(5), "O": _FakeMol(1), "CCOCC": _FakeMol(4),
-    "OCCO": _FakeMol(4), "C=C": _FakeMol(2), "CC=O": _FakeMol(3),
-}
-
-
-@pytest.fixture
-def fake_rdkit(monkeypatch):
-    """用假 rdkit 覆盖 tag_validator 的 SMILES 语义校验。"""
-    fake_chem = types.SimpleNamespace(
-        MolFromSmiles=lambda smi: _KNOWN_SMILES.get(smi))
-    monkeypatch.setattr(tv, "_RDKIT_OK", True)
-    monkeypatch.setattr(tv, "Chem", fake_chem)
-
-
-@pytest.fixture
-def fake_renderers(monkeypatch):
-    """把注册表渲染器替换为固定输出，并自动恢复。"""
-    original = dict(registry.RENDERER_REGISTRY)
-    for key in list(registry.RENDERER_REGISTRY):
-        registry.RENDERER_REGISTRY[key] = lambda *a: f"RENDERED:{a[0]}"
-    yield
-    registry.RENDERER_REGISTRY.clear()
-    registry.RENDERER_REGISTRY.update(original)
+from core.tag_parser import parse_tags
 
 
 def _validate(text):

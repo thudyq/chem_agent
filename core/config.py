@@ -79,7 +79,8 @@ class LLMConfig:
     # 推理模型（deepseek-reasoner 等）的 reasoning + content 共享 max_tokens 预算；
     # 2048 会被长思考链吃光导致 content 为空/截断，提到 8192。
     max_tokens: int = 8192
-    timeout: int = 60
+    # 生成 8192 tokens 需要 1~3 分钟，60s 会误杀正常生成（实测 Read timed out）。
+    timeout: int = 180
     retries: int = 3
 
     @property
