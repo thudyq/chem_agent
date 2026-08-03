@@ -243,13 +243,18 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
             ref = child.args[0].strip()
             if ref not in comps:
                 return False, f"{ctype} 引用未知组件「{ref}」"
+            pairs = (child.args[1] or "").strip()
+            if ctype == "CHARGE":
+                idxs = [int(x) for x in re.findall(r"(\d+):", pairs)]
+                if not idxs:
+                    return False, f"CHARGE 标注格式错误「{pairs}」（应为 原子:δ± 列表）"
+            else:
+                hb_pairs = re.findall(r"(\d+)-(\d+)", pairs)
+                if not hb_pairs:
+                    return False, f"HBOND 标注格式错误「{pairs}」（应为 from-to 列表）"
+                idxs = [int(x) for t in hb_pairs for x in t]
             if _RDKIT_OK:
                 n = atom_counts.get(ref, 0)
-                if ctype == "CHARGE":
-                    idxs = [int(x) for x in re.findall(r"(\d+):", child.args[1])]
-                else:
-                    idxs = [int(x) for t in re.findall(r"(\d+)-(\d+)", child.args[1])
-                            for x in t]
                 for i in idxs:
                     if not 0 <= i < n:
                         return False, f"{ctype} 原子编号 {i} 超出组件 {ref} 范围 0~{n - 1}"

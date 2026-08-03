@@ -1,0 +1,51 @@
+[
+  {
+    "id": "ethanol-ether-free-hydrogen",
+    "source": "真实端到端 2026-08-03 乙醇→乙醚（LLM 从旧 prompt 示例学到 [H]O[H] 写法，RDKit 报孤立氢警告）",
+    "llm_output": "乙醇在浓硫酸下加热生成乙醚：\n[REACTION:C=C;[H]O[H]|CCO|H2SO4]\n水的显式氢写法应改为 O。",
+    "expect": {"valid": 1, "invalid": 0},
+    "note": "游离氢写法不拦截（[H]O[H] 可解析），但应在 prompt 层避免；此样本验证不崩溃"
+  },
+  {
+    "id": "truncated-half-struct",
+    "source": "LLM 输出被截断场景（max_tokens 用尽，finish_reason 谎报 stop 时残留半截标记）",
+    "llm_output": "苯的结构是 [STRUCT:c1ccc",
+    "expect": {"valid": 0, "invalid": 0},
+    "note": "半截标记（无闭合 ]）解析器跳过，原文保留，不崩溃"
+  },
+  {
+    "id": "energy-at-out-of-range",
+    "source": "LLM 对能量点数误判（构造的越界场景，属真实高频错误模式）",
+    "llm_output": "[COMPOSITE:energy][ENERGY:0,108,-20][STRUCT:CCl,label=反应物,at=0][STRUCT:CO,label=过渡态,at=5][/COMPOSITE]",
+    "expect": {"valid": 0, "invalid": 1},
+    "note": "at=5 超出能量点范围 0~2，校验层拦截"
+  },
+  {
+    "id": "overlong-label",
+    "source": "LLM 中等长度中文标签（真实高频：端到端标签重叠的诱因之一）",
+    "llm_output": "产物是 [STRUCT:CCO,label=对甲基苯甲酸甲酯的酯化反应中间产物]",
+    "expect": {"valid": 1, "invalid": 0},
+    "note": "label 17 字 < 24 硬上限 → 放行；防重叠靠 prompt ≤10 字建议 + 宽度表"
+  },
+  {
+    "id": "overlong-label-extreme",
+    "source": "LLM 超长标签（突破硬上限，属真实失败模式）",
+    "llm_output": "产物是 [STRUCT:CCO,label=对甲基苯甲酸甲酯的酯化反应中间产物的进一步转化产物]",
+    "expect": {"valid": 0, "invalid": 1},
+    "note": "label 26 字 > 24 硬上限 → 校验层拦截降级"
+  },
+  {
+    "id": "mecharrow-ghost-ref",
+    "source": "LLM 引用不存在的组件 id（真实高频：原子编号/组件命名错误）",
+    "llm_output": "[COMPOSITE:reaction_mech][STRUCT:CCl,id=nu][RXNARROW][STRUCT:CO,id=pe][MECHARROW:ghost:0>pe:1][/COMPOSITE]",
+    "expect": {"valid": 0, "invalid": 1},
+    "note": "MECHARROW 引用未知组件 ghost，校验层拦截"
+  },
+  {
+    "id": "mecharrow-atom-out-of-range",
+    "source": "LLM 原子编号越界（真实高频：未数清原子就写编号）",
+    "llm_output": "[COMPOSITE:reaction_mech][STRUCT:CCl,id=nu][RXNARROW][STRUCT:CO,id=pe][MECHARROW:nu:9>pe:0][/COMPOSITE]",
+    "expect": {"valid": 0, "invalid": 1},
+    "note": "nu 组件仅 2 原子，9 越界，校验层拦截"
+  }
+]

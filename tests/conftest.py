@@ -27,6 +27,7 @@ KNOWN_SMILES = {
     "c1ccccc1": _FakeMol(6), "CCO": _FakeMol(3), "CC[OH2+]": _FakeMol(3),
     "CC[OH+]CC": _FakeMol(5), "O": _FakeMol(1), "CCOCC": _FakeMol(4),
     "OCCO": _FakeMol(4), "C=C": _FakeMol(2), "CC=O": _FakeMol(3),
+    "[H]O[H]": _FakeMol(3), "[H]": _FakeMol(1), "[H+]": _FakeMol(1),
 }
 
 
