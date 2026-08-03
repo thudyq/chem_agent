@@ -70,6 +70,31 @@ def label_plain_len(label: str) -> int:
     return len(re.sub(r"[$_{}^\\]", "", label))
 
 
+def _is_wide_char(ch: str) -> bool:
+    """是否全角/宽字符（CJK 汉字与全角标点，宽度约为西文的 2 倍）。"""
+    o = ord(ch)
+    return (0x2E80 <= o <= 0x9FFF       # CJK 部首 ~ 统一表意文字
+            or 0xF900 <= o <= 0xFAFF    # 兼容表意文字
+            or 0xFE30 <= o <= 0xFE4F    # CJK 兼容形式
+            or 0xFF00 <= o <= 0xFFEF)   # 全角形式（含全角标点）
+
+
+def label_visual_width(label: str) -> float:
+    """标签可视宽度（区分全角/半角），用于包围盒与间距估算。
+
+    西文/数字半宽 0.13（全宽 0.26，与旧 "0.13 × 字符数" 估算一致），
+    全角字符（中文等）半宽 0.26（全宽 0.52）——修正旧估算对中文标签
+    过窄导致的相邻组件重叠（如 6 字中文旧估算半宽仅 0.78，真实约 1.56）。
+    """
+    plain = re.sub(r"[$_{}^\\]", "", label)
+    if not plain:
+        return 0.0
+    w = 0.0
+    for ch in plain:
+        w += 0.52 if _is_wide_char(ch) else 0.26
+    return w
+
+
 def label_bond_margin(label: str) -> float:
     """按标签可视长度分档的键线留白（机理场景统一值）。"""
     n = label_plain_len(label)
@@ -606,8 +631,7 @@ def mol_visual_bbox(mol, labeler=condensed_atom_label,
         hw = hh = 0.05
         lab = labeler(atom)
         if lab:
-            n = label_plain_len(lab)
-            hw = max(0.18, 0.13 * n)
+            hw = max(0.18, label_visual_width(lab) / 2.0)
             hh = 0.18
         xs += [x - hw, x + hw]
         ys += [y - hh, y + hh]

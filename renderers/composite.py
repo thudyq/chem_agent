@@ -107,6 +107,12 @@ _STRUCT_POS_RE = re.compile(r",pos=(above|below)")
 _SUPPORTED_LAYOUTS = ("reaction_mech", "row", "energy", "resonance")
 
 
+def _rects_intersect(a: tuple, b: tuple, pad: float = 0.15) -> bool:
+    """两个 (min_x, min_y, max_x, max_y) 矩形是否相交（含 pad 间距）。"""
+    return not (a[2] + pad < b[0] or b[2] + pad < a[0]
+                or a[3] + pad < b[1] or b[3] + pad < a[1])
+
+
 def _parse_mech_arrows(specs):
     arrows = []
     for spec in specs:
@@ -211,22 +217,31 @@ def _render_energy_layout(points_str: str, structs: list, mols: dict,
         at_map[comp["at"]] = comp
 
     # 先计算全部组件的已占区域，再决定标注框与纵轴高度（避免遮挡）
-    mol_placements = []
+    # P3 冲突消解：先预置驻点标签区域；结构按驻点序号放置（相邻先检测），
+    # 与已占区域重叠时向右错开（最多 8.0），避免相邻驻点结构互相压叠。
     occupied = []
-    for comp in structs:
-        _, _, x, y = info["points"][comp["at"]]
-        mol = mols[comp["id"]]["mol"]
-        bbox = mol_visual_bbox(mol, include_lone_pairs=False)
-        shift = place_bbox(bbox, x, y, comp["pos"], margin=0.6)
-        mol_placements.append((mol, shift))
-        occupied.append((bbox[0] + shift[0], bbox[1] + shift[1],
-                         bbox[2] + shift[0], bbox[3] + shift[1]))
     for i, v, x, y in info["points"]:
-        label = at_map[i]["label"] if (i in at_map and at_map[i]["label"]) else roles.get(i)
+        label = (at_map[i]["label"]
+                 if (i in at_map and at_map[i]["label"]) else roles.get(i))
         if not label:
             continue
         yoff = 0.35 if roles.get(i) == "过渡态" else -0.3
         occupied.append((x - 0.85, y + yoff - 0.22, x + 0.85, y + yoff + 0.22))
+
+    mol_placements = []
+    for comp in sorted(structs, key=lambda c: c["at"]):
+        _, _, x, y = info["points"][comp["at"]]
+        mol = mols[comp["id"]]["mol"]
+        bbox = mol_visual_bbox(mol, include_lone_pairs=False)
+        shift = place_bbox(bbox, x, y, comp["pos"], margin=0.6)
+        for _ in range(20):  # 最多右移 20×0.4 = 8.0
+            rect = (bbox[0] + shift[0], bbox[1] + shift[1],
+                    bbox[2] + shift[0], bbox[3] + shift[1])
+            if not any(_rects_intersect(rect, o) for o in occupied):
+                break
+            shift = (shift[0] + 0.4, shift[1])
+        mol_placements.append((mol, shift))
+        occupied.append(rect)
 
     box_x, box_y, box_anchor, axis_top = energy_annotation_placement(
         occupied, x_last)
