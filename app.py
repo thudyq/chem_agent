@@ -46,7 +46,7 @@ def _build_correction_prompt(user_question: str, original: str,
 
 
 def process_question(user_question: str, max_corrections: int = 1,
-                     history: list = None) -> str:
+                     history: list = None, progress_callback=None) -> str:
     """端到端处理用户问题，返回含渲染后图示代码的文本。
 
     流程：LLM 生成 → 解析标记 → 契约校验（P1）→ 逐标记渲染 → 注入替换。
@@ -54,9 +54,11 @@ def process_question(user_question: str, max_corrections: int = 1,
     清单回传 LLM 自动修正（最多 max_corrections 次），修正版重新走管线；
     仍失败则降级（校验失败标记 → 友好提示，渲染失败标记 → 渲染器错误串）。
     history: 多轮对话历史（透传给 ask_llm，见 core.llm_client）。
+    progress_callback: 可选，LLM 每段生成内容实时回调（B2 流式转发草稿）。
     """
     # 1. 调用 LLM（自动加载 system prompt，含标记协议）
-    full_response = ask_llm(user_question, history=history)
+    full_response = ask_llm(user_question, history=history,
+                            on_piece=progress_callback)
     if not full_response:
         return "（LLM 调用失败，请检查 .env 配置与网络）"
 
@@ -94,7 +96,7 @@ def process_question(user_question: str, max_corrections: int = 1,
         if problems and attempt < max_corrections:
             correction = _build_correction_prompt(
                 user_question, full_response, problems)
-            fixed = ask_llm(correction)
+            fixed = ask_llm(correction, on_piece=progress_callback)
             if fixed:
                 full_response = fixed
                 continue

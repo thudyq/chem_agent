@@ -52,7 +52,8 @@ def _is_truncated(content: str) -> str | None:
     return None
 
 
-def _stream_chat(url: str, headers: dict, payload: dict) -> tuple[str | None, str, int]:
+def _stream_chat(url: str, headers: dict, payload: dict,
+                 on_piece=None) -> tuple[str | None, str, int]:
     """SSE 流式调用：逐帧累积 content，返回 (content, finish_reason, reasoning_chars)。
 
     流式下 requests 的 timeout 只作用于"两块数据之间的间隔"
@@ -63,6 +64,9 @@ def _stream_chat(url: str, headers: dict, payload: dict) -> tuple[str | None, st
     `delta.reasoning_content` 帧、`content` 为空；若思考吃掉全部预算
     或模型思考后未生成正式回答，content 永远为空——此时返回
     reasoning_chars（思考字符数）供上层诊断，绝不把思考当回答。
+
+    on_piece: 可选回调，每收到一段 content 增量立即调用（B2 流式转发用）；
+        重试/回退时各段增量都会回调，由调用方按需限频合并。
 
     返回:
         content: 累积的正式回答；无任何 content 时为 None。
@@ -94,6 +98,8 @@ def _stream_chat(url: str, headers: dict, payload: dict) -> tuple[str | None, st
             piece = delta.get("content") or ""
             if piece:
                 content_parts.append(piece)
+                if on_piece is not None:
+                    on_piece(piece)
             for key in ("reasoning_content", "reasoning"):
                 rp = delta.get(key) or ""
                 if rp:
@@ -113,6 +119,7 @@ def ask_llm(
     max_tokens: int = DEFAULT_MAX_TOKENS,
     retries: int = DEFAULT_RETRIES,
     history: list = None,
+    on_piece=None,
 ) -> str:
     """调用 LLM（SSE 流式），返回回答文本。
 
@@ -124,6 +131,7 @@ def ask_llm(
         retries: 失败重试次数，默认 3。
         history: 多轮对话历史 [{"role": "user"/"assistant", "content": str}, ...]，
             插在 system_prompt 与当前问题之间；None 表示单轮。
+        on_piece: 可选回调，每收到一段生成内容立即调用（B2 流式转发）。
 
     返回:
         回答文本；配置缺失或重试耗尽返回 None。
@@ -173,7 +181,7 @@ def ask_llm(
         for attempt in range(1, retries + 1):
             try:
                 content, finish_reason, reasoning_chars = _stream_chat(
-                    url, headers, payload)
+                    url, headers, payload, on_piece=on_piece)
             except requests.exceptions.Timeout as e:
                 print(f"[ask_llm] 第 {attempt}/{retries} 次请求超时"
                       f"（数据间隔 >{DEFAULT_TIMEOUT}s，模型思考过久或网络慢）: {e}")

@@ -360,16 +360,18 @@ def _sse_frame(cid: str, created: int, delta: dict,
 
 def _sse_stream(question: str, history: list, cid: str, created: int,
                 public_base: str):
-    """SSE 帧序列：role 帧 → 思考帧（每 3s 心跳保活）→ content 增量 →
-    stop 帧（usage + x_soda.attachments）→ [DONE]。"""
+    """SSE 帧序列：role 帧 → 思考帧（B2：实时转发 LLM 生成草稿）→
+    content 增量 → stop 帧（usage + x_soda.attachments）→ [DONE]。"""
     yield _sse_frame(cid, created, {"role": "assistant"})
     yield _sse_frame(cid, created, {"reasoning": "正在思考并绘制化学图示…"})
 
     result_q = queue.Queue(maxsize=1)
+    progress_q = queue.Queue(maxsize=200)
 
     def work():
         try:
-            answer = process_question(question, history=history)
+            answer = process_question(question, history=history,
+                                      progress_callback=progress_q.put)
             attachments = build_attachments(answer or "", public_base) \
                 if answer else []
             result_q.put((answer, attachments))
@@ -377,12 +379,33 @@ def _sse_stream(question: str, history: list, cid: str, created: int,
             result_q.put(e)
 
     threading.Thread(target=work, daemon=True).start()
+    draft = []          # LLM 生成草稿（限长保留，reasoning 帧覆盖式显示）
+    last_flush = time.time()
     while True:
         try:
-            result = result_q.get(timeout=3.0)
+            result = result_q.get_nowait()
             break
         except queue.Empty:
+            pass
+        # 批量取出 LLM 增量（限频，避免每 chunk 一帧刷屏）
+        pieces = []
+        while True:
+            try:
+                pieces.append(progress_q.get_nowait())
+            except queue.Empty:
+                break
+        if pieces:
+            draft.append("".join(pieces))
+            if len(draft) > 4:
+                draft.pop(0)
+            yield _sse_frame(cid, created,
+                             {"reasoning": f"正在生成… {''.join(draft)}"})
+            last_flush = time.time()
+        elif time.time() - last_flush >= 3.0:
             yield _sse_frame(cid, created, {"reasoning": "仍在思考…"})
+            last_flush = time.time()
+        else:
+            time.sleep(0.2)
 
     if isinstance(result, Exception):
         yield _sse_frame(cid, created, {}, finish="stop",

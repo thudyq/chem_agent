@@ -22,7 +22,7 @@ FAKE_ANSWER = "苯的结构式为 [STRUCT:c1ccccc1]，分子式 C6H6。"
 @pytest.fixture(autouse=True)
 def _mock_pipeline(monkeypatch):
     monkeypatch.setattr(api, "SERVICE_KEY", TEST_KEY)
-    monkeypatch.setattr(api, "process_question", lambda q, history=None: FAKE_ANSWER)
+    monkeypatch.setattr(api, "process_question", lambda q, history=None, progress_callback=None: FAKE_ANSWER)
     monkeypatch.setattr(api, "build_attachments", lambda answer, base: [])
     yield
 
@@ -127,7 +127,7 @@ def test_chat_stream_sse(client):
 
 def test_chat_stream_error_fallback(client, monkeypatch):
     """管线抛异常时：stop 帧 + error 字段，finish_reason 不为 error。"""
-    def _boom(q, history=None):
+    def _boom(q, history=None, progress_callback=None):
         raise RuntimeError("upstream boom")
     monkeypatch.setattr(api, "process_question", _boom)
     resp = client.post("/v1/chat/completions",
@@ -147,7 +147,7 @@ def test_chat_multimodal_image(client, monkeypatch, tmp_path):
     import utils.ocr_utils as ocr
     monkeypatch.setattr(ocr, "image_to_smiles", lambda p: "c1ccccc1")
     monkeypatch.setattr(api, "process_question",
-                        lambda q, history=None: captured.setdefault("q", q) or FAKE_ANSWER)
+                        lambda q, history=None, progress_callback=None: captured.setdefault("q", q) or FAKE_ANSWER)
     payload = {"messages": [{"role": "user", "content": [
         {"type": "text", "text": "这是什么分子？"},
         {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
@@ -197,7 +197,7 @@ def test_audio_input_graceful_note(client, monkeypatch):
     """音频输入：显式提示暂不支持，不静默丢弃。"""
     captured = {}
     monkeypatch.setattr(api, "process_question",
-                        lambda q, history=None: captured.setdefault("q", q) or FAKE_ANSWER)
+                        lambda q, history=None, progress_callback=None: captured.setdefault("q", q) or FAKE_ANSWER)
     payload = {"messages": [{"role": "user", "content": [
         {"type": "input_audio", "input_audio": {"url": "https://oss/v.mp3", "format": "mp3"}},
     ]}]}
@@ -211,7 +211,7 @@ def test_file_input_txt_inlined(client, monkeypatch):
     captured = {}
     monkeypatch.setattr(api, "_download_text", lambda url: "苯的熔点为 5.5℃")
     monkeypatch.setattr(api, "process_question",
-                        lambda q, history=None: captured.setdefault("q", q) or FAKE_ANSWER)
+                        lambda q, history=None, progress_callback=None: captured.setdefault("q", q) or FAKE_ANSWER)
     payload = {"messages": [{"role": "user", "content": [
         {"type": "text", "text": "总结这份文档"},
         {"type": "file", "file": {"url": "https://oss/note.txt", "filename": "note.txt"}},
@@ -226,7 +226,7 @@ def test_file_input_unsupported_type(client, monkeypatch):
     """不支持的文件类型与仅 file_id：显式提示，不静默丢弃。"""
     captured = {}
     monkeypatch.setattr(api, "process_question",
-                        lambda q, history=None: captured.setdefault("q", q) or FAKE_ANSWER)
+                        lambda q, history=None, progress_callback=None: captured.setdefault("q", q) or FAKE_ANSWER)
     payload = {"messages": [{"role": "user", "content": [
         {"type": "file", "file": {"url": "https://oss/a.pdf", "filename": "a.pdf"}},
         {"type": "file", "file": {"file_id": "fid-1", "filename": "b.docx"}},
@@ -307,7 +307,7 @@ def test_image_without_vision_config(client, monkeypatch):
     ))
     captured = {}
     monkeypatch.setattr(api, "process_question",
-                        lambda q, history=None: captured.setdefault("q", q) or FAKE_ANSWER)
+                        lambda q, history=None, progress_callback=None: captured.setdefault("q", q) or FAKE_ANSWER)
     payload = {"messages": [{"role": "user", "content": [
         {"type": "text", "text": "看图"},
         {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
