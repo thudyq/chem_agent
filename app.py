@@ -45,16 +45,18 @@ def _build_correction_prompt(user_question: str, original: str,
     return "\n".join(lines)
 
 
-def process_question(user_question: str, max_corrections: int = 1) -> str:
+def process_question(user_question: str, max_corrections: int = 1,
+                     history: list = None) -> str:
     """端到端处理用户问题，返回含渲染后图示代码的文本。
 
     流程：LLM 生成 → 解析标记 → 契约校验（P1）→ 逐标记渲染 → 注入替换。
     P2 渲染反馈闭环：首次渲染若有失败（校验拦截 / 渲染器失败），携带失败
     清单回传 LLM 自动修正（最多 max_corrections 次），修正版重新走管线；
     仍失败则降级（校验失败标记 → 友好提示，渲染失败标记 → 渲染器错误串）。
+    history: 多轮对话历史（透传给 ask_llm，见 core.llm_client）。
     """
     # 1. 调用 LLM（自动加载 system prompt，含标记协议）
-    full_response = ask_llm(user_question)
+    full_response = ask_llm(user_question, history=history)
     if not full_response:
         return "（LLM 调用失败，请检查 .env 配置与网络）"
 

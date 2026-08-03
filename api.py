@@ -17,13 +17,16 @@ http(s) URL），经视觉模型识别为 SMILES 后并入问题文本。
 """
 
 import base64
+import ipaddress
 import json
 import queue
 import re
+import socket
 import tempfile
 import threading
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
 from fastapi import FastAPI, Header, HTTPException, Request
@@ -45,6 +48,72 @@ app.add_middleware(
 )
 
 SERVICE_KEY = settings.service.api_key
+
+# SSRF 防护：禁止下载的内网/保留地址网段（RFC1918 + 回环 + 链路本地 +
+# 云元数据地址 + 组播/保留）。元数据地址 169.254.169.254（AWS/GCP/Azure）
+# 与 100.100.100.200（阿里云）分别落在 169.254.0.0/16 与 100.64.0.0/10 内。
+_BLOCKED_NETWORKS = [
+    ipaddress.ip_network("0.0.0.0/8"),
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("224.0.0.0/4"),
+    ipaddress.ip_network("240.0.0.0/4"),
+    ipaddress.ip_network("255.255.255.255/32"),
+    ipaddress.ip_network("::/128"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("fe80::/10"),
+]
+_DANGEROUS_HOST_SUFFIX = (".local", ".internal", ".localhost", ".lan",
+                          ".corp", ".home", ".intranet")
+
+
+def _is_blocked_ip(ip_str: str) -> bool:
+    """IP 是否命中内网/保留网段；无法解析为合法 IP 一律拒绝。"""
+    try:
+        ip = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return True
+    return any(ip in net for net in _BLOCKED_NETWORKS)
+
+
+def _validate_download_url(url: str) -> bool:
+    """SSRF 防护：仅允许公网 http/https 下载。
+
+    拒绝：非 http/https、无 host、内网/保留 IP（含云元数据地址）、
+    localhost/.local 等危险主机名、DNS 解析到内网 IP、解析失败（保守拒绝）。
+    """
+    if not url or not isinstance(url, str):
+        return False
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
+    if parsed.scheme not in ("http", "https"):
+        return False
+    host = parsed.hostname
+    if not host:
+        return False
+    host = host.rstrip(".").lower()
+    if host.startswith("localhost") or host.endswith(_DANGEROUS_HOST_SUFFIX):
+        return False
+    try:
+        ip = ipaddress.ip_address(host)
+        return not _is_blocked_ip(str(ip))
+    except ValueError:
+        pass  # 域名，需 DNS 解析后校验
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except OSError:
+        return False
+    addrs = {info[4][0] for info in infos}
+    if not addrs:
+        return False
+    return all(not _is_blocked_ip(a) for a in addrs)
 
 
 def _check_auth(authorization: str | None) -> None:
@@ -110,6 +179,65 @@ def _extract_question(messages: list) -> tuple[str, list, list, list]:
     return "", [], [], []
 
 
+_TIKZ_RE = re.compile(r"\\begin\{tikzpicture\}.*?\\end\{tikzpicture\}",
+                      re.DOTALL)
+_CHEMFIG_RE = re.compile(r"\\chemfig\{[^}]*\}")
+
+
+def _strip_render_code(text: str) -> str:
+    """剥离 assistant 历史消息中的渲染代码（TikZ/chemfig），只留纯文本。
+
+    多轮对话时，assistant 历史消息是我们返回的**渲染后**文本（含 TikZ 代码）。
+    这些代码不能回传给 LLM（会污染上下文、浪费 token），需剥离。
+    """
+    text = _TIKZ_RE.sub("", text)
+    text = _CHEMFIG_RE.sub("", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _extract_history(messages: list, max_items: int = 10) -> list:
+    """提取最后一条 user 消息之前的对话历史（A3 多轮对话）。
+
+    返回 [{"role": "user"/"assistant", "content": 文本}, ...]（最近 max_items 条）。
+    - 当前问题 = 最后一条 user 消息（由 _extract_question 处理），其本身不在此处；
+    - assistant 历史剥离渲染代码（TikZ/chemfig）；
+    - 多模态 content 数组只取文本部分。
+    """
+    if not isinstance(messages, list):
+        return []
+    last_user_idx = -1
+    for i, m in enumerate(messages):
+        if isinstance(m, dict) and m.get("role") == "user":
+            last_user_idx = i
+    history = []
+    for m in messages[:last_user_idx][-max_items:]:
+        if not isinstance(m, dict):
+            continue
+        role = m.get("role")
+        if role not in ("user", "assistant"):
+            continue
+        content = m.get("content")
+        if isinstance(content, str):
+            text = content
+        elif isinstance(content, list):
+            texts = []
+            for part in content:
+                if isinstance(part, str):
+                    texts.append(part)
+                elif isinstance(part, dict) and part.get("type") in (
+                        "text", "input_text"):
+                    texts.append(part.get("text", ""))
+            text = "\n".join(t for t in texts if t)
+        else:
+            continue
+        if role == "assistant":
+            text = _strip_render_code(text)
+        if text.strip():
+            history.append({"role": role, "content": text.strip()})
+    return history
+
+
 def _fetch_image_to_temp(url: str, tmp_dir: str) -> str | None:
     """把 data: base64 或 http(s) 图片 URL 存为临时文件，返回路径；失败 None。"""
     if url.startswith("data:"):
@@ -125,6 +253,9 @@ def _fetch_image_to_temp(url: str, tmp_dir: str) -> str | None:
         path.write_bytes(data)
         return str(path)
     if url.startswith(("http://", "https://")):
+        if not _validate_download_url(url):
+            print(f"[api] 拒绝下载图片（SSRF 防护）: {url[:80]}")
+            return None
         try:
             resp = requests.get(url, timeout=20)
         except requests.exceptions.RequestException:
@@ -139,6 +270,9 @@ def _fetch_image_to_temp(url: str, tmp_dir: str) -> str | None:
 
 def _download_text(url: str, limit: int = 4000) -> str | None:
     """按 URL 下载文本文件内容（截断 limit 字符）；失败返回 None。"""
+    if not _validate_download_url(url):
+        print(f"[api] 拒绝下载文件（SSRF 防护）: {url[:80]}")
+        return None
     try:
         resp = requests.get(url, timeout=20)
     except requests.exceptions.RequestException:
@@ -224,7 +358,8 @@ def _sse_frame(cid: str, created: int, delta: dict,
     return f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
 
 
-def _sse_stream(question: str, cid: str, created: int, public_base: str):
+def _sse_stream(question: str, history: list, cid: str, created: int,
+                public_base: str):
     """SSE 帧序列：role 帧 → 思考帧（每 3s 心跳保活）→ content 增量 →
     stop 帧（usage + x_soda.attachments）→ [DONE]。"""
     yield _sse_frame(cid, created, {"role": "assistant"})
@@ -234,7 +369,7 @@ def _sse_stream(question: str, cid: str, created: int, public_base: str):
 
     def work():
         try:
-            answer = process_question(question)
+            answer = process_question(question, history=history)
             attachments = build_attachments(answer or "", public_base) \
                 if answer else []
             result_q.put((answer, attachments))
@@ -303,6 +438,7 @@ async def chat_completions(request: Request, authorization: str | None = Header(
     stream = stream if isinstance(stream, bool) else False
 
     text, images, audios, files = _extract_question(body.get("messages") or [])
+    history = _extract_history(body.get("messages") or [])
     cid = f"chatcmpl-{int(time.time() * 1000)}"
     created = int(time.time())
     public_base = _public_base(request)
@@ -312,11 +448,11 @@ async def chat_completions(request: Request, authorization: str | None = Header(
 
     if stream:
         return StreamingResponse(
-            _sse_stream(question, cid, created, public_base),
+            _sse_stream(question, history, cid, created, public_base),
             media_type="text/event-stream",
         )
 
-    answer = process_question(question) or "（未能生成回答）"
+    answer = process_question(question, history=history) or "（未能生成回答）"
     attachments = build_attachments(answer, public_base)
     payload = {
         "id": cid,

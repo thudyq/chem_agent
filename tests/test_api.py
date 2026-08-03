@@ -22,7 +22,7 @@ FAKE_ANSWER = "苯的结构式为 [STRUCT:c1ccccc1]，分子式 C6H6。"
 @pytest.fixture(autouse=True)
 def _mock_pipeline(monkeypatch):
     monkeypatch.setattr(api, "SERVICE_KEY", TEST_KEY)
-    monkeypatch.setattr(api, "process_question", lambda q: FAKE_ANSWER)
+    monkeypatch.setattr(api, "process_question", lambda q, history=None: FAKE_ANSWER)
     monkeypatch.setattr(api, "build_attachments", lambda answer, base: [])
     yield
 
@@ -127,7 +127,7 @@ def test_chat_stream_sse(client):
 
 def test_chat_stream_error_fallback(client, monkeypatch):
     """管线抛异常时：stop 帧 + error 字段，finish_reason 不为 error。"""
-    def _boom(q):
+    def _boom(q, history=None):
         raise RuntimeError("upstream boom")
     monkeypatch.setattr(api, "process_question", _boom)
     resp = client.post("/v1/chat/completions",
@@ -147,7 +147,7 @@ def test_chat_multimodal_image(client, monkeypatch, tmp_path):
     import utils.ocr_utils as ocr
     monkeypatch.setattr(ocr, "image_to_smiles", lambda p: "c1ccccc1")
     monkeypatch.setattr(api, "process_question",
-                        lambda q: captured.setdefault("q", q) or FAKE_ANSWER)
+                        lambda q, history=None: captured.setdefault("q", q) or FAKE_ANSWER)
     payload = {"messages": [{"role": "user", "content": [
         {"type": "text", "text": "这是什么分子？"},
         {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
@@ -197,7 +197,7 @@ def test_audio_input_graceful_note(client, monkeypatch):
     """音频输入：显式提示暂不支持，不静默丢弃。"""
     captured = {}
     monkeypatch.setattr(api, "process_question",
-                        lambda q: captured.setdefault("q", q) or FAKE_ANSWER)
+                        lambda q, history=None: captured.setdefault("q", q) or FAKE_ANSWER)
     payload = {"messages": [{"role": "user", "content": [
         {"type": "input_audio", "input_audio": {"url": "https://oss/v.mp3", "format": "mp3"}},
     ]}]}
@@ -211,7 +211,7 @@ def test_file_input_txt_inlined(client, monkeypatch):
     captured = {}
     monkeypatch.setattr(api, "_download_text", lambda url: "苯的熔点为 5.5℃")
     monkeypatch.setattr(api, "process_question",
-                        lambda q: captured.setdefault("q", q) or FAKE_ANSWER)
+                        lambda q, history=None: captured.setdefault("q", q) or FAKE_ANSWER)
     payload = {"messages": [{"role": "user", "content": [
         {"type": "text", "text": "总结这份文档"},
         {"type": "file", "file": {"url": "https://oss/note.txt", "filename": "note.txt"}},
@@ -226,7 +226,7 @@ def test_file_input_unsupported_type(client, monkeypatch):
     """不支持的文件类型与仅 file_id：显式提示，不静默丢弃。"""
     captured = {}
     monkeypatch.setattr(api, "process_question",
-                        lambda q: captured.setdefault("q", q) or FAKE_ANSWER)
+                        lambda q, history=None: captured.setdefault("q", q) or FAKE_ANSWER)
     payload = {"messages": [{"role": "user", "content": [
         {"type": "file", "file": {"url": "https://oss/a.pdf", "filename": "a.pdf"}},
         {"type": "file", "file": {"file_id": "fid-1", "filename": "b.docx"}},
@@ -307,7 +307,7 @@ def test_image_without_vision_config(client, monkeypatch):
     ))
     captured = {}
     monkeypatch.setattr(api, "process_question",
-                        lambda q: captured.setdefault("q", q) or FAKE_ANSWER)
+                        lambda q, history=None: captured.setdefault("q", q) or FAKE_ANSWER)
     payload = {"messages": [{"role": "user", "content": [
         {"type": "text", "text": "看图"},
         {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
@@ -315,3 +315,37 @@ def test_image_without_vision_config(client, monkeypatch):
     resp = client.post("/v1/chat/completions", json=payload, headers=AUTH)
     assert resp.status_code == 200
     assert "VISION_MODEL" in captured["q"]
+
+
+def test_validate_download_url_ssrf():
+    """B1 SSRF 防护：内网/元数据/危险主机名/非 http 拒绝，公网放行。"""
+    assert api._validate_download_url("https://example.com/a.png")
+    assert api._validate_download_url("http://www.baidu.com/f.txt")
+    assert not api._validate_download_url("http://127.0.0.1/x")
+    assert not api._validate_download_url("http://10.0.0.1/x")
+    assert not api._validate_download_url("http://172.16.5.5/x")
+    assert not api._validate_download_url("http://192.168.1.100/x")
+    assert not api._validate_download_url("http://169.254.169.254/latest/meta-data")
+    assert not api._validate_download_url("http://100.100.100.200/latest/meta-data")
+    assert not api._validate_download_url("http://localhost:8000/x")
+    assert not api._validate_download_url("http://test.internal/x")
+    assert not api._validate_download_url("ftp://example.com/x")
+    assert not api._validate_download_url("file:///etc/passwd")
+    assert not api._validate_download_url("http:///no-host")
+    assert not api._validate_download_url("")
+    assert not api._validate_download_url(None)
+
+
+def test_validate_download_url_dns(monkeypatch):
+    """B1 DNS 解析校验：域名解析到内网拒绝、公网放行、解析失败保守拒绝。"""
+    monkeypatch.setattr(api.socket, "getaddrinfo",
+                        lambda *a, **k: [(2, 1, 6, "", ("10.0.0.5", 0))])
+    assert not api._validate_download_url("http://evil.example.com/x")
+    monkeypatch.setattr(api.socket, "getaddrinfo",
+                        lambda *a, **k: [(2, 1, 6, "", ("93.184.216.34", 0))])
+    assert api._validate_download_url("http://ok.example.com/x")
+
+    def boom(*a, **k):
+        raise OSError("DNS 解析失败")
+    monkeypatch.setattr(api.socket, "getaddrinfo", boom)
+    assert not api._validate_download_url("http://unknown.invalid/x")

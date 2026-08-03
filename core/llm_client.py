@@ -112,6 +112,7 @@ def ask_llm(
     temperature: float = DEFAULT_TEMPERATURE,
     max_tokens: int = DEFAULT_MAX_TOKENS,
     retries: int = DEFAULT_RETRIES,
+    history: list = None,
 ) -> str:
     """调用 LLM（SSE 流式），返回回答文本。
 
@@ -121,6 +122,8 @@ def ask_llm(
         temperature: 采样温度，默认 0.2（事实性强）。
         max_tokens: 最大生成 token 数，默认 8192。
         retries: 失败重试次数，默认 3。
+        history: 多轮对话历史 [{"role": "user"/"assistant", "content": str}, ...]，
+            插在 system_prompt 与当前问题之间；None 表示单轮。
 
     返回:
         回答文本；配置缺失或重试耗尽返回 None。
@@ -137,6 +140,8 @@ def ask_llm(
     messages = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
+    if history:
+        messages.extend(history)
     messages.append({"role": "user", "content": user_question})
 
     url = f"{base_url}/chat/completions"
