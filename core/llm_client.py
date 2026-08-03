@@ -6,6 +6,7 @@
 system_prompt 未传时自动加载 prompts/system_prompt.txt。
 """
 
+import re
 import time
 
 import requests
@@ -17,6 +18,37 @@ DEFAULT_TEMPERATURE = settings.llm.temperature
 DEFAULT_MAX_TOKENS = settings.llm.max_tokens
 DEFAULT_TIMEOUT = settings.llm.timeout
 DEFAULT_RETRIES = settings.llm.retries
+
+# 内容完整性校验：行尾残留的半截渲染标记（如 "[STRUCT:c1ccc" 无闭合 ]）
+_TRUNC_MARK_RE = re.compile(
+    r"\[(?:STRUCT|ARROW|REACTION|REACTIONMECH|COMPOSITE|NEWMAN|ENERGY|LEWIS|"
+    r"STEREO|MECH|CHARGE|RESONANCE|HBOND|RETRO):[^\]]*$",
+    re.MULTILINE,
+)
+_ENV_BEGIN_RE = re.compile(r"\\begin\{(\w+)\}")
+_ENV_END_RE = re.compile(r"\\end\{(\w+)\}")
+
+
+def _is_truncated(content: str) -> str | None:
+    """检测输出是否被截断；截断返回原因，完整返回 None。
+
+    两个信号（不依赖 API 的 finish_reason，防止兼容接口谎报 stop）：
+    1. LaTeX 环境未配对：\\begin{tikzpicture} 多于 \\end{tikzpicture}；
+    2. 渲染标记未闭合：行尾残留半截标记，或 [COMPOSITE: 多于 [/COMPOSITE]。
+    """
+    begins, ends = {}, {}
+    for m in _ENV_BEGIN_RE.finditer(content):
+        begins[m.group(1)] = begins.get(m.group(1), 0) + 1
+    for m in _ENV_END_RE.finditer(content):
+        ends[m.group(1)] = ends.get(m.group(1), 0) + 1
+    for name, count in begins.items():
+        if count > ends.get(name, 0):
+            return f"LaTeX 环境 \\begin{{{name}}} 未闭合"
+    if content.count("[COMPOSITE:") > content.count("[/COMPOSITE]"):
+        return "COMPOSITE 标记未闭合"
+    if _TRUNC_MARK_RE.search(content):
+        return "含未闭合的渲染标记"
+    return None
 
 
 def ask_llm(
@@ -74,20 +106,26 @@ def ask_llm(
                 msg = choice.get("message", {})
                 content = (msg.get("content") or "").strip()
                 finish_reason = choice.get("finish_reason", "")
-                # 输出完整性校验：
+                # 输出完整性校验（三道防线）：
                 # 1) content 为空——推理模型（deepseek-reasoner 等）思考过长吃光
                 #    token 预算时 content 为空；绝不可回退 reasoning_content
                 #    （被截断的思考过程混着草稿与半截标记，会把下游解析/渲染带崩）。
-                # 2) finish_reason=length——输出被 max_tokens 截断，同样视为失败。
-                # 两种情况都走统一重试逻辑。
+                # 2) finish_reason=length——输出被 max_tokens 截断。
+                # 3) 内容完整性自检——部分兼容接口不返回/谎报 finish_reason，
+                #    截断内容会被当作成功；检测未闭合 LaTeX 环境与半截标记兜底。
+                # 三种情况都走统一重试逻辑。
                 if not content:
                     print("[ask_llm] content 为空（推理模型思考过长或异常），视为失败")
                 elif finish_reason == "length":
                     print("[ask_llm] 输出被 max_tokens 截断（finish_reason=length），视为失败")
                 else:
-                    usage = data.get("usage", {})
-                    print(f"[ask_llm] 成功（tokens: {usage.get('total_tokens', '?')}）")
-                    return content
+                    trunc = _is_truncated(content)
+                    if trunc:
+                        print(f"[ask_llm] 内容完整性校验失败（{trunc}），视为失败")
+                    else:
+                        usage = data.get("usage", {})
+                        print(f"[ask_llm] 成功（tokens: {usage.get('total_tokens', '?')}）")
+                        return content
             else:
                 print(f"[ask_llm] 第 {attempt}/{retries} 次失败 HTTP {resp.status_code}: {resp.text[:200]}")
 
