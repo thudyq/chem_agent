@@ -28,7 +28,7 @@ args=[布局名, 子标记 RenderTag 列表]，raw 覆盖整个配对块。
 """
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List
 
 
@@ -40,6 +40,9 @@ class RenderTag:
     raw: str         # 原始匹配文本，如 "[STRUCT:c1ccccc1]"
     start_pos: int   # 在原文中的起始下标
     end_pos: int     # 结束下标（ exclusive）
+    # STRUCT 的结构化属性（id/at/pos）——由解析器一次性提取，
+    # composite/tag_validator 直接读取，避免从 raw 二次正则解析
+    attrs: dict = field(default_factory=dict)
 
 
 # 单标记类型的开启串
@@ -161,6 +164,35 @@ def _parse_content(tag_type: str, content: str) -> list:
     return [content]  # ENERGY / 其他
 
 
+def _parse_struct_attrs(content: str) -> dict:
+    """提取 STRUCT 内容中的结构化属性 id/at/pos。
+
+    与 _parse_content 的 STRUCT 分支共用查找逻辑，但额外返回属性值，
+    供 composite / tag_validator 直接读取（改进 3：避免从 raw 二次正则解析）。
+    """
+    attrs = {}
+    li = content.find(",label=")
+    ii = content.find(",id=")
+    ai = content.find(",at=")
+    pi = content.find(",pos=")
+    others = (li, ii, ai, pi)
+    if ii != -1:
+        after = [p for p in others if p != -1 and p > ii]
+        val = content[ii + len(",id="):min(after) if after else len(content)]
+        attrs["id"] = val.strip()
+    if ai != -1:
+        after = [p for p in others if p != -1 and p > ai]
+        val = content[ai + len(",at="):min(after) if after else len(content)].strip()
+        if val.isdigit():
+            attrs["at"] = int(val)
+    if pi != -1:
+        after = [p for p in others if p != -1 and p > pi]
+        val = content[pi + len(",pos="):min(after) if after else len(content)].strip()
+        if val in ("above", "below"):
+            attrs["pos"] = val
+    return attrs
+
+
 def _in_regions(pos: int, regions: list) -> bool:
     """pos 是否落在任一 (start, end) 区域内。"""
     return any(start <= pos < end for start, end in regions)
@@ -192,6 +224,7 @@ def _parse_inner_tags(inner: str, base: int) -> List[RenderTag]:
                 raw=raw,
                 start_pos=base + idx,
                 end_pos=base + end + 1,
+                attrs=_parse_struct_attrs(content) if tag_type == "STRUCT" else {},
             ))
             search_from = end + 1
     for tag_type, token in _INNER_TOKENS.items():
@@ -271,6 +304,7 @@ def parse_tags(text: str) -> List[RenderTag]:
                 raw=raw,
                 start_pos=idx,
                 end_pos=end + 1,
+                attrs=_parse_struct_attrs(content) if tag_type == "STRUCT" else {},
             ))
             search_from = end + 1
     for m in _REASONING_RE.finditer(text):

@@ -100,9 +100,6 @@ _MECH_ARROW_RE = re.compile(
     r"^\s*([A-Za-z0-9_]+)\s*:\s*(\d+(?:-\d+)?)\s*(>>|>)\s*"
     r"([A-Za-z0-9_]+)\s*:\s*(\d+(?:-\d+)?)\s*$"
 )
-_STRUCT_ID_RE = re.compile(r",id=([A-Za-z0-9_]+)")
-_STRUCT_AT_RE = re.compile(r",at=(\d+)")
-_STRUCT_POS_RE = re.compile(r",pos=(above|below)")
 
 _SUPPORTED_LAYOUTS = ("reaction_mech", "row", "energy", "resonance")
 
@@ -200,17 +197,14 @@ def _collect_components(children):
     annotations = {}
     for child in children:
         if child.type == "STRUCT":
-            m = _STRUCT_ID_RE.search(child.raw)
-            cid = m.group(1) if m else f"r{len(structs)}"
+            cid = child.attrs.get("id") or f"r{len(structs)}"
             label = child.args[1] if len(child.args) > 1 else None
-            at_m = _STRUCT_AT_RE.search(child.raw)
-            pos_m = _STRUCT_POS_RE.search(child.raw)
             structs.append({
                 "id": cid,
                 "smiles": child.args[0].strip(),
                 "label": label,
-                "at": int(at_m.group(1)) if at_m else None,
-                "pos": pos_m.group(1) if pos_m else "above",
+                "at": child.attrs.get("at"),
+                "pos": child.attrs.get("pos", "above"),
             })
             sequence.append(("mol", len(structs) - 1))
         elif child.type == "PLUS":

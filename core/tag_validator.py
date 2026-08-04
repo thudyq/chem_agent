@@ -40,8 +40,6 @@ _MECH_ARROW_RE = re.compile(
     r"^\s*([A-Za-z0-9_]+)\s*:\s*(\d+(?:-\d+)?)\s*(>>|>)\s*"
     r"([A-Za-z0-9_]+)\s*:\s*(\d+(?:-\d+)?)\s*$"
 )
-_STRUCT_ID_RE = re.compile(r",id=([A-Za-z0-9_]+)")
-_STRUCT_AT_RE = re.compile(r",at=(\d+)")
 
 # 标记类型 → 中文名（降级提示用）
 _TAG_NAMES = {
@@ -173,17 +171,15 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
     if layout_name not in COMPOSITE_LAYOUTS:
         return False, f"未知布局「{layout_name}」，支持 {'/'.join(COMPOSITE_LAYOUTS)}"
 
-    # 收集组件：id → {smiles, at}
+    # 收集组件：id → {smiles, at}（attrs 由 tag_parser 结构化提取，不再从 raw 二次解析）
     comps = {}
     for child in children:
         if child.type != "STRUCT":
             continue
-        m = _STRUCT_ID_RE.search(child.raw)
-        cid = m.group(1) if m else f"r{len(comps)}"
-        at_m = _STRUCT_AT_RE.search(child.raw)
+        cid = child.attrs.get("id") or f"r{len(comps)}"
         comps[cid] = {
             "smiles": child.args[0].strip() if child.args and child.args[0] else "",
-            "at": int(at_m.group(1)) if at_m else None,
+            "at": child.attrs.get("at"),
         }
         # STRUCT 子标记本身递归校验
         ok, reason = _validate_struct_args(child.args)
