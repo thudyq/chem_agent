@@ -42,7 +42,7 @@ def condensed_atom_label(atom) -> str | None:
     """结构简式标签：非环碳原子同样写出（CH₃/CH₂/CH/C），环上碳原子
     保持键线式（返回 None）。
 
-    机理场景（MECH / REACTIONMECH / COMPOSITE）使用，使小分子呈现
+    机理场景（COMPOSITE 容器内）使用，使小分子呈现
     教科书式的 H₃C—Cl 风格而非键线式。
     """
     if atom.GetAtomicNum() == 6 and atom.GetFormalCharge() == 0 and atom.IsInRing():

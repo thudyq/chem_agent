@@ -98,10 +98,7 @@ graph LR
 │   ├── hbond.py               # [HBOND] 渲染器
 │   ├── arrow.py               # [ARROW] 渲染器
 │   ├── retro.py               # [RETRO] 渲染器
-│   ├── resonance.py           # [RESONANCE] 渲染器
-│   ├── mechanism.py           # [MECH] 渲染器
 │   ├── reaction.py            # [REACTION] 渲染器
-│   ├── reaction_mech.py       # [REACTIONMECH] 渲染器
 │   └── energy.py              # [ENERGY] 渲染器
 ├── utils/
 │   ├── rdkit_utils.py         # RDKit 验证工具

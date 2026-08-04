@@ -35,6 +35,7 @@ def evaluate_compliance(questions: list, *, max_corrections: int = 1) -> dict:
         "tags": 0,
         "valid": 0,
         "invalid": 0,
+        "renderable": 0,
         "render_ok": 0,
         "render_fail": 0,
         "needs_correction": 0,
@@ -57,12 +58,14 @@ def evaluate_compliance(questions: list, *, max_corrections: int = 1) -> dict:
         stats["invalid"] += len(invalid)
 
         render_ok = render_fail = 0
+        renderable = 0
         for tag in valid:
             if tag.type == "REASONING":
                 continue
             renderer = RENDERER_REGISTRY.get(tag.type)
             if renderer is None:
                 continue
+            renderable += 1
             try:
                 out = renderer(*tag.args)
             except Exception:
@@ -73,6 +76,7 @@ def evaluate_compliance(questions: list, *, max_corrections: int = 1) -> dict:
                 render_fail += 1
         stats["render_ok"] += render_ok
         stats["render_fail"] += render_fail
+        stats["renderable"] += renderable
 
         if invalid or render_fail:
             stats["needs_correction"] += 1
@@ -128,6 +132,7 @@ def _indent(text: str, prefix: str = "      ") -> str:
 def format_report(stats: dict) -> str:
     total = stats["total"]
     tags = stats["tags"]
+    renderable = stats["renderable"]
     lines = [
         "标记遵循率报告",
         "==============",
@@ -138,7 +143,8 @@ def format_report(stats: dict) -> str:
         f"标记总数: {tags}",
         f"  合法: {stats['valid']}（{_pct(stats['valid'], tags)}）",
         f"  非法: {stats['invalid']}（{_pct(stats['invalid'], tags)}）",
-        f"渲染成功: {stats['render_ok']}（{_pct(stats['render_ok'], tags)}）",
+        f"可渲染标记: {renderable}",
+        f"渲染成功: {stats['render_ok']}（{_pct(stats['render_ok'], renderable)}）",
         f"渲染失败: {stats['render_fail']}",
         "",
         f"需要修正的回答数: {stats['needs_correction']}（{_pct(stats['needs_correction'], total)}）",
