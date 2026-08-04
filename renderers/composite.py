@@ -318,7 +318,8 @@ def _render_energy_layout(points_str: str, structs: list, mols: dict,
         lines.append("    \\fill[blue] (0,0) circle (0.06);")
         if label:
             yoff = 0.35 if roles.get(i) == "过渡态" else -0.3
-            lines.append(f"    \\node[font=\\small] at (0,{yoff:.2f}) {{{label} ({v:+.0f})}};")
+            lines.append(f"    \\node[font=\\small] at (0,{yoff:.2f}) "
+                         f"{{{format_chem_text(label)} ({v:+.0f})}};")
         lines.append("  \\end{scope}")
 
     for mol, shift in mol_placements:

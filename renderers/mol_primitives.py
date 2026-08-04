@@ -940,18 +940,61 @@ def fmt_coord(x: float, y: float) -> str:
 _SUBSCRIPT_RE = re.compile(r"([A-Za-z\)])(\d+)")
 _CHARGE_TAIL_RE = re.compile(r"(?:(?<![A-Za-z\)])(\d+))?([+-])$")
 
+# Unicode 上下标映射（直接转 LaTeX 上/下标命令，保留上下标语义——
+# 不能 normalize 成普通数字，否则 Ca²⁺ 的 ² 会被 _SUBSCRIPT_RE 误转下标）
+_SUBSCRIPT_CHARS = {
+    "₀": "0", "₁": "1", "₂": "2", "₃": "3", "₄": "4",
+    "₅": "5", "₆": "6", "₇": "7", "₈": "8", "₉": "9",
+    "₊": "+", "₋": "-",
+}
+_SUPERSCRIPT_CHARS = {
+    "⁰": "0", "¹": "1", "²": "2", "³": "3", "⁴": "4",
+    "⁵": "5", "⁶": "6", "⁷": "7", "⁸": "8", "⁹": "9",
+    "⁺": "+", "⁻": "-", "⁼": "=",
+}
+
+
+def _convert_unicode_scripts(text: str) -> str:
+    """Unicode 上下标字符 → LaTeX 上/下标命令（连续字符合成一组）。
+
+    例：H₂SO₄ → H$_{2}$SO$_{4}$；Ca²⁺ → Ca$^{2+}$；SO₄²⁻ → SO$_{4}$$^{2-}$。
+    """
+    out = []
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        if ch in _SUBSCRIPT_CHARS:
+            group = []
+            while i < n and text[i] in _SUBSCRIPT_CHARS:
+                group.append(_SUBSCRIPT_CHARS[text[i]])
+                i += 1
+            out.append(f"$_{{{''.join(group)}}}$")
+        elif ch in _SUPERSCRIPT_CHARS:
+            group = []
+            while i < n and text[i] in _SUPERSCRIPT_CHARS:
+                group.append(_SUPERSCRIPT_CHARS[text[i]])
+                i += 1
+            out.append(f"$^{{{''.join(group)}}}$")
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
+
 
 def format_chem_text(text: str) -> str:
     """化学文本自动排版：字母/括号后的数字转下标，尾部电荷转上标。
 
     先剥离尾部电荷（含电荷数），再对余下文本转下标，保证「SO42-」
     中 4 为下标、2- 为上标。已含 $（已手工排版）或为空时原样返回。
+    Unicode 上下标（H₂SO₄、H⁺、SO₄²⁻、Ca²⁺ 等）先转 LaTeX 命令。
 
     示例：H2SO4 → H$_2$SO$_4$；CH3Cl → CH$_3$Cl；OH- → OH$^{-}$；
-    NH4+ → NH$_4$$^{+}$；SO42- → SO$_4$$^{2-}$。
+    NH4+ → NH$_4$$^{+}$；SO42- → SO$_4$$^{2-}$；
+    H₂SO₄ → H$_{2}$SO$_{4}$；H⁺ → H$^{+}$；Ca²⁺ → Ca$^{2+}$。
     """
     if not text or "$" in text:
         return text
+    text = _convert_unicode_scripts(text)
     charge = ""
     m = _CHARGE_TAIL_RE.search(text)
     if m:
