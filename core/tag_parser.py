@@ -7,7 +7,6 @@
     [STRUCT:SMILES] 或 [STRUCT:SMILES,label=名称] （复合容器内可再加 ,id=引用名）
     [ARROW:反应物,产物,类型]
     [REACTION:反应物1;反应物2;...|产物1;产物2;...|反应条件]
-    [REACTIONMECH:反应物1;...|产物1;...|条件|机理箭头]（可追加第五段 numbering 显示原子序号）
     [NEWMAN:SMILES,角度]
     [ENERGY:点序列]
     [RETRO:目标,前体,转化名]   （逆合成空心箭头 ⇒）
@@ -48,14 +47,11 @@ _OPENERS = {
     "STRUCT": "[STRUCT:",
     "ARROW": "[ARROW:",
     "REACTION": "[REACTION:",
-    "REACTIONMECH": "[REACTIONMECH:",
     "NEWMAN": "[NEWMAN:",
     "ENERGY": "[ENERGY:",
     "LEWIS": "[LEWIS:",
     "STEREO": "[STEREO:",
-    "MECH": "[MECH:",
     "CHARGE": "[CHARGE:",
-    "RESONANCE": "[RESONANCE:",
     "HBOND": "[HBOND:",
     "RETRO": "[RETRO:",
 }
@@ -125,11 +121,6 @@ def _parse_content(tag_type: str, content: str) -> list:
             after = [p for p in (ii, ai, pi) if p != -1 and p > li]
             label = content[lab_start:min(after)] if after else content[lab_start:]
         return [smi, label]
-    if tag_type == "MECH":
-        parts = content.split("|", 2)
-        while len(parts) < 3:
-            parts.append("")
-        return [p.strip() for p in parts]
     if tag_type == "CHARGE":
         if "|" in content:
             smi, _, charges = content.partition("|")
@@ -148,11 +139,6 @@ def _parse_content(tag_type: str, content: str) -> list:
     if tag_type == "REACTION":
         parts = content.split("|", 2)
         while len(parts) < 3:
-            parts.append("")
-        return [p.strip() for p in parts]
-    if tag_type == "REACTIONMECH":
-        parts = content.split("|", 4)
-        while len(parts) < 5:
             parts.append("")
         return [p.strip() for p in parts]
     if tag_type == "RETRO":

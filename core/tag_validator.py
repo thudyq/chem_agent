@@ -35,14 +35,6 @@ LABEL_MAX_LEN = 24
 # COMPOSITE 支持的布局（与 renderers/composite.py 保持一致）
 COMPOSITE_LAYOUTS = ("reaction_mech", "row", "energy", "resonance")
 
-# 已废弃的标记类型：渲染器已从 registry 移除（文件保留作参考）。
-# LLM 若仍输出（旧 prompt 缓存/旧回答），校验层拦截并给友好降级提示。
-DEPRECATED_TAGS = {
-    "MECH": "已废弃，请改用 COMPOSITE 的 [MECHARROW] 子标记",
-    "REACTIONMECH": "已废弃，请改用 COMPOSITE 的 reaction_mech 布局",
-    "RESONANCE": "已废弃，请改用 COMPOSITE 的 resonance 布局",
-}
-
 # 与 renderers/composite.py 相同的引用/端点提取正则
 _MECH_ARROW_RE = re.compile(
     r"^\s*([A-Za-z0-9_]+)\s*:\s*(\d+(?:-\d+)?)\s*(>>|>)\s*"
@@ -56,15 +48,12 @@ _TAG_NAMES = {
     "STRUCT": "结构式",
     "ARROW": "反应箭头",
     "REACTION": "反应方程式",
-    "REACTIONMECH": "反应机理图",
     "COMPOSITE": "复合图",
     "NEWMAN": "纽曼投影",
     "LEWIS": "Lewis 结构式",
     "ENERGY": "势能面",
     "STEREO": "楔形式",
-    "MECH": "机理箭头",
     "CHARGE": "电荷标注",
-    "RESONANCE": "共振结构式",
     "HBOND": "氢键标注",
     "RETRO": "逆合成箭头",
 }
@@ -75,14 +64,11 @@ _SMILES_FIELDS = {
     "STRUCT": lambda a: [a[0]] if a and a[0] else [],
     "ARROW": lambda a: [a[i] for i in (0, 1) if i < len(a) and a[i]],
     "REACTION": lambda a: _split_multi(a[0]) + _split_multi(a[1]) if len(a) >= 2 else [],
-    "REACTIONMECH": lambda a: _split_multi(a[0]) + _split_multi(a[1]) if len(a) >= 2 else [],
     "NEWMAN": lambda a: [a[0]] if a and a[0] else [],
     "LEWIS": lambda a: [a[0]] if a and a[0] else [],
     "STEREO": lambda a: [a[0]] if a and a[0] else [],
-    "MECH": lambda a: [a[0]] if a and a[0] else [],
     "CHARGE": lambda a: [a[0]] if a and a[0] else [],
     "HBOND": lambda a: [a[0]] if a and a[0] else [],
-    "RESONANCE": lambda a: [s.strip() for s in (a[0].split("~") if a and a[0] else [])],
     "RETRO": lambda a: [a[i] for i in (0, 1) if i < len(a) and a[i]],
 }
 
@@ -299,8 +285,6 @@ def validate_tag(tag: RenderTag) -> ValidationResult:
     # REASONING 为配对文本，不校验
     if ttype == "REASONING":
         return ValidationResult(tag, True)
-    if ttype in DEPRECATED_TAGS:
-        return ValidationResult(tag, False, DEPRECATED_TAGS[ttype])
     if ttype == "COMPOSITE":
         ok, reason = _validate_composite(args[0], args[1]) if len(args) >= 2 \
             else (False, "COMPOSITE 缺少容器参数")

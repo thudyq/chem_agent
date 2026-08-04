@@ -157,60 +157,6 @@ def test_reaction_bracket_atoms():
     assert t.args[2] == ""
 
 
-def test_reactionmech_basic():
-    """[REACTIONMECH] 基础解析：反应物 | 产物 | 条件 | 机理箭头。"""
-    tags = parse_tags("[REACTIONMECH:CCl;[OH-]|[Cl-];CO|SN2|1:0>0:0,0:1>2:0]")
-    assert len(tags) == 1
-    t = tags[0]
-    assert t.type == "REACTIONMECH"
-    assert t.args[0] == "CCl;[OH-]"
-    assert t.args[1] == "[Cl-];CO"
-    assert t.args[2] == "SN2"
-    assert t.args[3] == "1:0>0:0,0:1>2:0"
-
-
-def test_reactionmech_no_conditions():
-    """[REACTIONMECH] 省略条件时，args[2] 为空串。"""
-    tags = parse_tags("[REACTIONMECH:CCl;[OH-]|[Cl-];CO||1:0>0:0]")
-    assert len(tags) == 1
-    t = tags[0]
-    assert t.args[0] == "CCl;[OH-]"
-    assert t.args[1] == "[Cl-];CO"
-    assert t.args[2] == ""
-    assert t.args[3] == "1:0>0:0"
-
-
-def test_reactionmech_fishhook():
-    """[REACTIONMECH] 鱼钩箭头（单电子转移）解析。"""
-    tags = parse_tags("[REACTIONMECH:C=C;[Br]|[CH2]CBr|hv|1:0>>0:0,0:0>>0:1]")
-    assert len(tags) == 1
-    t = tags[0]
-    assert t.type == "REACTIONMECH"
-    assert t.args[3] == "1:0>>0:0,0:0>>0:1"
-
-
-def test_reactionmech_numbering_flag():
-    """[REACTIONMECH] 第五段 numbering 标志解析，缺省为空串。"""
-    tags = parse_tags("[REACTIONMECH:CCl;[OH-]|[Cl-];CO|SN2|1:0>0:0|numbering]")
-    t = tags[0]
-    assert len(t.args) == 5
-    assert t.args[4] == "numbering"
-
-    tags = parse_tags("[REACTIONMECH:CCl;[OH-]|[Cl-];CO|SN2|1:0>0:0]")
-    assert tags[0].args[4] == ""
-
-
-def test_mech_numbering_flag():
-    """[MECH] 第三段 numbering 标志解析，缺省为空串。"""
-    tags = parse_tags("[MECH:CCl.[OH-]|2>0,0>1|numbering]")
-    t = tags[0]
-    assert t.type == "MECH"
-    assert t.args == ["CCl.[OH-]", "2>0,0>1", "numbering"]
-
-    tags = parse_tags("[MECH:CCl.[OH-]|2>0,0>1]")
-    assert tags[0].args == ["CCl.[OH-]", "2>0,0>1", ""]
-
-
 def test_composite_basic():
     """[COMPOSITE] 基础解析：布局名 + 子标记列表。"""
     text = (
