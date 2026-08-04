@@ -134,6 +134,64 @@ def _mech_labeler(info):
     return lambda a: atom_main_label(a, hs.get(a.GetIdx(), 0))
 
 
+def draw_mech_arrows(mols: dict, arrows: list) -> list:
+    """绘制机理弯箭头（p0/p1 定位、端点吸附避让），返回 TikZ 行列表。
+
+    mols: {组件 id: {"mol": RDKit Mol, "shift": (x, y), ...}} 组件表。
+    arrows: [(src_id, src_pt, dst_id, dst_pt, kind), ...]——_parse_mech_arrows
+        输出；src_pt/dst_pt 为原子序号或 "a-b" 键中点。
+    未知组件 id / 无效端点的箭头跳过，不影响整体渲染。
+
+    逻辑：目标端先按原子中心定位（供源端选孤对槽位）；源端确定后，
+    再按实际源端把目标端吸附到标签边缘空隙（箭头尖不压标签）。
+    """
+    lines = []
+    for src_id, src_pt, dst_id, dst_pt, kind in arrows:
+        if src_id not in mols or dst_id not in mols:
+            continue
+        sm = mols[src_id]
+        dm = mols[dst_id]
+        slab = _mech_labeler(sm)
+        dlab = _mech_labeler(dm)
+        p1 = mech_arrow_origin(dm["mol"], dst_pt, dm["shift"],
+                               lone_pair_offset=False)
+        if p1 is None:
+            continue
+        p0 = mech_arrow_origin(sm["mol"], src_pt, sm["shift"],
+                               toward=(p1[0], p1[1]),
+                               prefer_single=(kind == "fishhook"),
+                               labeler=slab)
+        if p0 is None:
+            continue
+        p1 = mech_arrow_origin(dm["mol"], dst_pt, dm["shift"],
+                               lone_pair_offset=False,
+                               toward=(p0[0], p0[1]), labeler=dlab,
+                               bend_side=-1.0 if p0[2] else 1.0)
+        if p1 is None:
+            continue
+        bond_break = ("-" in src_pt
+                      and bond_order_of(sm["mol"], src_pt) == 1)
+        inset_start = (_ARROW_POINT_GAP if bond_break
+                       else (0.0 if (p0[2] or p0[3] or p0[4]) else 0.15))
+        aim_end = ("-" not in dst_pt and p1[4]
+                   and dm["mol"].GetAtomWithIdx(int(dst_pt)).GetAtomicNum() == 6)
+        tb = None
+        if aim_end:
+            da = dm["mol"].GetAtomWithIdx(int(dst_pt))
+            ax, ay = symbol_center(dm["mol"], int(dst_pt))
+            tb = (ax + dm["shift"][0], ay + dm["shift"][1],
+                  label_bond_margin(dlab(da)), _LABEL_TEXT_HALF_H)
+        inset_end = (_ARROW_LABEL_GAP if aim_end
+                     else (0.0 if p1[4] else 0.10))
+        lines.extend(
+            mech_arrow_between(p0[0], p0[1], p1[0], p1[1], kind,
+                               from_bond=p0[2], inset_start=inset_start,
+                               inset_end=inset_end, bond_break=bond_break,
+                               aim_end=aim_end, text_box=tb)
+        )
+    return lines
+
+
 def _collect_components(children):
     structs = []
     sequence = []
@@ -538,51 +596,7 @@ def render_composite(layout: str, children: list) -> str:
         else:
             lines.append(f"  \\draw[->, very thick] ({x1:.2f},{-yoff:.2f}) -- ({x2:.2f},{-yoff:.2f});")
 
-    for src_id, src_pt, dst_id, dst_pt, kind in _parse_mech_arrows(mech_specs):
-        if src_id not in mols or dst_id not in mols:
-            continue
-        sm = mols[src_id]
-        dm = mols[dst_id]
-        slab = _mech_labeler(sm)
-        dlab = _mech_labeler(dm)
-        # 目标端先按原子中心定位（供源端选孤对槽位）；源端确定后，
-        # 再按实际源端把目标端吸附到标签边缘空隙（箭头尖不压标签）
-        p1 = mech_arrow_origin(dm["mol"], dst_pt, dm["shift"],
-                               lone_pair_offset=False)
-        if p1 is None:
-            continue
-        p0 = mech_arrow_origin(sm["mol"], src_pt, sm["shift"],
-                               toward=(p1[0], p1[1]),
-                               prefer_single=(kind == "fishhook"),
-                               labeler=slab)
-        if p0 is None:
-            continue
-        p1 = mech_arrow_origin(dm["mol"], dst_pt, dm["shift"],
-                               lone_pair_offset=False,
-                               toward=(p0[0], p0[1]), labeler=dlab,
-                               bend_side=-1.0 if p0[2] else 1.0)
-        if p1 is None:
-            continue
-        bond_break = ("-" in src_pt
-                      and bond_order_of(sm["mol"], src_pt) == 1)
-        inset_start = (_ARROW_POINT_GAP if bond_break
-                       else (0.0 if (p0[2] or p0[3] or p0[4]) else 0.15))
-        aim_end = ("-" not in dst_pt and p1[4]
-                   and dm["mol"].GetAtomWithIdx(int(dst_pt)).GetAtomicNum() == 6)
-        tb = None
-        if aim_end:
-            da = dm["mol"].GetAtomWithIdx(int(dst_pt))
-            ax, ay = symbol_center(dm["mol"], int(dst_pt))
-            tb = (ax + dm["shift"][0], ay + dm["shift"][1],
-                  label_bond_margin(dlab(da)), _LABEL_TEXT_HALF_H)
-        inset_end = (_ARROW_LABEL_GAP if aim_end
-                     else (0.0 if p1[4] else 0.10))
-        lines.extend(
-            mech_arrow_between(p0[0], p0[1], p1[0], p1[1], kind,
-                               from_bond=p0[2], inset_start=inset_start,
-                               inset_end=inset_end, bond_break=bond_break,
-                               aim_end=aim_end, text_box=tb)
-        )
+    lines.extend(draw_mech_arrows(mols, _parse_mech_arrows(mech_specs)))
 
     lines.append(r"\end{tikzpicture}")
     return "\n".join(lines)
