@@ -108,7 +108,7 @@ def test_valid_tag_survives_among_bad(fake_rdkit):
 def test_pipeline_mixed_degrades(fake_rdkit, fake_renderers, monkeypatch):
     llm_text = ("好的 [STRUCT:c1ccccc1]，坏的 [STRUCT:XYZABC]，"
                 "半截 [STRUCT:c1c")
-    monkeypatch.setattr("app.ask_llm", lambda q: llm_text)
+    monkeypatch.setattr("app.ask_llm", lambda *a, **k: llm_text)
     from app import process_question
     result = process_question("测试")
     assert "RENDERED:c1ccccc1" in result

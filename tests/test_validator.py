@@ -116,7 +116,7 @@ def test_composite_charge_unknown_id(fake_rdkit):
 def test_pipeline_degrades_invalid_tags(fake_rdkit, fake_renderers, monkeypatch):
     llm_text = ("苯是 [STRUCT:c1ccccc1]，无效 [STRUCT:XYZABC]，"
                 "超长 [STRUCT:CO,label=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]。")
-    monkeypatch.setattr("app.ask_llm", lambda q: llm_text)
+    monkeypatch.setattr("app.ask_llm", lambda *a, **k: llm_text)
     result = process_question("测试")
     assert "RENDERED:c1ccccc1" in result
     assert "无效 SMILES「XYZABC」" in result

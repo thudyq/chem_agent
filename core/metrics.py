@@ -82,12 +82,47 @@ def evaluate_compliance(questions: list, *, max_corrections: int = 1) -> dict:
             "tags": len(tags),
             "invalid": len(invalid),
             "truncated": bool(trunc),
+            "llm_output": resp,
+            "invalid_details": [(r.tag.raw, r.reason) for r in invalid],
+            "render_fail": render_fail,
         })
     return stats
 
 
 def _pct(a: int, b: int) -> str:
     return f"{100.0 * a / b:.1f}%" if b else "—"
+
+
+def format_detail(stats: dict, output_limit: int = 300) -> str:
+    """逐问题详情：每个问题的状态、标记情况、非法标记原因与 LLM 输出摘要。
+
+    output_limit: 每条 LLM 输出的最大显示字符数（完整版用 --detail-file 写文件）。
+    """
+    lines = ["逐问题详情", "=========="]
+    for i, r in enumerate(stats["responses"], 1):
+        lines.append(f"\n[{i}] 问题：{r['question']}")
+        if r["status"] == "llm_fail":
+            lines.append("    状态：LLM 调用失败（无输出）")
+            continue
+        flags = []
+        if r["truncated"]:
+            flags.append("截断")
+        if r["invalid"]:
+            flags.append(f"{r['invalid']} 非法")
+        if r["render_fail"]:
+            flags.append(f"{r['render_fail']} 渲染失败")
+        lines.append(f"    状态：ok（标记 {r['tags']} 个"
+                     + (f"，{'、'.join(flags)}" if flags else "") + "）")
+        for raw, reason in r["invalid_details"]:
+            lines.append(f"    ✗ {raw} → {reason}")
+        out = r["llm_output"]
+        shown = out if len(out) <= output_limit else out[:output_limit] + "…"
+        lines.append(f"    LLM 输出：\n{_indent(shown)}")
+    return "\n".join(lines)
+
+
+def _indent(text: str, prefix: str = "      ") -> str:
+    return "\n".join(prefix + ln for ln in text.splitlines())
 
 
 def format_report(stats: dict) -> str:
@@ -124,5 +159,13 @@ if __name__ == "__main__":
     if not questions:
         print("用法: python -m core.metrics \"问题1\" \"问题2\" ...")
         print("      python -m core.metrics --questions-file questions.txt")
+        print("      --detail-file FILE 把每条 LLM 完整输出写入文件")
         sys.exit(1)
-    print(format_report(evaluate_compliance(questions)))
+    stats = evaluate_compliance(questions)
+    print(format_report(stats))
+    print()
+    print(format_detail(stats))
+    if "--detail-file" in sys.argv:
+        i = sys.argv.index("--detail-file")
+        with open(sys.argv[i + 1], "w", encoding="utf-8") as f:
+            f.write(format_detail(stats, output_limit=1 << 30))  # 完整输出

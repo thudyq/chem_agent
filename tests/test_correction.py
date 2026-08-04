@@ -33,7 +33,7 @@ def flawed_renderers(monkeypatch):
 def test_no_failure_no_retry(fake_rdkit, fake_renderers, monkeypatch):
     calls = []
     monkeypatch.setattr(
-        "app.ask_llm", lambda q: calls.append(q) or "苯是 [STRUCT:c1ccccc1]。")
+        "app.ask_llm", lambda *a, **k: calls.append(a[0] if a else None) or "苯是 [STRUCT:c1ccccc1]。")
     result = process_question("画苯")
     assert len(calls) == 1, "无失败不应触发修正重试"
     assert "RENDERED:c1ccccc1" in result
@@ -47,7 +47,7 @@ def test_correction_after_validation_failure(fake_rdkit, fake_renderers,
         "苯是 [STRUCT:c1ccccc1]。",     # 修正版
     ]
     monkeypatch.setattr(
-        "app.ask_llm", lambda q: calls.append(q) or answers.pop(0))
+        "app.ask_llm", lambda *a, **k: calls.append(a[0] if a else None) or answers.pop(0))
     result = process_question("画苯")
     assert len(calls) == 2, "应触发一次修正重试"
     assert "RENDERED:c1ccccc1" in result
@@ -63,7 +63,7 @@ def test_correction_after_render_failure(fake_rdkit, flawed_renderers,
         "看 [STRUCT:c1ccccc1]。",       # 修正版
     ]
     monkeypatch.setattr(
-        "app.ask_llm", lambda q: calls.append(q) or answers.pop(0))
+        "app.ask_llm", lambda *a, **k: calls.append(a[0] if a else None) or answers.pop(0))
     result = process_question("画苯")
     assert len(calls) == 2
     assert "RENDERED:c1ccccc1" in result
@@ -74,7 +74,7 @@ def test_correction_exhausted_degrades(fake_rdkit, fake_renderers,
                                        monkeypatch):
     calls = []
     monkeypatch.setattr(
-        "app.ask_llm", lambda q: calls.append(q) or "苯是 [STRUCT:XYZABC]。")
+        "app.ask_llm", lambda *a, **k: calls.append(a[0] if a else None) or "苯是 [STRUCT:XYZABC]。")
     result = process_question("画苯")
     assert len(calls) == 2, "最多修正一次，不应无限重试"
     assert "图示无法渲染" in result

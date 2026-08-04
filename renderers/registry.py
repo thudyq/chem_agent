@@ -8,15 +8,12 @@
 from .structure import render_structure
 from .arrow import render_arrow
 from .reaction import render_reaction
-from .reaction_mech import render_reaction_mech
 from .composite import render_composite
 from .newman import render_newman
 from .lewis import render_lewis
 from .energy import render_energy
 from .stereo import render_stereo
-from .mechanism import render_mechanism
 from .charge import render_charge
-from .resonance import render_resonance
 from .hbond import render_hbond
 from .retro import render_retro
 
@@ -24,15 +21,12 @@ RENDERER_REGISTRY = {
     "STRUCT": render_structure,
     "ARROW": render_arrow,
     "REACTION": render_reaction,
-    "REACTIONMECH": render_reaction_mech,
     "COMPOSITE": render_composite,
     "NEWMAN": render_newman,
     "LEWIS": render_lewis,
     "ENERGY": render_energy,
     "STEREO": render_stereo,
-    "MECH": render_mechanism,
     "CHARGE": render_charge,
-    "RESONANCE": render_resonance,
     "HBOND": render_hbond,
     "RETRO": render_retro,
 }
