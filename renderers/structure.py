@@ -6,6 +6,22 @@
   - label 精确定位：tikzpicture 包裹 + \\node[anchor=north] 置于结构下方
 """
 
+import re
+
+# 游离氢组分（[H]/[H+] 独立组分，前后是 . 或边界）——LLM 违规输出质子的产物。
+# 在 mol2chemfig/RDKit 处理时触发 RemoveHs 警告（Drawbacks C4）且可能渲染失败。
+_FREE_H_RE = re.compile(r"(?:^|(?<=\.))\[H\+?\](?=\.|$)")
+
+
+def _strip_free_hydrogen(smiles: str) -> str:
+    """移除 SMILES 中的游离氢组分（[H]/[H+] 独立组分）。
+
+    有邻居的 [H]（如 [H]O[H] 的水）与 [H][H] 氢气不受影响。
+    返回清理后的 SMILES（可能为空）。
+    """
+    s = _FREE_H_RE.sub("", smiles)
+    return re.sub(r"\.+", ".", s).strip(".")
+
 
 def smiles_to_chemfig(smiles: str, aromatic: bool = True):
     """SMILES → \\chemfig{...} 代码字符串；任何失败返回 None。
@@ -22,6 +38,9 @@ def smiles_to_chemfig(smiles: str, aromatic: bool = True):
             return None
     except ImportError:
         pass
+    smiles = _strip_free_hydrogen(smiles)
+    if not smiles:
+        return None
     try:
         from mol2chemfigPy3 import mol2chemfig
         result = mol2chemfig(smiles, aromatic=aromatic, inline=True)

@@ -736,6 +736,8 @@ def prepare_mol(smiles: str, *, add_hs: bool = False, kekulize: bool = False,
     if mol is None:
         return None
 
+    mol = _remove_free_hydrogens(mol)
+
     if add_hs:
         mol = Chem.AddHs(mol)
 
@@ -758,6 +760,25 @@ def prepare_mol(smiles: str, *, add_hs: bool = False, kekulize: bool = False,
     if allow_aromatic:
         _regularize_kekule(mol)
     return mol
+
+
+def _remove_free_hydrogens(mol):
+    """移除游离氢原子（degree=0，如 SMILES 中独立的 [H]/[H+] 质子组分）。
+
+    RDKit PrepareMolForDrawing 内部 RemoveHs 对无邻居的氢打
+    "not removing hydrogen atom without neighbors" 警告（C4）；游离氢
+    不属于任何化学键（LLM 违规输出质子的产物），提前移除让图干净并消除警告。
+    正常氢（如 [H]O[H] 的 H，有 O 邻居）不受影响。
+    """
+    from rdkit import Chem
+    free = [a.GetIdx() for a in mol.GetAtoms()
+            if a.GetAtomicNum() == 1 and a.GetDegree() == 0]
+    if not free:
+        return mol
+    rw = Chem.RWMol(mol)
+    for idx in sorted(free, reverse=True):
+        rw.RemoveAtom(idx)
+    return rw.GetMol()
 
 
 def atom_pos(mol, idx: int) -> tuple[float, float]:
