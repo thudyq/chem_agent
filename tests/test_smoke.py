@@ -1,0 +1,154 @@
+# -*- coding: utf-8 -*-
+"""渲染器冒烟测试：核心渲染器对代表性输入产出合法完整 TikZ。
+
+替代端到端视觉验证——快速确认每个渲染器链路可运行、输出结构完整
+（\\begin{tikzpicture} 与 \\end{tikzpicture} 闭合、无错误串），
+不深入具体视觉细节（那是单元测试的职责）。
+
+覆盖：STRUCT / REACTION / COMPOSITE（reaction_mech/energy/row/resonance）
+/ ENERGY / NEWMAN / STEREO / LEWIS / CHARGE / HBOND / RETRO + 完整管线注入。
+"""
+
+import pytest
+
+rdkit = pytest.importorskip("rdkit", reason="rdkit 未安装，跳过冒烟测试")
+
+from core.tag_injector import inject_tags_into_text
+from core.tag_parser import parse_tags
+from core.tag_validator import validate_tags
+from renderers.registry import RENDERER_REGISTRY
+
+
+def _render(text):
+    """parse → validate → 渲染全部合法标记，返回 (输出列表, 校验失败数)。"""
+    tags = parse_tags(text)
+    valid, invalid = validate_tags(tags)
+    outs = []
+    for t in valid:
+        fn = RENDERER_REGISTRY.get(t.type)
+        if fn is not None:
+            outs.append(fn(*t.args))
+    return outs, len(invalid)
+
+
+def _assert_ok(out, *needles):
+    """冒烟断言：TikZ 完整闭合、无错误串、含关键元素。"""
+    assert out.startswith("\\begin{tikzpicture}") or out.startswith("\\chemfig"), \
+        f"输出应以 tikzpicture/chemfig 开头: {out[:60]}"
+    assert out.endswith("\\end{tikzpicture}") or out.startswith("\\chemfig"), \
+        "输出应以 \\end{tikzpicture} 闭合"
+    assert "渲染失败" not in out and "渲染失败" not in out, \
+        f"不应含错误串: {out[:120]}"
+    for nd in needles:
+        assert nd in out, f"缺少关键元素 {nd!r}"
+
+
+def test_smoke_struct():
+    outs, bad = _render("[STRUCT:c1ccccc1,label=苯]")
+    assert len(outs) == 1 and bad == 0
+    _assert_ok(outs[0], "苯")
+
+
+def test_smoke_reaction():
+    outs, bad = _render("[REACTION:CCO;O|CCOCC;O|H2SO4]")
+    assert len(outs) == 1 and bad == 0
+    _assert_ok(outs[0], "very thick")
+
+
+def test_smoke_composite_reaction_mech():
+    text = ("[COMPOSITE:reaction_mech]"
+            "[STRUCT:CCl,label=CH3Cl][PLUS][STRUCT:[OH-],id=nu,label=OH-]"
+            "[RXNARROW:SN2][STRUCT:CO,label=CH3OH][PLUS][STRUCT:[Cl-],label=Cl-]"
+            "[MECHARROW:nu:0>r0:0][MECHARROW:r0:0-1>r0:1]"
+            "[/COMPOSITE]")
+    outs, bad = _render(text)
+    assert len(outs) == 1 and bad == 0
+    _assert_ok(outs[0], "\\begin{scope}[shift=", "red")
+
+
+def test_smoke_composite_energy():
+    text = ("[COMPOSITE:energy][ENERGY:0,108,-20]"
+            "[STRUCT:CCl.[OH-],label=反应物,at=0]"
+            "[STRUCT:CCl.[OH-],label=过渡态,at=1]"
+            "[STRUCT:CO.[Cl-],label=产物,at=2]"
+            "[/COMPOSITE]")
+    outs, bad = _render(text)
+    assert len(outs) == 1 and bad == 0
+    _assert_ok(outs[0], "plot coordinates", "Ea $\\approx$")
+
+
+def test_smoke_composite_row():
+    text = ("[COMPOSITE:row][STRUCT:C=C,label=乙烯][RXNARROW:H2O / H+]"
+            "[STRUCT:CCO,label=乙醇][/COMPOSITE]")
+    outs, bad = _render(text)
+    assert len(outs) == 1 and bad == 0
+    _assert_ok(outs[0], "very thick")
+
+
+def test_smoke_composite_resonance():
+    text = ("[COMPOSITE:resonance][STRUCT:C1=CC=CC=C1]"
+            "[STRUCT:C1C=CC=CC=1][/COMPOSITE]")
+    outs, bad = _render(text)
+    assert len(outs) == 1 and bad == 0
+    _assert_ok(outs[0], "\\leftrightarrow")
+
+
+def test_smoke_energy():
+    outs, bad = _render("[ENERGY:0,108,-20]")
+    assert len(outs) == 1 and bad == 0
+    _assert_ok(outs[0], "plot coordinates")
+
+
+def test_smoke_newman():
+    outs, bad = _render("[NEWMAN:CC,60]")
+    assert len(outs) == 1 and bad == 0
+    # NEWMAN 不用 scope 封装（直接绝对坐标），关键元素是中心圆与取代基键
+    _assert_ok(outs[0], "circle")
+
+
+def test_smoke_stereo():
+    outs, bad = _render("[STEREO:C[C@H](O)C(=O)O]")
+    assert len(outs) == 1 and bad == 0
+    _assert_ok(outs[0])
+
+
+def test_smoke_lewis():
+    outs, bad = _render("[LEWIS:O]")
+    assert len(outs) == 1 and bad == 0
+    _assert_ok(outs[0], "\\fill")
+
+
+def test_smoke_charge():
+    outs, bad = _render("[CHARGE:OCC|0:δ-,1:δ+]")
+    assert len(outs) == 1 and bad == 0
+    _assert_ok(outs[0], "delta")
+
+
+def test_smoke_hbond():
+    outs, bad = _render("[HBOND:OCCO|0-3]")
+    assert len(outs) == 1 and bad == 0
+    _assert_ok(outs[0], "teal")
+
+
+def test_smoke_retro():
+    outs, bad = _render(
+        "[RETRO:CC(=O)c1ccccc1,c1ccccc1,Friedel-Crafts acylation]")
+    assert len(outs) == 1 and bad == 0
+    _assert_ok(outs[0])
+
+
+def test_smoke_pipeline_inject():
+    """完整管线冒烟：解析 → 校验 → 渲染 → 注入（无 LLM）。"""
+    text = "苯的结构：[STRUCT:c1ccccc1,label=苯] 和 [REACTION:CCO|CCOCC|H2SO4]。"
+    tags = parse_tags(text)
+    valid, invalid = validate_tags(tags)
+    assert len(invalid) == 0, [r.reason for r in invalid]
+    rendered = {}
+    for t in valid:
+        fn = RENDERER_REGISTRY.get(t.type)
+        if fn is not None:
+            rendered[t.raw] = fn(*t.args)
+    result = inject_tags_into_text(text, tags, rendered)
+    assert "[STRUCT:" not in result and "[REACTION:" not in result, "标记应被替换"
+    assert "\\begin{tikzpicture}" in result
+    assert "苯的结构" in result and "和" in result

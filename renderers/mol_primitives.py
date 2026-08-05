@@ -9,12 +9,24 @@ import math
 import re
 
 
-def atom_label(atom, explicit_hs: int = 0) -> str | None:
+def _only_h_neighbors(atom) -> bool:
+    """原子是否只连氢（无重原子邻居）——如孤立水分子 O。
+
+    用于标签方向特例：水的 O 只连 2 个 H，化学上写 H₂O（H 在前，
+    氢化物惯例），而 OH₂ 是羟基 -OH 的写法（仅 O 连 C 时正确）。
+    """
+    return all(nbr.GetAtomicNum() == 1 for nbr in atom.GetNeighbors())
+
+
+def atom_label(atom, explicit_hs: int = 0, flip: bool = False) -> str | None:
     """生成非隐式碳原子的标签（如 OH、NH₂、Cl、$^{+}$ 等）。
 
     纯碳原子（原子序 6、形式电荷 0）返回 None，表示不显示标签（键线式）。
     explicit_hs：已显式画出的 H 数（[XH]/氢键给体），从标签 H 计数中
     扣除，保证"标签 H + 画出 H"总数正确（如 OH 画出 H 后标签为 O）。
+    水分子特例：O 只连 H 时写 H₂O（H 在前）。
+    flip=True：键端在标签右侧时元素符号右移（OH→HO、NH₂→H₂N，
+    使键连接的原子靠近键端，Drawbacks 第 6 条）。
     """
     z = atom.GetAtomicNum()
     if z == 6 and atom.GetFormalCharge() == 0:
@@ -23,11 +35,16 @@ def atom_label(atom, explicit_hs: int = 0) -> str | None:
     sym = atom.GetSymbol()
     sym = sym[0].upper() + sym[1:]
     h = max(0, atom.GetTotalNumHs() - explicit_hs)
-    parts = sym
-    if h == 1:
-        parts += "H"
-    elif h > 1:
-        parts += f"H$_{{{h}}}$"
+    if sym == "O" and h and _only_h_neighbors(atom):
+        parts = f"H$_{{{h}}}$O" if h > 1 else "HO"
+    elif flip:
+        parts = (f"H$_{{{h}}}$" if h > 1 else ("H" if h == 1 else "")) + sym
+    else:
+        parts = sym
+        if h == 1:
+            parts += "H"
+        elif h > 1:
+            parts += f"H$_{{{h}}}$"
 
     fc = atom.GetFormalCharge()
     if fc:
@@ -515,12 +532,13 @@ def symbol_center(mol, idx: int, explicit_hs: int = 0) -> tuple[float, float]:
     return _dot_center(mol, idx, explicit_hs)
 
 
-def atom_main_label(atom, explicit_hs: int = 0) -> str | None:
+def atom_main_label(atom, explicit_hs: int = 0, flip: bool = False) -> str | None:
     """主标签（元素符号 + H 计数，**不含电荷**；纯碳环原子返回 None）。
 
     explicit_hs：已显式画出的 H 数（[XH]/氢键给体），从标签 H 计数中
     扣除，保证"标签 H + 画出 H"总数正确（如 OH 画出 H 后标签为 O）。
     电荷由 atom_charge_label 单独给出（圆圈形式标注）。
+    flip=True：键端在标签右侧时元素符号右移（OH→HO，Drawbacks 第 6 条）。
     """
     if atom.GetAtomicNum() == 6 and atom.IsInRing():
         return None
@@ -530,11 +548,17 @@ def atom_main_label(atom, explicit_hs: int = 0) -> str | None:
         sym = atom.GetSymbol()
         sym = sym[0].upper() + sym[1:]
     h = max(0, atom.GetTotalNumHs() - explicit_hs)
-    parts = sym
-    if h == 1:
-        parts += "H"
-    elif h > 1:
-        parts += f"H$_{{{h}}}$"
+    # 水分子特例：O 只连 H 时写 H₂O（H 在前），否则 OH 是羟基写法
+    if sym == "O" and h and _only_h_neighbors(atom):
+        parts = f"H$_{{{h}}}$O" if h > 1 else "HO"
+    elif flip:
+        parts = (f"H$_{{{h}}}$" if h > 1 else ("H" if h == 1 else "")) + sym
+    else:
+        parts = sym
+        if h == 1:
+            parts += "H"
+        elif h > 1:
+            parts += f"H$_{{{h}}}$"
     return parts
 
 
@@ -786,6 +810,23 @@ def atom_pos(mol, idx: int) -> tuple[float, float]:
     conf = mol.GetConformer()
     p = conf.GetAtomPosition(idx)
     return p.x, p.y
+
+
+def _label_flip_for(mol, idx: int) -> bool:
+    """标签是否应翻转（键端在标签右侧 → 元素符号右移，OH → HO）。
+
+    唯一重原子邻居在原子**右侧**且水平距离占主导时翻转；竖直键
+    （90°/270°）、多重原子邻居、无重原子邻居（如水）不翻转
+    （Drawbacks 第 6 条例外）。
+    """
+    atom = mol.GetAtomWithIdx(idx)
+    heavy = [n for n in atom.GetNeighbors() if n.GetAtomicNum() != 1]
+    if len(heavy) != 1:
+        return False
+    hx, hy = atom_pos(mol, heavy[0].GetIdx())
+    ax, ay = atom_pos(mol, idx)
+    dx, dy = hx - ax, hy - ay
+    return dx > 0.05 and abs(dx) > abs(dy)
 
 
 def scale_mol_coords(mol, factor: float) -> None:

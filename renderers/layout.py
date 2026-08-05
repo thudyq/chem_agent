@@ -13,8 +13,8 @@ from dataclasses import dataclass, field
 from typing import Any, Hashable, List, Tuple
 
 from .mol_primitives import (
-    atom_label, atom_main_label, atom_pos, bond_segments, charge_tikz,
-    label_bond_margin, lone_pair_tikz, mol_visual_bbox,
+    _label_flip_for, atom_label, atom_main_label, atom_pos, bond_segments,
+    charge_tikz, label_bond_margin, lone_pair_tikz, mol_visual_bbox,
 )
 
 
@@ -153,8 +153,9 @@ def molecule_scope_lines(mol, shift: Tuple[float, float], *,
     用于带 [XH]/[BOND]/[HBOND] 标注的分子，保证原有键线式逻辑不变。
     """
     hs = explicit_hs or {}
-    labeler = (lambda a: atom_label(a, hs.get(a.GetIdx(), 0))) if bond_line \
-        else (lambda a: atom_main_label(a, hs.get(a.GetIdx(), 0)))
+    labeler = (lambda a, flip=False: atom_label(a, hs.get(a.GetIdx(), 0), flip)) \
+        if bond_line \
+        else (lambda a, flip=False: atom_main_label(a, hs.get(a.GetIdx(), 0), flip))
     lines = [
         f"  \\begin{{scope}}[shift={{({shift[0]:.2f},{shift[1]:.2f})}}]"
     ]
@@ -164,7 +165,8 @@ def molecule_scope_lines(mol, shift: Tuple[float, float], *,
     for atom in mol.GetAtoms():
         x, y = atom_pos(mol, atom.GetIdx())
         idx = atom.GetIdx()
-        lab = labeler(atom)
+        # 键端在标签右侧时翻转标签（OH→HO），使键连的元素符号靠近键端
+        lab = labeler(atom, flip=_label_flip_for(mol, idx))
         if lab:
             lines.append(
                 f"    \\node[fill=white, inner sep=1pt] at ({x:.2f},{y:.2f}) {{{lab}}};"
