@@ -83,3 +83,5 @@ def render_hbond(smiles: str, pairs_str: str = "") -> str:
 if __name__ == "__main__":
     print("[1] 乙二醇分子内氢键: OCCO | 0-3")
     print(render_hbond("OCCO", "0-3"))
+    print("\n[2] 无效 SMILES（应降级提示）:")
+    print(render_hbond("XYZ", "0-1"))

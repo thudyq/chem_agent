@@ -45,12 +45,14 @@ def render_charge(smiles: str, charges_str: str = "") -> str:
             continue
         x, y = symbol_center(mol, idx)
         label = format_partial_charge(raw_label)
-        lines.append(f"  \\node[font=\\small, red] at ({x+0.30:.2f},{y+0.30:.2f}) {{{label}}};")
+        lines.append(f"  \\node[font=\\small, red] at ({x+0.24:.2f},{y+0.24:.2f}) {{{label}}};")
 
     lines.append("\\end{tikzpicture}")
     return "\n".join(lines)
 
 
 if __name__ == "__main__":
-    print("[1] HCl 的极性: [CHARGE:Cl|0:δ-,1:δ+]")
-    print(render_charge("Cl", "0:δ-"))
+    print("[1] 乙醇部分电荷: [CHARGE:OCC|0:δ-,1:δ+]")
+    print(render_charge("OCC", "0:δ-,1:δ+"))
+    print("\n[2] 无效 SMILES（应降级提示）:")
+    print(render_charge("XYZ", "0:δ-"))

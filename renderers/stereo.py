@@ -85,3 +85,5 @@ if __name__ == "__main__":
     print(render_stereo("C[C@H](O)C(=O)O"))
     print("\n[2] (S)-2-氨基丁酸 CC[C@@H](N)C(=O)O:")
     print(render_stereo("CC[C@@H](N)C(=O)O"))
+    print("\n[3] 无手性中心（应提示）:")
+    print(render_stereo("CCO"))

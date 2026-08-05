@@ -20,28 +20,6 @@ else:
     from .layout import layout_row, molecule_scope_lines
 
 
-# -*- coding: utf-8 -*-
-r"""renderers/retro.py — [RETRO] 标记渲染器：逆合成分析箭头（推导符号 ⇒）。
-
-逆合成箭头与正反应箭头（[ARROW] 的实心 ->）的视觉区别：采用**双线推导
-箭头**（⇒，双线杆 + 实心箭头尖，不依赖 TikZ 箭头库），较粗；
-长度与普通反应箭头一致（1.3）。左侧目标分子（较复杂）⇒ 右侧合成子/
-前体（较简单），transform（断键/合成转化名）标于箭头上方。
-由统一布局引擎（R-7，renderers/layout.py）排布组件位置。
-"""
-
-if __name__ == "__main__":
-    import sys
-    from pathlib import Path
-
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from renderers.mol_primitives import format_chem_text, prepare_mol, scale_mol_coords
-    from renderers.layout import layout_row, molecule_scope_lines
-else:
-    from .mol_primitives import format_chem_text, prepare_mol, scale_mol_coords
-    from .layout import layout_row, molecule_scope_lines
-
-
 _ARR_W = 2.6        # 与普通反应箭头一致的占位宽
 _ARR_PAD = 0.65     # 实际箭头长度 = 2.6 - 2×0.65 = 1.3
 _MOL_SCALE = 0.8

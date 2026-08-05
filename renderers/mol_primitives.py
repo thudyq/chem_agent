@@ -35,7 +35,7 @@ def atom_label(atom, explicit_hs: int = 0, flip: bool = False) -> str | None:
     sym = atom.GetSymbol()
     sym = sym[0].upper() + sym[1:]
     h = max(0, atom.GetTotalNumHs() - explicit_hs)
-    if sym == "O" and h and _only_h_neighbors(atom):
+    if sym == "O" and h == 2 and _only_h_neighbors(atom):
         parts = f"H$_{{{h}}}$O" if h > 1 else "HO"
     elif flip:
         parts = (f"H$_{{{h}}}$" if h > 1 else ("H" if h == 1 else "")) + sym
@@ -332,7 +332,7 @@ def hbond_dots_tikz(fx: float, fy: float, tx: float, ty: float, *,
 _VALENCE_ELECTRONS = {1: 1, 5: 3, 6: 4, 7: 5, 8: 6, 9: 7,
                       14: 4, 15: 5, 16: 6, 17: 7, 35: 7, 53: 7}
 
-_LP_DIST = 0.30           # 孤对电子点到原子的固定距离
+_LP_DIST = 0.24           # 孤对电子点到原子的固定距离（原 0.30，调至 0.24 更紧凑）
 _BOND_GAP = 0.08          # 双键/三键平行线间距（与 bond_segments 一致）
 _ARROW_LABEL_GAP = 0.05   # 机理箭头端点与"字母标签"（C/Cl 等文字）的空隙
 _ARROW_POINT_GAP = 0.05   # 机理箭头端点与"点/线"（孤对电子点、断键键线）的空隙
@@ -549,7 +549,7 @@ def atom_main_label(atom, explicit_hs: int = 0, flip: bool = False) -> str | Non
         sym = sym[0].upper() + sym[1:]
     h = max(0, atom.GetTotalNumHs() - explicit_hs)
     # 水分子特例：O 只连 H 时写 H₂O（H 在前），否则 OH 是羟基写法
-    if sym == "O" and h and _only_h_neighbors(atom):
+    if sym == "O" and h == 2 and _only_h_neighbors(atom):
         parts = f"H$_{{{h}}}$O" if h > 1 else "HO"
     elif flip:
         parts = (f"H$_{{{h}}}$" if h > 1 else ("H" if h == 1 else "")) + sym
@@ -572,7 +572,7 @@ def atom_charge_label(atom) -> str | None:
     return f"${num}{sign}$"
 
 
-_CHARGE_POS_DIST = 0.42    # 电荷到元素符号中心的距离（不与孤对电子重叠）
+_CHARGE_POS_DIST = 0.34    # 电荷到元素符号中心的距离（原 0.42，调至 0.34；不与孤对电子重叠）
 _CHARGE_SCALE = 0.5        # 电荷圈缩放（为默认大小的一半）
 
 
@@ -816,10 +816,12 @@ def _label_flip_for(mol, idx: int) -> bool:
     """标签是否应翻转（键端在标签右侧 → 元素符号右移，OH → HO）。
 
     唯一重原子邻居在原子**右侧**且水平距离占主导时翻转；竖直键
-    （90°/270°）、多重原子邻居、无重原子邻居（如水）不翻转
-    （Drawbacks 第 6 条例外）。
+    （90°/270°）、多重原子邻居、无重原子邻居（如水）、**碳原子标签**
+    （甲基 CH₃，Drawbacks 第 6 条例外）不翻转。
     """
     atom = mol.GetAtomWithIdx(idx)
+    if atom.GetAtomicNum() == 6:
+        return False            # 甲基 CH₃ 不替换
     heavy = [n for n in atom.GetNeighbors() if n.GetAtomicNum() != 1]
     if len(heavy) != 1:
         return False

@@ -92,13 +92,13 @@ def test_numbering_flag():
 
 
 def test_lone_pair_origin_offset():
-    """进攻箭头起点比孤对电子点高 0.05（点距 0.30 + 空隙 0.05，绕元素符号中心）。"""
+    """进攻箭头起点比孤对电子点高 0.05（点距 0.24 + 空隙 0.05，绕元素符号中心）。"""
     out = _render(SN2_DEMO)
     o_pos = _resolve_node_positions(out, "OH")
     assert o_pos
     ox, oy = o_pos[0]
-    # "OH" 后缀宽 1 字符 -> 符号中心左移 0.13；正上方槽位，点距 0.30 + 0.05
-    expected = (ox - 0.13, oy + 0.35)
+    # "OH" 后缀宽 1 字符 -> 符号中心左移 0.13；正上方槽位，点距 0.24 + 0.05
+    expected = (ox - 0.13, oy + 0.29)
     m = re.search(r"\\draw\[->, thick, red\] \(([-\d.]+),([-\d.]+)\)", out)
     assert m is not None
     start = (float(m.group(1)), float(m.group(2)))
@@ -146,8 +146,8 @@ def test_lone_pairs_orthogonal_placement():
         dy = sy + float(dys) - cy
         # 正交摆放：偏移主轴对齐（|dx| 或 |dy| 小于点对半距）
         assert abs(dx) < 0.1 or abs(dy) < 0.1, f"斜向电子点: ({dx:.2f},{dy:.2f})"
-        # 点距 0.30（容差含点对半距 0.055）
-        assert abs(abs(dx) + abs(dy) - 0.30) < 0.08
+        # 点距 0.24（容差含点对半距 0.055）
+        assert abs(abs(dx) + abs(dy) - 0.24) < 0.08
 
 
 def _resolve_node_positions(out: str, label: str) -> list:
@@ -409,13 +409,13 @@ def test_charge_annotation_child():
     cx, cy = mp.symbol_center(mol, 0)
     ox, oy = mp.atom_pos(mol, 0)
     assert abs(cx - (ox - 0.13)) < 0.01          # 基准修正存在（绕 O 而非绕 OH）
-    # 输出中 δ- 节点的 x 应接近"符号中心+shift+0.30"而非"标签中心+shift+0.30"
+    # 输出中 δ- 节点的 x 应接近"符号中心+shift+0.24"（电荷距 0.34 的 45° 投影 ≈ 0.240）
     dnode = re.search(r"\\node\[font=\\small, red\] at \(([-\d.]+),([-\d.]+)\) \{\$\\delta\^-\$\}", out)
     assert dnode is not None
     dx = float(dnode.group(1))
     o_node = _resolve_node_positions(out, "OH")
     assert o_node
-    assert abs(dx - (o_node[0][0] - 0.13 + 0.30)) < 0.15
+    assert abs(dx - (o_node[0][0] - 0.13 + 0.24)) < 0.08
 
 
 def test_hbond_annotation_child():

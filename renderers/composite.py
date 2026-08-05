@@ -488,7 +488,7 @@ def render_composite(layout: str, children: list) -> str:
             x += info["shift"][0]
             y += info["shift"][1]
             lines.append(
-                f"  \\node[font=\\small, red] at ({x + 0.30:.2f},{y + 0.30:.2f}) "
+                f"  \\node[font=\\small, red] at ({x + 0.24:.2f},{y + 0.24:.2f}) "
                 f"{{{format_partial_charge(raw_label)}}};"
             )
         for fi, ti in info["hbonds"]:

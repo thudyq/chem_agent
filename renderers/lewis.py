@@ -59,3 +59,5 @@ if __name__ == "__main__":
     print(render_lewis("N"))
     print("\n[3] 甲醇 CO:")
     print(render_lewis("CO"))
+    print("\n[4] 无效 SMILES（应降级提示）:")
+    print(render_lewis("XYZ"))
