@@ -107,7 +107,7 @@ def test_lone_pair_origin_offset():
 
 
 def test_arrow_aim_end_and_bond_break_inset():
-    """字母标签（C）箭头终点退到标签包围盒外 ~0.10（不压文字）、沿自然切线
+    """字母标签（C）箭头终点退到标签正方形（边长 1.30）边缘外 0.05、沿自然切线
     指向原子中心（终点坐标适配切线方向）；σ 断键起点 inset 加在纵坐标
     （向下 0.05），不再沿箭头方向（向右）。"""
     out = _render(SN2_DEMO)
@@ -116,10 +116,13 @@ def test_arrow_aim_end_and_bond_break_inset():
         r"\(([-\d.]+),([-\d.]+)\) .. \(([-\d.]+),([-\d.]+)\);", out)
     assert len(curves) == 2
     atk, brk = curves[0], curves[1]
-    # 进攻箭头终点在 CH3 标签文字之外（文字半高 0.15 的顶边上方），指向 C 中心
+    # 进攻箭头终点在 CH3 标签正方形（中心=node 中心左移 0.26）边缘外 0.05
     c_pos = _resolve_node_positions(out, "CH$_{3}$")[0]
-    assert float(atk[5]) > c_pos[1] + 0.15, \
-        f"进攻箭头终点应位于标签文字之外(上方): ({atk[4]},{atk[5]})"
+    c_sym_x, c_sym_y = c_pos[0] - 0.26, c_pos[1]
+    atk_edge = max(abs(float(atk[4]) - c_sym_x),
+                   abs(float(atk[5]) - c_sym_y)) - 0.13
+    assert 0.0 <= atk_edge <= 0.11, \
+        f"进攻箭头终点应距 C 标签正方形边缘 0.05: ({atk[4]},{atk[5]})"
     # 断键起点 = C—Cl 键中点 (0.99,0) 纵向下 inset 0.05 → (0.99,-0.05)
     assert abs(float(brk[0]) - 0.99) < 0.01
     assert abs(float(brk[1]) - (-0.05)) < 0.01, \
@@ -182,9 +185,9 @@ def test_molecules_wrapped_in_scopes():
 
 
 def test_arrow_endpoints_near_atoms():
-    """箭头终点在标签文字之外、沿切线指向原子中心（复用 lewis/charge 定位逻辑）：
-    碳原子标签（CH₃）目标端退到标签包围盒外 ~0.10（不压文字），尖端指向 C；
-    杂原子标签（Cl）沿入射方向吸附在文字前空隙。"""
+    """箭头终点距"标签所占位置"边缘 0.05（统一 label_gap 规则）：原子标签按
+    边长 0.26 正方形（中心=符号中心）计算，终点在正方形边缘外 0.05（浮动
+    0~0.10），沿切线指向原子中心。"""
     out = _render(SN2_DEMO)
     # 键中点箭头终点 -> CH3Cl 的 Cl；进攻箭头终点 -> CH3Cl 的 C
     c_positions = _resolve_node_positions(out, "CH$_{3}$")
@@ -196,16 +199,21 @@ def test_arrow_endpoints_near_atoms():
     assert len(ends) == 2
     attack_end = (float(ends[0][0]), float(ends[0][1]))
     bond_end = (float(ends[1][0]), float(ends[1][1]))
-    # 进攻箭头终点在 CH3 标签文字之外（文字半高 0.15 的顶边上方，不悬空过远），
-    # 且位于 C 符号（标签中心左侧 0.26）的右上侧——沿自然切线指向 C 原子中心
-    assert c_pos[1] + 0.15 < attack_end[1] < c_pos[1] + 0.35, \
-        f"进攻箭头终点应在标签上方空隙(不压文字): {attack_end}"
-    assert attack_end[0] > c_pos[0] - 0.26, \
-        f"进攻箭头终点应沿切线指向 C 符号: {attack_end}"
-    # 断键箭头终点（Cl 杂原子标签沿入射方向吸附）：Cl(margin 0.30)≈0.25；
-    # 旧实现为 0.10（落在标签文字上）
+    # 进攻箭头终点：距 C 标签正方形（半 0.13）边缘 0.05（浮动 0~0.10）。
+    # 用 max(|dx|,|dy|) 测"到轴对齐正方形边缘"的距离——方向无关
+    # （轴向 0.18、对角 0.23 都落在 [0.13, 0.13+0.10] 边缘带外）。
+    c_sym = (c_pos[0] - 0.26, c_pos[1])
+    atk_edge = max(abs(attack_end[0] - c_sym[0]),
+                   abs(attack_end[1] - c_sym[1])) - 0.13
+    assert 0.0 <= atk_edge <= 0.11, \
+        f"进攻箭头终点应距 C 标签正方形边缘 0.05: {atk_edge:.2f}"
+    assert attack_end[1] > c_pos[1] + 0.1, \
+        f"进攻箭头终点应在标签上方: {attack_end}"
+    # 断键箭头终点（Cl）：起点=键中点距 Cl 0.75 > 正方形 0.13 → 起点在正方形
+    # 外，末端退让到正方形边缘外 0.05（距 Cl 符号中心 ≈0.18~0.23）
     bond_dist = math.hypot(bond_end[0] - cl_pos[0], bond_end[1] - cl_pos[1])
-    assert 0.15 < bond_dist < 0.35, f"断键箭头终点压标签: {bond_dist:.2f}"
+    assert 0.13 < bond_dist < 0.30, \
+        f"断键箭头终点应距 Cl 标签正方形边缘 0.05: {bond_dist:.2f}"
 
 
 def test_format_chem_text():
@@ -281,33 +289,40 @@ def test_fishhook_arrows():
     srcs = sorted((float(c[0]), float(c[1])) for c in curves)
     assert srcs[0][0] < 1.5, f"π 键源端不在双键中点: {srcs[0]}"
     assert srcs[1][0] > 2.0, f"Br· 源端不在单电子点: {srcs[1]}"
-    # 两钩尖端均在 CH2 标签文字之外：Br· 钩在文字顶边上方、π 键钩在文字底边
-    # 下方（一上一下），各沿自然切线指向与 Br 成键的碳 C1，不压标签文字。
+    # 两钩尖端均指向与 Br 成键的碳 C1：距 C1 符号中心（node 中心左移 0.26、
+    # 含下标上移 0.025）的 0.26 正方形边缘外 0.05（≈0.18~0.23）；
+    # Br· 钩尖端在上方、π 键钩尖端在下方（一上一下），不压标签。
     # 取反应物 C=C 的 CH₂（产物 [CH2]CBr 的 CH₂ x≈7.7 需排除）
     ch2 = [p for p in _resolve_node_positions(out, "CH$_{2}$")
            if 0.5 < p[0] < 3.0]
     assert ch2
     c1 = max(ch2, key=lambda p: p[0])
+    c1_sym = (c1[0] - 0.26, c1[1] + 0.025)
     tips = sorted((float(c[4]), float(c[5])) for c in curves)
     up_tip = max(tips, key=lambda t: t[1])
     down_tip = min(tips, key=lambda t: t[1])
-    assert up_tip[1] > c1[1] + 0.15, f"Br· 钩尖端应在标签文字上方: {up_tip}"
-    assert down_tip[1] < c1[1] - 0.15, f"π 键钩尖端应在标签文字下方: {down_tip}"
+    up_dist = math.hypot(up_tip[0] - c1_sym[0], up_tip[1] - c1_sym[1])
+    down_dist = math.hypot(down_tip[0] - c1_sym[0], down_tip[1] - c1_sym[1])
+    assert 0.13 < up_dist < 0.30, f"Br· 钩尖端应距 C1 正方形边缘 0.05: {up_tip}"
+    assert 0.13 < down_dist < 0.30, f"π 键钩尖端应距 C1 正方形边缘 0.05: {down_tip}"
+    assert up_tip[1] > c1[1], f"Br· 钩尖端应在标签上方: {up_tip}"
+    assert down_tip[1] < c1[1], f"π 键钩尖端应在标签下方: {down_tip}"
 
 
 def test_mech_arrow_origin_label_snap():
     """端点定位单元测试（复用 lewis/charge 的 symbol_center）：带标签的原子
     端点定位到元素符号（碳标签垂直吸附在 C 正上方、杂原子沿入射方向），
-    距文字 ≈0.10；双键源端落在 π 电子云两杠之间；无标签保持原子中心。"""
+    距文字 ≈0.10；双键源端在键中点法线方向距外侧杠 0.05；无标签保持原子中心。"""
     import renderers.mol_primitives as mp
     mol = mp.prepare_mol("CCl")
     ax, ay = mp.atom_pos(mol, 1)
-    # 目标端（lone_pair_offset=False）：Cl 标签沿入射方向吸附，
-    # margin 0.30 - gap 0.11 = 0.19，朝 +x（toward 为全局坐标）
+    # 目标端（lone_pair_offset=False）：杂原子 Cl 返回元素符号中心
+    # （不沿入射偏移；切线退让由 mech_arrow_tikz 的 aim_end 处理）
     p = mp.mech_arrow_origin(mol, "1", lone_pair_offset=False,
                              toward=(3.0, 0.0), labeler=mp.atom_main_label)
     assert p[4] is True
-    assert abs((p[0] - ax) - 0.19) < 0.01 and abs(p[1] - ay) < 0.01
+    scx, scy = mp.symbol_center(mol, 1)
+    assert abs(p[0] - scx) < 0.01 and abs(p[1] - scy) < 0.01
     # 碳原子（CH₃）：目标端返回元素符号中心（C 字形位置，x 左移 2×0.13=0.26），
     # 供 mech_arrow_tikz 沿末端切线内缩、尖端指向原子中心
     cx, cy = mp.atom_pos(mol, 0)
@@ -318,7 +333,7 @@ def test_mech_arrow_origin_label_snap():
     assert abs(pc[0] - scx) < 0.01, \
         f"碳端点未与符号中心对齐: {pc[0]:.2f} vs {scx:.2f}"
     assert abs(pc[1] - scy) < 0.01
-    # 双键源端 = 键中点 + 垂直偏移 bond_gap/2（π 电子云两杠之间）
+    # 双键源端 = 键中点 + 垂直偏移 (bond_gap/2 + 0.05)：距"靠外杠"0.05
     alkene = mp.prepare_mol("C=C")
     bx, by = mp.atom_pos(alkene, 0)
     ex, ey = mp.atom_pos(alkene, 1)
@@ -327,8 +342,8 @@ def test_mech_arrow_origin_label_snap():
     dx, dy = ex - bx, ey - by
     L = math.hypot(dx, dy)
     px, py = -dy / L, dx / L
-    assert abs(pb[0] - ((bx + ex) / 2 + px * 0.04)) < 0.01
-    assert abs(pb[1] - ((by + ey) / 2 + py * 0.04)) < 0.01
+    assert abs(pb[0] - ((bx + ex) / 2 + px * 0.09)) < 0.01
+    assert abs(pb[1] - ((by + ey) / 2 + py * 0.09)) < 0.01
     # 源端默认 lone_pair_offset=True：Cl 有孤对电子，落在电子点上（不吸附）
     e = mp.mech_arrow_origin(mol, "1", toward=(3.0, 0.0))
     assert e[3] is True and e[4] is False
@@ -344,11 +359,11 @@ def test_mech_arrow_origin_label_snap():
                              toward=(5.0, 0.0), labeler=mp.atom_main_label)
     assert w[4] is False
     assert abs(w[0] - rx) < 0.01 and abs(w[1] - ry) < 0.01
-    # shift 参与吸附基准（toward 是全局坐标，原子位置需加 shift）
+    # shift 参与定位基准（toward 是全局坐标，原子位置需加 shift）
     r = mp.mech_arrow_origin(mol, "1", lone_pair_offset=False,
                              shift=(2.0, 0.0), toward=(5.0, 0.0),
                              labeler=mp.atom_main_label)
-    assert abs(r[0] - (ax + 2.0 + 0.19)) < 0.01
+    assert abs(r[0] - (ax + 2.0)) < 0.01
     # 键中点/电子点返回五元组且不吸附
     b = mp.mech_arrow_origin(mol, "0-1", toward=(3.0, 0.0),
                              labeler=mp.atom_main_label)

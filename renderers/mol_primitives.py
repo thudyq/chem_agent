@@ -335,11 +335,16 @@ _VALENCE_ELECTRONS = {1: 1, 5: 3, 6: 4, 7: 5, 8: 6, 9: 7,
 _LP_DIST = 0.24           # 孤对电子点到原子的固定距离（原 0.30，调至 0.24 更紧凑）
 _BOND_GAP = 0.08          # 双键/三键平行线间距（与 bond_segments 一致）
 _ARROW_LABEL_GAP = 0.05   # 机理箭头端点与"字母标签"（C/Cl 等文字）的空隙
-_ARROW_POINT_GAP = 0.05   # 机理箭头端点与"点/线"（孤对电子点、断键键线）的空隙
+_MECH_LABEL_GAP = 0.05    # 箭头始末端点距"标签所占位置"边缘的间距（0~0.10 浮动基准）
+_LABEL_SQUARE_HALF = 0.13 # 原子标签"所占位置"按边长 0.26 正方形（中心=符号中心，半=单字符半宽）
+_LP_DOT_RADIUS = 0.028    # 孤对电子/单电子点半径（lone_pair_tikz 同值）
+_ARROW_POINT_GAP = 0.05   # 机理箭头端点与"点/线"（孤对电子、单电子、键线段）的空隙
 _LABEL_TEXT_HALF_H = 0.15 # 标签文字半高估计（含上下标，垂直吸附基准）
 _ORTHO = [90.0, 180.0, 270.0, 0.0]      # 正交槽位（优先）
 _DIAG = [45.0, 135.0, 225.0, 315.0]     # 斜向槽位（正交占满时兜底）
 _CHAR_HALF_W = 0.13       # 标签单字符半宽估计（用于元素符号中心修正）
+_SUBSCRIPT_CHAR_W = 0.67  # 下标/上标内字符的宽度权重（相对普通字符；实测 OH₂ 反推 ≈0.67）
+_SUBSCRIPT_DEPTH_COMP = 0.025  # 含下标标签文字主体相对 node 中心的上移量（实测 ≈0.025）
 
 
 def _implicit_shown_hs(atom) -> int:
@@ -491,6 +496,12 @@ def lone_pair_angles(mol, idx: int) -> list:
     pairs, _ = lone_pair_count(atom)
     if pairs == 0:
         return []
+    # 结构简式 H₂O（隐式 H，O 无显式邻居，度 0）：按 1 block & 2 pair 规则
+    # （Instruction-for-Electrons §3.3 第 24 行：block 在 180°（左侧标签 H）
+    # → pair 在 60° 和 300°）。显式 H 的 Lewis 水（度 2，两根 O-H 键）不走
+    # 此分支，由 _place_pairs 按 block=2 特例产出左下/右下 225°/315°。
+    if atom.GetAtomicNum() == 8 and pairs == 2 and atom.GetDegree() == 0:
+        return [60.0, 300.0]
     avoid = [_charge_angle(mol, idx)] if atom.GetFormalCharge() != 0 else []
     angles = _place_pairs(pairs, _bond_blocks(mol, idx))
     if avoid:
@@ -508,11 +519,32 @@ def single_electron_angles(mol, idx: int) -> list:
     return _separate_cardinals(singles, blocked, taken)[:singles]
 
 
+def _weighted_plain_len(lab: str) -> float:
+    """标签可视宽度（普通字符 1 单位；$...$ 数学块内字符降权）。
+
+    下标/上标是 LaTeX 数学模式小字，视觉宽度小于普通字符；元素符号
+    中心的偏移估算需按加权宽度，否则对含下标标签（如 OH₂ 的 $_{2}$）
+    偏大。权重取 _SUBSCRIPT_CHAR_W（实测 OH₂ 反推 ≈0.67）。
+    """
+    w = 0.0
+    in_math = False
+    for c in lab:
+        if c == "$":
+            in_math = not in_math
+        elif c in "{}^_\\":
+            pass
+        else:
+            w += _SUBSCRIPT_CHAR_W if in_math else 1.0
+    return w
+
+
 def _dot_center(mol, idx: int, explicit_hs: int = 0) -> tuple[float, float]:
     """孤对电子点的环绕中心：元素符号在标签内的估计位置。
 
-    标签后缀（H 计数部分）使元素符号偏离标签中心向左，
-    按后缀可视宽度的一半左移修正（如 OH 的点绕 O 而非绕 OH 整体）。
+    元素符号在标签**左端**（如 OH、CH₃）→ 左移修正（点绕 O 而非绕 OH）；
+    在标签**右端**（如水的 H₂O）→ 右移修正。偏移按加权宽度估算
+    （下标/上标小字降权）。含下标标签文字主体相对 node 中心上移
+    （下标占下方空间）→ 环绕中心随之上移补偿，避免电荷/电子点重叠。
     explicit_hs 已显式画出的 H 会同步缩小后缀宽度。
     """
     atom = mol.GetAtomWithIdx(idx)
@@ -523,7 +555,13 @@ def _dot_center(mol, idx: int, explicit_hs: int = 0) -> tuple[float, float]:
         sym = sym[0].upper() + sym[1:]
         plain = re.sub(r"[$_{}^\\]", "", lab)
         if plain.startswith(sym):
-            x -= _CHAR_HALF_W * (len(plain) - len(sym))
+            x -= _CHAR_HALF_W * (_weighted_plain_len(lab)
+                                 - _weighted_plain_len(sym))
+        elif plain.endswith(sym):
+            x += _CHAR_HALF_W * (_weighted_plain_len(lab)
+                                 - _weighted_plain_len(sym))
+        if "$_{" in lab:
+            y += _SUBSCRIPT_DEPTH_COMP
     return x, y
 
 
@@ -1083,7 +1121,7 @@ def bond_order_of(mol, spec: str) -> int:
 def mech_arrow_origin(mol, spec: str, shift=(0.0, 0.0),
                       lone_pair_offset: bool = True, toward=None,
                       prefer_single: bool = False, labeler=None,
-                      label_gap: float = 0.11, bend_side: float = 1.0):
+                      label_gap: float = _MECH_LABEL_GAP, bend_side: float = 1.0):
     """解析机理箭头端点引用为画布坐标。
 
     参数:
@@ -1143,8 +1181,8 @@ def mech_arrow_origin(mol, spec: str, shift=(0.0, 0.0),
                         if (cx - mx) * px + (cy - my) * py < 0:
                             px, py = -px, -py
                         break
-            mx += px * _BOND_GAP / 2
-            my += py * _BOND_GAP / 2
+            mx += px * (_BOND_GAP / 2 + _ARROW_POINT_GAP)
+            my += py * (_BOND_GAP / 2 + _ARROW_POINT_GAP)
         return (mx + shift[0], my + shift[1], True, False, False)
     try:
         ia = int(spec)
@@ -1159,8 +1197,10 @@ def mech_arrow_origin(mol, spec: str, shift=(0.0, 0.0),
             angles = single_electron_angles(mol, ia)
         else:
             angles = lone_pair_angles(mol, ia)
+        is_single = prefer_single
         if not angles and not prefer_single:
             angles = single_electron_angles(mol, ia)
+            is_single = True
         if angles:
             cx, cy = _dot_center(mol, ia)
             cx += shift[0]
@@ -1172,9 +1212,13 @@ def mech_arrow_origin(mol, spec: str, shift=(0.0, 0.0),
                 cands = angles
             best = min(cands, key=lambda a: _ang_diff(a, 90.0))
             r = math.radians(best)
-            # 箭头起点沿槽位方向再外移 _ARROW_POINT_GAP，使其不与电子点完全重合
-            # （顶部槽位时即"起点比电子点高 0.05"）。
-            d = _LP_DIST + _ARROW_POINT_GAP
+            # 起点沿槽位方向外移：孤对电子在"两点连线段中垂线上"（距连线
+            # _ARROW_POINT_GAP）；单电子需考虑半径（_LP_DOT_RADIUS 之外再留
+            # _ARROW_POINT_GAP），使其不与电子点重叠。
+            if is_single:
+                d = _LP_DIST + _LP_DOT_RADIUS + _ARROW_POINT_GAP
+            else:
+                d = _LP_DIST + _ARROW_POINT_GAP
             return (cx + d * math.cos(r), cy + d * math.sin(r), False, True, False)
     if labeler is not None and toward is not None:
         lab = labeler(atom)
@@ -1186,12 +1230,10 @@ def mech_arrow_origin(mol, spec: str, shift=(0.0, 0.0),
                 # 由 mech_arrow_tikz 沿末端切线内缩 _ARROW_LABEL_GAP，
                 # 让终点坐标适配切线方向、尖端指向原子中心（不强行改切线）。
                 return (gx, gy, False, False, True)
-            tx, ty = toward
-            dx, dy = tx - gx, ty - gy
-            L = math.hypot(dx, dy) or 1.0
-            m = label_bond_margin(lab) - label_gap
-            return (gx + dx / L * m,
-                    gy + dy / L * m, False, False, True)
+            # 杂原子目标端返回元素符号中心（不沿入射偏移）——由
+            # mech_arrow_tikz 的 aim_end 沿末端切线退让到标签外，
+            # 保证切线指向元素符号中心（与碳目标端一致，Drawbacks 需求）。
+            return (gx, gy, False, False, True)
     return x + shift[0], y + shift[1], False, False, False
 
 
@@ -1276,7 +1318,33 @@ def mech_arrow_tikz(fx: float, fy: float, tx: float, ty: float,
         if text_box is not None:
             bcx, bcy, bhw, bhh = text_box
             ins += _text_extent_out(bcx, bcy, bhw, bhh, tx, ty, -ndx, -ndy)
+        # 末端不越过起点（否则切线反向、箭头退化为点/指向外面）：
+        # 退让距离不超过"起点沿切线方向到目标的投影距离"的 85%——
+        # 保证末端落在起点与目标之间，切线（控制点→末端）指向目标标签。
+        proj = (fx - tx) * ndx + (fy - ty) * ndy
+        ins = min(ins, abs(proj) * 0.85)
         ex, ey = tx - ins * ndx, ty - ins * ndy
+        # 控制点基于"起点→末端"（退让后的实际箭头段）重算：短箭头（断键）
+        # 时避免控制点悬在目标侧导致尖端与杆重叠；弯曲幅度随实际段长自适应。
+        d2x, d2y = ex - sx, ey - sy
+        l2 = math.hypot(d2x, d2y) or 1.0
+        p2x, p2y = -d2y / l2, d2x / l2
+        mid2_x, mid2_y = (sx + ex) / 2.0, (sy + ey) / 2.0
+        mag2 = min(0.30 * l2 + 0.15, 1.15)
+        mx_a, my_a = mid2_x + p2x * mag2, mid2_y + p2y * mag2
+        mx_b, my_b = mid2_x - p2x * mag2, mid2_y - p2y * mag2
+        if (bend >= 0) == (my_a >= my_b):
+            mx, my = mx_a, my_a
+        else:
+            mx, my = mx_b, my_b
+        # 切线校验：切线（控制点→末端）必须指向标签方向——标签视为
+        # "中心=符号中心、边长 1.30 的正方形"，切线方向应穿过它。
+        # 若切线方向与"末端→符号中心"方向夹角 > 90°（指向标签外），
+        # 翻转控制点到连线另一侧（bend 弯向修正）。
+        tdx, tdy = ex - mx, ey - my
+        gdx, gdy = tx - ex, ty - ey
+        if tdx * gdx + tdy * gdy < 0:
+            mx, my = (mx_b, my_b) if (mx, my) == (mx_a, my_a) else (mx_a, my_a)
 
     lines = []
     if kind == "fishhook":

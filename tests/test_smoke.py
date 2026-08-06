@@ -93,6 +93,26 @@ def test_smoke_composite_resonance():
     _assert_ok(outs[0], "\\leftrightarrow")
 
 
+def test_smoke_ethanol_ether_mechanism():
+    """乙醇→乙醚 SN2 机理（质子化物种）冒烟：验证渲染器能画完整机理图。
+
+    用正确的质子化物种标记（乙基氧鎓离子 CC[OH2+]、质子化乙醚 CC[OH+]CC），
+    覆盖：多组分 + 电荷 + 孤对电子 + 断键箭头。替代端到端（不调用 LLM）。
+    """
+    text = ("[COMPOSITE:reaction_mech]"
+            "[STRUCT:CCO,label=乙醇,id=nu][PLUS]"
+            "[STRUCT:CC[OH2+],label=乙基氧鎓离子,id=pe]"
+            "[RXNARROW:H2SO4,140°C]"
+            "[STRUCT:CC[OH+]CC,label=质子化乙醚,id=ps][PLUS]"
+            "[STRUCT:O,label=水,id=w]"
+            "[MECHARROW:nu:2>pe:1][MECHARROW:pe:1-2>pe:2]"
+            "[/COMPOSITE]")
+    outs, bad = _render(text)
+    assert len(outs) == 1 and bad == 0, [r.reason for r in bad]
+    _assert_ok(outs[0], "\\begin{scope}[shift=", "red",
+               "H$_{2}$O", "H$_2$SO$_4$")
+
+
 def test_smoke_energy():
     outs, bad = _render("[ENERGY:0,108,-20]")
     assert len(outs) == 1 and bad == 0

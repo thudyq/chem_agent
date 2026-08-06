@@ -62,7 +62,9 @@ if __name__ == "__main__":
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from renderers.mol_primitives import (
-        _ARROW_LABEL_GAP, _ARROW_POINT_GAP, _LABEL_TEXT_HALF_H, bond_order_of, format_chem_text,
+        _ARROW_LABEL_GAP, _ARROW_POINT_GAP, _LABEL_SQUARE_HALF,
+        _LABEL_TEXT_HALF_H, _MECH_LABEL_GAP,
+        bond_order_of, format_chem_text,
         format_partial_charge,
         hbond_dots_tikz, mech_arrow_between, mech_arrow_origin,
         mol_visual_bbox, parse_charge_pairs, parse_hbond_pairs, atom_label,
@@ -76,7 +78,9 @@ if __name__ == "__main__":
     )
 else:
     from .mol_primitives import (
-        _ARROW_LABEL_GAP, _ARROW_POINT_GAP, _LABEL_TEXT_HALF_H, bond_order_of, format_chem_text,
+        _ARROW_LABEL_GAP, _ARROW_POINT_GAP, _LABEL_SQUARE_HALF,
+        _LABEL_TEXT_HALF_H, _MECH_LABEL_GAP,
+        bond_order_of, format_chem_text,
         format_partial_charge,
         hbond_dots_tikz, mech_arrow_between, mech_arrow_origin,
         mol_visual_bbox, parse_charge_pairs, parse_hbond_pairs, atom_label,
@@ -170,15 +174,18 @@ def draw_mech_arrows(mols: dict, arrows: list) -> list:
                       and bond_order_of(sm["mol"], src_pt) == 1)
         inset_start = (_ARROW_POINT_GAP if bond_break
                        else (0.0 if (p0[2] or p0[3] or p0[4]) else 0.15))
-        aim_end = ("-" not in dst_pt and p1[4]
-                   and dm["mol"].GetAtomWithIdx(int(dst_pt)).GetAtomicNum() == 6)
+        aim_end = ("-" not in dst_pt and p1[4])
+        # p1[4]（on_label）：目标端已吸附到标签（碳与杂原子统一）。
+        # aim_end 让 mech_arrow_tikz 沿末端切线退让到标签外、切线指向元素符号。
         tb = None
         if aim_end:
             da = dm["mol"].GetAtomWithIdx(int(dst_pt))
             ax, ay = symbol_center(dm["mol"], int(dst_pt))
+            # 末端退让基于"标签所占位置"正方形（中心=符号中心、边长 1.30），
+            # 由 mech_arrow_tikz 沿切线退到正方形边缘外 inset_end(_MECH_LABEL_GAP)。
             tb = (ax + dm["shift"][0], ay + dm["shift"][1],
-                  label_bond_margin(dlab(da)), _LABEL_TEXT_HALF_H)
-        inset_end = (_ARROW_LABEL_GAP if aim_end
+                  _LABEL_SQUARE_HALF, _LABEL_SQUARE_HALF)
+        inset_end = (_MECH_LABEL_GAP if aim_end
                      else (0.0 if p1[4] else 0.10))
         lines.extend(
             mech_arrow_between(p0[0], p0[1], p1[0], p1[1], kind,
@@ -614,6 +621,17 @@ if __name__ == "__main__":
             "[STRUCT:CO,label=CH3OH][PLUS][STRUCT:[Cl-],label=Cl-]"
             "[MECHARROW:nu:0>r0:0][MECHARROW:r0:0-1>r0:1]"
             "[CONDITION:SN2]"
+            "[/COMPOSITE]",
+        ),
+        (
+            "乙醇→乙醚 SN2 机理（质子化物种 + 断键箭头 + 水 H₂O）",
+            "[COMPOSITE:reaction_mech]"
+            "[STRUCT:CCO,label=乙醇,id=nu][PLUS]"
+            "[STRUCT:CC[OH2+],label=乙基氧鎓离子,id=pe]"
+            "[RXNARROW:H2SO4,140°C]"
+            "[STRUCT:CC[OH+]CC,label=质子化乙醚,id=ps][PLUS]"
+            "[STRUCT:O,label=水,id=w]"
+            "[MECHARROW:nu:2>pe:1][MECHARROW:pe:1-2>pe:2]"
             "[/COMPOSITE]",
         ),
         (
