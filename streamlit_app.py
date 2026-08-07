@@ -46,6 +46,16 @@ _CODE_RE = re.compile(
 # 多轮对话：传给 LLM 的最大历史消息数（最近 N 条）
 _MAX_HISTORY = 10
 
+# LaTeX 公式分隔符 → Streamlit markdown（内置 KaTeX）可渲染格式。
+# LLM 输出常用 \\(...\\)（行内）/ \\[...\\]（块）包裹公式；markdown 会把
+# 反斜杠当转义符吃掉（\\[ → [），导致公式代码裸露显示。转换为 $...$ / $$...$$。
+_LATEX_INLINE_RE = re.compile(r"\\\((.*?)\\\)", re.DOTALL)
+_LATEX_DISPLAY_RE = re.compile(r"\\\[(.*?)\\\]", re.DOTALL)
+
+# mhchem \ce{...}（LLM 常用化学式宏，KaTeX 无 mhchem 扩展）：转 KaTeX 兼容。
+# 处理嵌套一层花括号（\ce{...} 内一般无嵌套；有则交给外层匹配）。
+_CE_RE = re.compile(r"\\ce\{((?:[^{}]|\{[^{}]*\})*)\}")
+
 # 会话文件（data/ 已 gitignore）与旧版单会话文件
 _SESSIONS_FILE = Path(__file__).resolve().parent / "data" / "chat_sessions.json"
 _LEGACY_FILE = Path(__file__).resolve().parent / "data" / "chat_history.json"
@@ -128,6 +138,51 @@ def _progress_updater(draft_box, throttle: float = 0.3):
 def _strip_render_code(text: str) -> str:
     """剥离渲染代码（TikZ/chemfig），只留纯文本。"""
     return _CODE_RE.sub("", text)
+
+
+def _convert_ce_math(body: str) -> str:
+    """把公式内容中的 mhchem \\ce{...} 转 KaTeX 兼容语法。
+
+    \\ce{C6H6 + HNO3 ->[H2SO4, \\triangle] C6H5NO2 + H2O} →
+    C_6H_6 + HNO_3 \\xrightarrow{H_2SO_4, \\triangle} C_6H_5NO_2 + H_2O
+    转换规则（按序）：箭头（->[条件]→\\xrightarrow、->→\\rightarrow、<=>→
+    \\rightleftharpoons）；电荷（元素/括号后的 数字?+/- → 上标，Fe2+→Fe^{2+}）；
+    数字下标（元素/括号后的数字 → 下标，C6→C_6）。
+    """
+    def _ce(m):
+        inner = m.group(1)
+        inner = re.sub(r"->\[([^\]]*)\]", r"\\xrightarrow{\1}", inner)
+        inner = inner.replace("<=>", r"\rightleftharpoons")
+        inner = inner.replace("->", r"\rightarrow")
+        inner = re.sub(r"([A-Za-z\)])(\d*)([+-])", r"\1^{\2\3}", inner)
+        inner = re.sub(r"([A-Za-z\)])(\d+)", r"\1_\2", inner)
+        return inner
+
+    return _CE_RE.sub(_ce, body)
+
+
+def _convert_latex_markers(text: str) -> str:
+    """LaTeX 公式分隔符 → Streamlit markdown 可渲染格式。
+
+    \\(...\\) → $...$（行内公式），\\[...\\] → $$...$$（块公式）。
+    Streamlit 的 markdown 内置 KaTeX 渲染 $...$/$$...$$（含 \\text{中文}、
+    \\xrightarrow 等）；不转换时反斜杠被 markdown 吃掉，公式代码裸露。
+    块公式的 $$ 必须独立成行且无前导空格（否则被当缩进代码块），
+    内容压缩为单段（KaTeX 块公式内不能有空行）。公式内的 \\ce{...}
+    同步转为 KaTeX 兼容语法。
+    """
+    def _disp(m):
+        body = _convert_ce_math(m.group(1))
+        body = re.sub(r"[ \t]+", " ", body).strip()
+        body = re.sub(r"\n\s*\n+", "\n", body)
+        return "\n$$\n" + body + "\n$$\n"
+
+    text = _LATEX_DISPLAY_RE.sub(_disp, text)
+    text = _LATEX_INLINE_RE.sub(
+        lambda m: "$" + _convert_ce_math(m.group(1)).strip() + "$", text)
+    # 裸 \\ce{...}（未用 \\(...\\)/\\[...\\] 包裹）→ 行内公式
+    text = _CE_RE.sub(lambda m: "$" + _convert_ce_math("\\ce{" + m.group(1) + "}").strip() + "$", text)
+    return text
 
 
 def _summarize_title(question: str) -> str:
@@ -232,7 +287,7 @@ def _render_answer(text: str) -> None:
             else:
                 st.code(content, language="latex")
         elif content.strip():
-            st.markdown(content)
+            st.markdown(_convert_latex_markers(content))
 
 
 def split_segments(text: str):
@@ -409,7 +464,7 @@ if cur is not None:
             if msg["role"] == "assistant":
                 _render_answer(msg["content"])
             elif msg["content"].strip():
-                st.markdown(msg["content"])
+                st.markdown(_convert_latex_markers(msg["content"]))
 
     # ---- 底部输入区：左侧 ＋ 附件，右侧文本框 ----
     st.divider()
