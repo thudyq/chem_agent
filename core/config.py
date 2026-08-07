@@ -76,8 +76,9 @@ class LLMConfig:
     base_url: str = field(default_factory=lambda: _get_str("BASE_URL").rstrip("/"))
     model_name: str = field(default_factory=lambda: _get_str_fallback("MODEL_NAME", "MODEL"))
     # 回退模型（FALLBACK_MODEL_NAME）：主模型（常为带思考的推理模型）思考过长
-    # 只输出 reasoning_content 而无正式回答时，自动切换到此模型重试。
-    # 建议填非推理对话模型（如 deepseek-chat）。留空则不回退。
+    # 只输出 reasoning_content 而无正式回答时，先在同模型上渐进降级思考强度，
+    # 仍失败再切换到此模型重试（回退调用强制 thinking=disabled）。
+    # 建议填轻量模型（如 deepseek-v4-flash）。留空则不回退。
     fallback_model_name: str = field(
         default_factory=lambda: _get_str("FALLBACK_MODEL_NAME")
     )
@@ -87,13 +88,19 @@ class LLMConfig:
     thinking_mode: str = field(
         default_factory=lambda: _get_str("THINKING_MODE").strip().lower()
     )
+    # 思考强度（REASONING_EFFORT）：low / high / max，仅思考模式开启时生效
+    # （THINKING_MODE=disabled 时不发送）；留空则不传，用 API 默认（high）。
+    # 映射：deepseek-v4-flash → low/high/max；deepseek-v4-pro → high/xhigh/max。
+    reasoning_effort: str = field(
+        default_factory=lambda: _get_str("REASONING_EFFORT").strip().lower()
+    )
     # 并发 LLM 调用上限（MAX_CONCURRENT_LLM，默认 4）：信号量限制同时进行的调用数，
     # 超出的请求排队等待——避免多用户并发打爆 LLM API 限流与本地资源。
     max_concurrent: int = field(
         default_factory=lambda: int(_get_str("MAX_CONCURRENT_LLM") or 4)
     )
     temperature: float = 0.2
-    # 推理模型（deepseek-reasoner 等）的 reasoning + content 共享 max_tokens 预算；
+    # 思考模式下 reasoning_content + content 共享 max_tokens 预算；
     # 2048 会被长思考链吃光导致 content 为空/截断，提到 8192。
     max_tokens: int = 8192
     # 生成 8192 tokens 需要 1~3 分钟，60s 会误杀正常生成（实测 Read timed out）。

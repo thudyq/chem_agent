@@ -117,6 +117,26 @@ def _stream_chat(url: str, headers: dict, payload: dict,
     return (content or None), finish_reason, reasoning_chars
 
 
+def _thinking_stages(config) -> list:
+    """主模型思考参数的渐进降级链，返回 [(mode, effort), ...]。
+
+    mode 为 None 表示不传 thinking 参数（用 API 默认，DeepSeek 默认为开启）。
+    「思考过长只输出 reasoning 而无正式回答」时逐级尝试下一级：配置的 effort
+    较高或未配时先降到 low，最后一级关思考（disabled）；THINKING_MODE=disabled
+    时无降级空间，仅一级。
+    """
+    if config.thinking_mode == "disabled":
+        return [("disabled", None)]
+    mode0 = "enabled" if config.thinking_mode == "enabled" else None
+    effort0 = (config.reasoning_effort
+               if config.reasoning_effort in ("low", "high", "max") else None)
+    stages = [(mode0, effort0)]
+    if effort0 != "low":
+        stages.append(("enabled", "low"))
+    stages.append(("disabled", None))
+    return stages
+
+
 def ask_llm(
     user_question: str,
     system_prompt: str = None,
@@ -166,24 +186,33 @@ def ask_llm(
         "max_tokens": max_tokens,
         "stream": True,
     }
-    if config.thinking_mode in ("enabled", "disabled"):
-        # DeepSeek 思考模式开关（官方 OpenAI 格式参数）
-        payload["thinking"] = {"type": config.thinking_mode}
-        print(f"[ask_llm] 思考模式: {config.thinking_mode}")
 
     print(f"[ask_llm] 调用 {model} @ {base_url}（temperature={temperature}, 流式）")
-    # 模型回退链：主模型思考过长（仅 reasoning 无 content）时自动切回退模型。
-    # 主模型其他失败（超时/HTTP/截断）仍按 retries 重试后再切。
-    models = [model]
+    # 渐进降级 + 回退链：主模型按配置逐级降思考强度（思考过长只输出 reasoning
+    # 而无正式回答时立即进入下一级，不在本级浪费重试）；回退模型作为最后一级
+    # 强制 thinking=disabled，保证给出正式回答。非思考类失败（超时/HTTP/截断）
+    # 按 retries 重试本级后再进入下一级。
+    stages = [(model, ts) for ts in _thinking_stages(config)]
     fallback = config.fallback_model_name.strip()
     if fallback and fallback != model:
-        models.append(fallback)
-        print(f"[ask_llm] 回退模型已配置: {fallback}")
+        stages.append((fallback, ("disabled", None)))
+        print(f"[ask_llm] 回退模型已配置: {fallback}（回退调用强制关闭思考）")
 
     with _SEMAPHORE:  # B3：限流——同时最多 max_concurrent 个 LLM 调用
-        for model_i, current_model in enumerate(models):
+        for stage_i, (current_model, (tmode, teffort)) in enumerate(stages):
             payload["model"] = current_model
-            switched = False
+            if tmode is None:
+                payload.pop("thinking", None)
+            else:
+                payload["thinking"] = {"type": tmode}
+            if teffort and tmode != "disabled":
+                payload["reasoning_effort"] = teffort
+            else:
+                payload.pop("reasoning_effort", None)
+            if stage_i == 0:
+                print(f"[ask_llm] 思考参数: thinking={tmode or 'API 默认'}, "
+                      f"effort={teffort or 'API 默认'}")
+            advanced = False
             for attempt in range(1, retries + 1):
                 try:
                     content, finish_reason, reasoning_chars = _stream_chat(
@@ -195,11 +224,16 @@ def ask_llm(
                     print(f"[ask_llm] 第 {attempt}/{retries} 次请求异常: {e}")
                 else:
                     if content is None:
-                        if reasoning_chars and model_i < len(models) - 1:
+                        if reasoning_chars and stage_i < len(stages) - 1:
+                            nmodel, (nmode, neffort) = stages[stage_i + 1]
+                            if nmodel != current_model:
+                                nxt = f"切换回退模型 {nmodel}（强制关闭思考）"
+                            else:
+                                nxt = (f"降级思考参数（thinking={nmode or '默认'}, "
+                                       f"effort={neffort or '默认'}）")
                             print(f"[ask_llm] 模型 {current_model} 思考过长"
-                                  f"（{reasoning_chars} 字符）且无正式回答，"
-                                  f"切换回退模型 {models[model_i + 1]} ...")
-                            switched = True
+                                  f"（{reasoning_chars} 字符）且无正式回答，{nxt} ...")
+                            advanced = True
                             break
                         if reasoning_chars:
                             print(f"[ask_llm] 第 {attempt}/{retries} 次失败"
@@ -224,10 +258,10 @@ def ask_llm(
                     backoff = attempt * 2
                     print(f"[ask_llm] {backoff}s 后重试 ...")
                     time.sleep(backoff)
-            if switched:
+            if advanced:
                 continue
 
-    print(f"[ask_llm] {' → '.join(models)} 重试均失败。")
+    print(f"[ask_llm] {' → '.join(dict.fromkeys(m for m, _ in stages))} 重试均失败。")
     return None
 
 
