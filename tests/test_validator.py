@@ -97,6 +97,37 @@ def test_composite_mecharrow_atom_out_of_range(fake_rdkit):
     assert "超出原子范围" in invalid[0].reason
 
 
+def test_composite_mecharrow_bond_form_midpoint_passes(fake_rdkit):
+    text = ("[COMPOSITE:reaction_mech][STRUCT:CCl,id=r0][RXNARROW]"
+            "[STRUCT:CO,id=p0][MECHARROW:r0:0>>r0:0+p0:0][/COMPOSITE]")
+    _, invalid = _validate(text)
+    assert len(invalid) == 0
+
+
+def test_composite_mecharrow_midpoint_unknown_id(fake_rdkit):
+    text = ("[COMPOSITE:reaction_mech][STRUCT:CCl,id=r0][RXNARROW]"
+            "[STRUCT:CO,id=p0][MECHARROW:r0:0>r0:0+ghost:0][/COMPOSITE]")
+    _, invalid = _validate(text)
+    assert len(invalid) == 1
+    assert "未知组件" in invalid[0].reason
+
+
+def test_composite_mecharrow_midpoint_atom_out_of_range(fake_rdkit):
+    text = ("[COMPOSITE:reaction_mech][STRUCT:CCl,id=r0][RXNARROW]"
+            "[STRUCT:CO,id=p0][MECHARROW:r0:0>r0:0+p0:9][/COMPOSITE]")
+    _, invalid = _validate(text)
+    assert len(invalid) == 1
+    assert "超出原子范围" in invalid[0].reason
+
+
+def test_composite_mecharrow_midpoint_bond_mixed_rejected(fake_rdkit):
+    text = ("[COMPOSITE:reaction_mech][STRUCT:CCl,id=r0][RXNARROW]"
+            "[STRUCT:CO,id=p0][MECHARROW:r0:0>r0:0-1+p0:0][/COMPOSITE]")
+    _, invalid = _validate(text)
+    assert len(invalid) == 1
+    assert "成键空白位端点格式错误" in invalid[0].reason
+
+
 def test_composite_real_mechanism_passes(fake_rdkit):
     text = ("[COMPOSITE:reaction_mech][STRUCT:CCO,label=乙醇,id=nu][PLUS]"
             "[STRUCT:CC[OH2+],label=质子化的乙醇,id=pe][RXNARROW]"

@@ -36,9 +36,11 @@ LABEL_MAX_LEN = 24
 COMPOSITE_LAYOUTS = ("reaction_mech", "row", "energy", "resonance")
 
 # 与 renderers/composite.py 相同的引用/端点提取正则
+# （目标端可选 "+id:原子" 后缀：成键空白位，两原子间中点）
 _MECH_ARROW_RE = re.compile(
     r"^\s*([A-Za-z0-9_]+)\s*:\s*(\d+(?:-\d+)?)\s*(>>|>)\s*"
-    r"([A-Za-z0-9_]+)\s*:\s*(\d+(?:-\d+)?)\s*$"
+    r"([A-Za-z0-9_]+)\s*:\s*(\d+(?:-\d+)?)"
+    r"(?:\s*\+\s*([A-Za-z0-9_]+)\s*:\s*(\d+))?\s*$"
 )
 
 # 标记类型 → 中文名（降级提示用）
@@ -221,14 +223,22 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
                 m = _MECH_ARROW_RE.match(spec)
                 if not m:
                     return False, f"MECHARROW 格式错误「{spec}」"
-                src_id, src_pt, _, dst_id, dst_pt = m.groups()
+                src_id, src_pt, _, dst_id, dst_pt, dst2_id, dst2_pt = m.groups()
                 if src_id not in comps or dst_id not in comps:
                     return False, f"MECHARROW 引用未知组件「{src_id}→{dst_id}」"
+                if dst2_id is not None:
+                    if dst2_id not in comps:
+                        return False, f"MECHARROW 引用未知组件「{dst2_id}」"
+                    if "-" in dst_pt:
+                        return False, f"MECHARROW 成键空白位端点格式错误「{spec}」"
                 if _RDKIT_OK:
                     if not _validate_mech_arrow_pt(src_pt, atom_counts.get(src_id, 0)):
                         return False, f"MECHARROW 源端点「{src_id}:{src_pt}」超出原子范围"
                     if not _validate_mech_arrow_pt(dst_pt, atom_counts.get(dst_id, 0)):
                         return False, f"MECHARROW 目标端点「{dst_id}:{dst_pt}」超出原子范围"
+                    if dst2_id is not None and not _validate_mech_arrow_pt(
+                            dst2_pt, atom_counts.get(dst2_id, 0)):
+                        return False, f"MECHARROW 目标端点「{dst2_id}:{dst2_pt}」超出原子范围"
         elif ctype in ("CHARGE", "HBOND") and len(child.args) >= 2:
             ref = child.args[0].strip()
             if ref not in comps:

@@ -43,7 +43,7 @@ def render_lewis(smiles: str) -> str:
         if charge:
             lines.append(f"  {charge}")
 
-    # 孤对电子点（共享逻辑：正交优先、点距 0.30、绕元素符号中心）
+    # 孤对电子点（共享逻辑：正交优先、点距 0.24、绕元素符号中心）
     for atom in mol.GetAtoms():
         for dot_line in lone_pair_tikz(mol, atom.GetIdx()):
             lines.append(f"  {dot_line}")

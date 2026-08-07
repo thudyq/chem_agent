@@ -334,12 +334,10 @@ _VALENCE_ELECTRONS = {1: 1, 5: 3, 6: 4, 7: 5, 8: 6, 9: 7,
 
 _LP_DIST = 0.24           # 孤对电子点到原子的固定距离（原 0.30，调至 0.24 更紧凑）
 _BOND_GAP = 0.08          # 双键/三键平行线间距（与 bond_segments 一致）
-_ARROW_LABEL_GAP = 0.05   # 机理箭头端点与"字母标签"（C/Cl 等文字）的空隙
 _MECH_LABEL_GAP = 0.05    # 箭头始末端点距"标签所占位置"边缘的间距（0~0.10 浮动基准）
 _LABEL_SQUARE_HALF = 0.13 # 原子标签"所占位置"按边长 0.26 正方形（中心=符号中心，半=单字符半宽）
 _LP_DOT_RADIUS = 0.028    # 孤对电子/单电子点半径（lone_pair_tikz 同值）
 _ARROW_POINT_GAP = 0.05   # 机理箭头端点与"点/线"（孤对电子、单电子、键线段）的空隙
-_LABEL_TEXT_HALF_H = 0.15 # 标签文字半高估计（含上下标，垂直吸附基准）
 _ORTHO = [90.0, 180.0, 270.0, 0.0]      # 正交槽位（优先）
 _DIAG = [45.0, 135.0, 225.0, 315.0]     # 斜向槽位（正交占满时兜底）
 _CHAR_HALF_W = 0.13       # 标签单字符半宽估计（用于元素符号中心修正）
@@ -1134,14 +1132,13 @@ def mech_arrow_origin(mol, spec: str, shift=(0.0, 0.0),
             同朝向槽位中优先取靠近正上方（90°）者。纯原子端点且给出
             labeler 时，还用于把端点吸附到标签边缘（见 labeler）。
         prefer_single: 为 True（鱼钩箭头）且原子有单电子时，落在单电子点上。
-        labeler: 提供后，纯原子端点（非键中点、非电子点）吸附到标签边缘，
-            复用元素符号定位逻辑（symbol_center，与孤对电子/部分电荷同源）：
-            碳原子标签（CH₃/CH₂/CH）目标端返回元素符号中心（C 字形位置），
-            由 mech_arrow_tikz 沿末端切线内缩 _ARROW_LABEL_GAP，使终点坐标
-            适配切线、尖端指向原子中心；杂原子标签沿入射方向吸附在标签
-            文字前的空隙（margin - label_gap）。
-        label_gap: 杂原子沿向吸附相对键线留白（label_bond_margin）的内收量。
-        bend_side: 保留参数（兼容旧调用），碳标签已改为切线内缩定位，不再使用。
+        labeler: 提供后，纯原子端点（非键中点、非电子点）返回元素符号中心
+            （symbol_center，与孤对电子/部分电荷同源）：碳与杂原子标签目标端
+            统一返回符号中心，由 mech_arrow_tikz 的 aim_end 沿切线退让到
+            "标签所占位置"（边长 0.26 正方形）边缘外 label_gap，尖端指向元素符号。
+        label_gap: aim_end 末端到标签正方形边缘的间距（_MECH_LABEL_GAP）。
+        bend_side: 弯向（-1 向下 / +1 向上），多键端点按弯向取"靠外杠"：
+            <0 取 y 最小杠（下）、>0 取 y 最大杠（上），再沿弯向外移 0.05。
 
     返回:
         (x, y, from_bond, on_electron, on_label)；spec 无效或原子越界返回 None。
@@ -1159,30 +1156,26 @@ def mech_arrow_origin(mol, spec: str, shift=(0.0, 0.0),
             return None
         xa, ya = atom_pos(mol, ia)
         xb, yb = atom_pos(mol, ib)
-        mx, my = (xa + xb) / 2.0, (ya + yb) / 2.0
+        # 键中点基于"渲染键线"（标签留白修剪后）的可视线段，与骨架键对齐：
+        # 键线两端按 label_bond_margin 修剪（如 C–Cl：C 端 CH₃=0.45、
+        # Cl 端=0.30），原子坐标中点会相对视觉键偏移 0.075。
+        segs = bond_segments_for(mol, ia, ib,
+                                 labeler=labeler or atom_main_label,
+                                 margin_fn=label_bond_margin)
         bond = mol.GetBondBetweenAtoms(ia, ib)
-        if bond is not None and bond_type_order(bond) >= 2:
-            # π 键电子云位于双键两杠之间：沿垂直方向偏移 bond_gap/2
-            dx, dy = xb - xa, yb - ya
-            L = math.hypot(dx, dy) or 1.0
-            ux, uy = dx / L, dy / L
-            px, py = -uy, ux
-            if bond.IsInRing():
-                # 环内双键的第二条平行线朝向环质心（与 bond_segments 同侧）
-                try:
-                    rings = mol.GetRingInfo().AtomRings()
-                except Exception:
-                    rings = []
-                for ring in rings:
-                    if ia in ring and ib in ring:
-                        cxs = [atom_pos(mol, i)[0] for i in ring]
-                        cys = [atom_pos(mol, i)[1] for i in ring]
-                        cx, cy = sum(cxs) / len(cxs), sum(cys) / len(cys)
-                        if (cx - mx) * px + (cy - my) * py < 0:
-                            px, py = -px, -py
-                        break
-            mx += px * (_BOND_GAP / 2 + _ARROW_POINT_GAP)
-            my += py * (_BOND_GAP / 2 + _ARROW_POINT_GAP)
+        if segs and bond is not None and bond_type_order(bond) >= 2 \
+                and len(segs) >= 2:
+            # 多键按"靠外杠"计算：取弯向一侧（bend_side<0 向下 → y 最小杠；
+            # >0 向上 → y 最大杠）的杠中点，再沿弯向（画布 y）外移 0.05。
+            cands = [((s[0] + s[2]) / 2.0, (s[1] + s[3]) / 2.0) for s in segs]
+            pick = (min if bend_side < 0 else max)
+            mx, my = pick(cands, key=lambda p: p[1])
+            my += -_ARROW_POINT_GAP if bend_side < 0 else _ARROW_POINT_GAP
+        elif segs:
+            x1, y1, x2, y2 = segs[0]
+            mx, my = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+        else:
+            mx, my = (xa + xb) / 2.0, (ya + yb) / 2.0
         return (mx + shift[0], my + shift[1], True, False, False)
     try:
         ia = int(spec)
@@ -1227,8 +1220,8 @@ def mech_arrow_origin(mol, spec: str, shift=(0.0, 0.0),
             gx, gy = sx + shift[0], sy + shift[1]
             if atom.GetAtomicNum() == 6:
                 # 碳原子（CH₃/CH₂/CH）：目标端取元素符号中心（C 字形位置），
-                # 由 mech_arrow_tikz 沿末端切线内缩 _ARROW_LABEL_GAP，
-                # 让终点坐标适配切线方向、尖端指向原子中心（不强行改切线）。
+                # 由 mech_arrow_tikz 的 aim_end 沿切线退让到正方形边缘外，
+                # 尖端指向原子中心（与杂原子目标端一致）。
                 return (gx, gy, False, False, True)
             # 杂原子目标端返回元素符号中心（不沿入射偏移）——由
             # mech_arrow_tikz 的 aim_end 沿末端切线退让到标签外，
@@ -1248,7 +1241,7 @@ def mech_arrow_between(fx: float, fy: float, tx: float, ty: float,
 
     bond_break（σ 断键源）的起点 inset 改为纵坐标向下偏移 inset_start
     （贴近键线下方），而非沿箭头方向内缩；aim_end（字母标签目标）让
-    终点沿末端切线退到 text_box 外 inset_end 处，尖端指向原子中心且不压标签。"""
+    终点沿末端切线退到标签正方形外 inset_end 处，尖端指向原子中心且不压标签。"""
     if bond_break:
         fy -= inset_start
         inset_start = 0.0
@@ -1291,8 +1284,10 @@ def mech_arrow_tikz(fx: float, fy: float, tx: float, ty: float,
         inset_start / inset_end: 两端内缩距离。
         aim_end: 为 True（字母标签目标，如 C）时，先按自然弯向求控制点，
             再沿末端切线方向把终点内缩——终点坐标适配切线、尖端指向原子中心。
-        text_box: (cx, cy, hw, hh) 目标原子标签的文本包围盒；aim_end 时
-            终点在切线方向上退到盒外 inset_end（0.10）处，避免压住标签文字。
+        text_box: (cx, cy, hw, hh) 目标原子标签的"所占位置"正方形
+            （中心=符号中心、hw=hh=_LABEL_SQUARE_HALF）；aim_end 时终点沿
+            切线退到正方形边缘外 inset_end（_MECH_LABEL_GAP=0.05），
+            控制点随后按"起点→末端"实际箭头段重算（短箭头不重叠）。
     """
     dx, dy = tx - fx, ty - fy
     length = math.hypot(dx, dy) or 1.0
@@ -1338,7 +1333,7 @@ def mech_arrow_tikz(fx: float, fy: float, tx: float, ty: float,
         else:
             mx, my = mx_b, my_b
         # 切线校验：切线（控制点→末端）必须指向标签方向——标签视为
-        # "中心=符号中心、边长 1.30 的正方形"，切线方向应穿过它。
+        # "中心=符号中心、边长 0.26 的正方形"，切线方向应穿过它。
         # 若切线方向与"末端→符号中心"方向夹角 > 90°（指向标签外），
         # 翻转控制点到连线另一侧（bend 弯向修正）。
         tdx, tdy = ex - mx, ey - my

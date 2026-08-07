@@ -70,6 +70,21 @@ def test_draw_mech_arrows_skip_invalid_point():
     assert lines == []
 
 
+def test_draw_mech_arrows_bond_form_midpoint():
+    """成键空白位终点（id:a+id:b，跨组件两原子中点）：正常绘制。"""
+    mols = _mols("[Br]", "C=C")
+    lines = draw_mech_arrows(mols, _parse_mech_arrows(["r0:0>>r0:0+r1:0"]))
+    assert any("red" in ln and "controls" in ln for ln in lines)
+
+
+def test_draw_mech_arrows_skip_invalid_midpoint():
+    """成键空白位引用未知组件 / 越界原子 / 与键中点混用时跳过，不崩溃。"""
+    mols = _mols("CCl")  # 2 个原子
+    assert draw_mech_arrows(mols, _parse_mech_arrows(["r0:0>r0:0+ghost:0"])) == []
+    assert draw_mech_arrows(mols, _parse_mech_arrows(["r0:0>r0:0+r0:9"])) == []
+    assert draw_mech_arrows(mols, _parse_mech_arrows(["r0:0>r0:0-1+r0:0"])) == []
+
+
 def test_draw_mech_arrows_empty():
     """空箭头列表返回空。"""
     assert draw_mech_arrows(_mols("CCl"), []) == []

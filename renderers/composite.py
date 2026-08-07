@@ -38,9 +38,11 @@ LLM 在容器内显式列出结构组件、连接符与机理箭头，渲染器�
 
 机理箭头引用：组件 id（显式 id= 或自动 r0/r1/...）+ 端点引用。
 端点可以是原子序号（SMILES 顺序，0 起），也可以是 "a-b" 形式的键中点
-（σ 键断裂箭头从键发出，如 r0:0-1>r0:1）。杂原子起点自动上移到孤对电子
-区域；键中点出发的箭头向下弯，其余向上弯。引用未知 id 或越界原子的箭头
-会被跳过，不影响整体渲染。
+（σ 键断裂箭头从键发出，如 r0:0-1>r0:1）；目标端还支持 "id:a+id:b" 形式的
+成键空白位（两原子位置中点，可跨组件）——自由基机理中两个成键鱼钩汇聚于
+新键形成处（如 br:0>>br:0+cc:0），钩尖自动留出小间隙、不指向任何原子标签。
+杂原子起点自动上移到孤对电子区域；键中点出发的箭头向下弯，其余向上弯。
+引用未知 id 或越界原子的箭头会被跳过，不影响整体渲染。
 
 组件级标注（R-2，随分子 scope 一起移动）：
     [CHARGE:ref|idx:δ+,idx:δ-,...]   组件 ref 上的部分电荷（红色）
@@ -62,8 +64,7 @@ if __name__ == "__main__":
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from renderers.mol_primitives import (
-        _ARROW_LABEL_GAP, _ARROW_POINT_GAP, _LABEL_SQUARE_HALF,
-        _LABEL_TEXT_HALF_H, _MECH_LABEL_GAP,
+        _ARROW_POINT_GAP, _LABEL_SQUARE_HALF, _MECH_LABEL_GAP,
         bond_order_of, format_chem_text,
         format_partial_charge,
         hbond_dots_tikz, mech_arrow_between, mech_arrow_origin,
@@ -78,8 +79,7 @@ if __name__ == "__main__":
     )
 else:
     from .mol_primitives import (
-        _ARROW_LABEL_GAP, _ARROW_POINT_GAP, _LABEL_SQUARE_HALF,
-        _LABEL_TEXT_HALF_H, _MECH_LABEL_GAP,
+        _ARROW_POINT_GAP, _LABEL_SQUARE_HALF, _MECH_LABEL_GAP,
         bond_order_of, format_chem_text,
         format_partial_charge,
         hbond_dots_tikz, mech_arrow_between, mech_arrow_origin,
@@ -94,7 +94,7 @@ else:
     )
 
 
-_MOL_GAP = 1.6    # 无连接符时相邻分子的水平间距
+_MOL_GAP = 0.8    # 无连接符时相邻分子的水平间距
 _PLUS_W = 1.1     # [PLUS] 连接符占宽
 _ARR_W = 2.6      # [RXNARROW] 占宽
 _ARR_PAD = 0.65   # 主箭头两端内缩余量（箭头实际长度 1.3）
@@ -102,7 +102,8 @@ _MOL_SCALE = 0.8  # 分子坐标缩放因子（紧凑化，不影响字号）
 
 _MECH_ARROW_RE = re.compile(
     r"^\s*([A-Za-z0-9_]+)\s*:\s*(\d+(?:-\d+)?)\s*(>>|>)\s*"
-    r"([A-Za-z0-9_]+)\s*:\s*(\d+(?:-\d+)?)\s*$"
+    r"([A-Za-z0-9_]+)\s*:\s*(\d+(?:-\d+)?)"
+    r"(?:\s*\+\s*([A-Za-z0-9_]+)\s*:\s*(\d+))?\s*$"
 )
 
 _SUPPORTED_LAYOUTS = ("reaction_mech", "row", "energy", "resonance")
@@ -120,9 +121,9 @@ def _parse_mech_arrows(specs):
         m = _MECH_ARROW_RE.match(spec)
         if not m:
             continue
-        src_id, src_pt, sep, dst_id, dst_pt = m.groups()
+        src_id, src_pt, sep, dst_id, dst_pt, dst2_id, dst2_pt = m.groups()
         kind = "fishhook" if sep == ">>" else "standard"
-        arrows.append((src_id, src_pt, dst_id, dst_pt, kind))
+        arrows.append((src_id, src_pt, dst_id, dst_pt, kind, dst2_id, dst2_pt))
     return arrows
 
 
@@ -135,41 +136,71 @@ def _mech_labeler(info):
     return lambda a: atom_main_label(a, hs.get(a.GetIdx(), 0))
 
 
+def _bond_form_midpoint(mols: dict, id_a: str, pt_a: str,
+                        id_b: str, pt_b: str):
+    """成键空白位终点：两原子（可跨组件）原子位置的中点。
+
+    自由基机理中新键形成于此前不相连的两原子之间，两个成键鱼钩汇聚于该
+    空白位置而非任何原子标签（钩尖由 inset_end 留出小间隙）。
+    返回 (x, y, False, False, False)；原子越界返回 None。
+    """
+    ma, mb = mols[id_a]["mol"], mols[id_b]["mol"]
+    ia, ib = int(pt_a), int(pt_b)
+    if ia >= ma.GetNumAtoms() or ib >= mb.GetNumAtoms():
+        return None
+    xa, ya = atom_pos(ma, ia)
+    xb, yb = atom_pos(mb, ib)
+    sa, sb = mols[id_a]["shift"], mols[id_b]["shift"]
+    t = 0.5
+    return (((1 - t) * (xa + sa[0]) + t * (xb + sb[0])),
+            ((1 - t) * (ya + sa[1]) + t * (yb + sb[1])),
+            False, False, False)
+
+
 def draw_mech_arrows(mols: dict, arrows: list) -> list:
     """绘制机理弯箭头（p0/p1 定位、端点吸附避让），返回 TikZ 行列表。
 
     mols: {组件 id: {"mol": RDKit Mol, "shift": (x, y), ...}} 组件表。
-    arrows: [(src_id, src_pt, dst_id, dst_pt, kind), ...]——_parse_mech_arrows
-        输出；src_pt/dst_pt 为原子序号或 "a-b" 键中点。
+    arrows: [(src_id, src_pt, dst_id, dst_pt, kind, dst2_id, dst2_pt), ...]
+        ——_parse_mech_arrows 输出；src_pt/dst_pt 为原子序号或 "a-b" 键中点；
+        dst2_id/dst2_pt 非 None 时目标端为 "dst_id:dst_pt+dst2_id:dst2_pt"
+        的成键空白位（两原子位置中点，可跨组件）。
     未知组件 id / 无效端点的箭头跳过，不影响整体渲染。
 
     逻辑：目标端先按原子中心定位（供源端选孤对槽位）；源端确定后，
     再按实际源端把目标端吸附到标签边缘空隙（箭头尖不压标签）。
     """
     lines = []
-    for src_id, src_pt, dst_id, dst_pt, kind in arrows:
+    for src_id, src_pt, dst_id, dst_pt, kind, dst2_id, dst2_pt in arrows:
         if src_id not in mols or dst_id not in mols:
+            continue
+        if dst2_id is not None and (dst2_id not in mols or "-" in dst_pt):
             continue
         sm = mols[src_id]
         dm = mols[dst_id]
         slab = _mech_labeler(sm)
         dlab = _mech_labeler(dm)
-        p1 = mech_arrow_origin(dm["mol"], dst_pt, dm["shift"],
-                               lone_pair_offset=False)
+        if dst2_id is None:
+            p1 = mech_arrow_origin(dm["mol"], dst_pt, dm["shift"],
+                                   lone_pair_offset=False)
+        else:
+            p1 = _bond_form_midpoint(mols, dst_id, dst_pt, dst2_id, dst2_pt)
         if p1 is None:
             continue
         p0 = mech_arrow_origin(sm["mol"], src_pt, sm["shift"],
                                toward=(p1[0], p1[1]),
                                prefer_single=(kind == "fishhook"),
-                               labeler=slab)
+                               labeler=slab,
+                               bend_side=-1.0 if "-" in src_pt else 1.0)
         if p0 is None:
             continue
-        p1 = mech_arrow_origin(dm["mol"], dst_pt, dm["shift"],
-                               lone_pair_offset=False,
-                               toward=(p0[0], p0[1]), labeler=dlab,
-                               bend_side=-1.0 if p0[2] else 1.0)
-        if p1 is None:
-            continue
+        if dst2_id is None:
+            p1 = mech_arrow_origin(dm["mol"], dst_pt, dm["shift"],
+                                   lone_pair_offset=False,
+                                   toward=(p0[0], p0[1]), labeler=dlab,
+                                   bend_side=-1.0 if p0[2] else 1.0)
+            if p1 is None:
+                continue
         bond_break = ("-" in src_pt
                       and bond_order_of(sm["mol"], src_pt) == 1)
         inset_start = (_ARROW_POINT_GAP if bond_break
@@ -181,7 +212,7 @@ def draw_mech_arrows(mols: dict, arrows: list) -> list:
         if aim_end:
             da = dm["mol"].GetAtomWithIdx(int(dst_pt))
             ax, ay = symbol_center(dm["mol"], int(dst_pt))
-            # 末端退让基于"标签所占位置"正方形（中心=符号中心、边长 1.30），
+            # 末端退让基于"标签所占位置"正方形（中心=符号中心、边长 0.26），
             # 由 mech_arrow_tikz 沿切线退到正方形边缘外 inset_end(_MECH_LABEL_GAP)。
             tb = (ax + dm["shift"][0], ay + dm["shift"][1],
                   _LABEL_SQUARE_HALF, _LABEL_SQUARE_HALF)
@@ -643,12 +674,12 @@ if __name__ == "__main__":
             "[/COMPOSITE]",
         ),
         (
-            "鱼钩箭头（自由基加成）",
+            "鱼钩箭头（自由基加成到 π 键：三个鱼钩写全电子去向）",
             "[COMPOSITE:reaction_mech]"
-            "[STRUCT:C=C][PLUS][STRUCT:[Br],id=br]"
-            "[RXNARROW:hv]"
-            "[STRUCT:[CH2]CBr]"
-            "[MECHARROW:br:0>>r0:1,r0:0-1>>r0:1]"
+            "[STRUCT:[Br],id=br][STRUCT:C=C,id=cc]"
+            "[RXNARROW]"
+            "[STRUCT:BrC[CH2]]"
+            "[MECHARROW:br:0>>br:0+cc:0,cc:0-1>>br:0+cc:0,cc:0-1>>cc:1]"
             "[/COMPOSITE]",
         ),
         (

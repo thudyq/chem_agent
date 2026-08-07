@@ -107,7 +107,7 @@ def test_lone_pair_origin_offset():
 
 
 def test_arrow_aim_end_and_bond_break_inset():
-    """字母标签（C）箭头终点退到标签正方形（边长 1.30）边缘外 0.05、沿自然切线
+    """字母标签（C）箭头终点退到标签正方形（边长 0.26）边缘外 0.05、沿自然切线
     指向原子中心（终点坐标适配切线方向）；σ 断键起点 inset 加在纵坐标
     （向下 0.05），不再沿箭头方向（向右）。"""
     out = _render(SN2_DEMO)
@@ -123,8 +123,9 @@ def test_arrow_aim_end_and_bond_break_inset():
                    abs(float(atk[5]) - c_sym_y)) - 0.13
     assert 0.0 <= atk_edge <= 0.11, \
         f"进攻箭头终点应距 C 标签正方形边缘 0.05: ({atk[4]},{atk[5]})"
-    # 断键起点 = C—Cl 键中点 (0.99,0) 纵向下 inset 0.05 → (0.99,-0.05)
-    assert abs(float(brk[0]) - 0.99) < 0.01
+    # 断键起点 = C—Cl 键线中点（修剪后，局部 0.075 + shift 0.99 = 1.065）
+    # 纵向下 inset 0.05 → (1.065,-0.05)
+    assert abs(float(brk[0]) - 1.065) < 0.01
     assert abs(float(brk[1]) - (-0.05)) < 0.01, \
         f"断键起点未纵向下 inset: ({brk[0]},{brk[1]})"
 
@@ -263,56 +264,76 @@ def test_row_layout_four_step_sequence():
 
 
 def test_fishhook_arrows():
-    """正例3：鱼钩箭头（单电子）生成半边 barb。自由基加成：一钩从 Br· 单电子
-    发出（上弯），一钩从 C=C 双键（π 电子云两杠之间）发出（下弯），一上一下、
-    尖端均指向与 Br 成键的碳（元素符号 C，垂直偏移 0.25）。"""
+    """正例3：鱼钩箭头（单电子）生成半边 barb。自由基加成到 π 键（范本三鱼钩）：
+    ①Br· 单电子→Br 与近端碳 C0 之间的空白成键位置（上弯）；②π 键一个电子→
+    同一空白位置（下弯，与①汇聚、共同形成 C—Br 键，两钩尖留微小间隙）；
+    ③π 键另一个电子→远端碳 C1 原子（下弯，生成新自由基）。
+    成键钩尖汇聚于两原子间空白中点而非原子标签；③ 退到 C1 的 0.26 正方形
+    边缘外 0.05（≈0.18~0.23），不压标签。"""
     out = _render(
         "[COMPOSITE:reaction_mech]"
-        "[STRUCT:C=C][PLUS][STRUCT:[Br],id=br]"
-        "[RXNARROW:hv]"
-        "[STRUCT:[CH2]CBr]"
-        "[MECHARROW:br:0>>r0:1,r0:0-1>>r0:1]"
+        "[STRUCT:[Br],id=br][STRUCT:C=C,id=cc]"
+        "[RXNARROW]"
+        "[STRUCT:BrC[CH2]]"
+        "[MECHARROW:br:0>>br:0+cc:0,cc:0-1>>br:0+cc:0,cc:0-1>>cc:1]"
         "[/COMPOSITE]"
     )
     assert "\\draw[thick, red]" in out              # 鱼钩曲线（无 -> 全箭头）
     assert "\\draw[->, thick, red]" not in out
-    assert "hv" in out                              # RXNARROW 内联条件生效
+    assert out.count("\\draw[thick, red]") == 6     # 3 钩 ×（曲线 + 半箭头 barb）
     curves = re.findall(
         r"\\draw\[thick, red\] \(([-\d.]+),([-\d.]+)\) .. controls "
         r"\(([-\d.]+),([-\d.]+)\) .. \(([-\d.]+),([-\d.]+)\);", out)
-    assert len(curves) == 2
-    # 两条曲线一上一下：控制点 y 一正一负（上弯源=单电子，下弯源=π 键）
+    assert len(curves) == 3                         # 三鱼钩写全电子去向
+    # 弯向：Br· 单电子钩上弯（控制点 y>0），两个 π 键钩下弯（y<0）
     cys = [float(c[3]) for c in curves]
-    assert any(cy > 0 for cy in cys) and any(cy < 0 for cy in cys), \
-        f"鱼钩未一上一下: {cys}"
-    # 一钩从 C=C 双键发出（源端 x 在键中点附近，非原子）；一钩从 Br· 发出
-    srcs = sorted((float(c[0]), float(c[1])) for c in curves)
-    assert srcs[0][0] < 1.5, f"π 键源端不在双键中点: {srcs[0]}"
-    assert srcs[1][0] > 2.0, f"Br· 源端不在单电子点: {srcs[1]}"
-    # 两钩尖端均指向与 Br 成键的碳 C1：距 C1 符号中心（node 中心左移 0.26、
-    # 含下标上移 0.025）的 0.26 正方形边缘外 0.05（≈0.18~0.23）；
-    # Br· 钩尖端在上方、π 键钩尖端在下方（一上一下），不压标签。
-    # 取反应物 C=C 的 CH₂（产物 [CH2]CBr 的 CH₂ x≈7.7 需排除）
+    assert sum(1 for cy in cys if cy > 0) == 1, f"Br· 钩应上弯: {cys}"
+    assert sum(1 for cy in cys if cy < 0) == 2, f"π 键两钩应下弯: {cys}"
+    # 取反应物 C=C 的两个 CH₂ 与 Br·（产物 BrC[CH2] 的 CH₂/Br x≈6.6+ 需排除）
     ch2 = [p for p in _resolve_node_positions(out, "CH$_{2}$")
-           if 0.5 < p[0] < 3.0]
-    assert ch2
-    c1 = max(ch2, key=lambda p: p[0])
+           if 1.5 < p[0] < 4.0]
+    assert len(ch2) == 2
+    brs = [p for p in _resolve_node_positions(out, "Br") if p[0] < 1.5]
+    assert len(brs) == 1
+    c0 = min(ch2, key=lambda p: p[0])               # 近端碳（Br· 加成侧）
+    c1 = max(ch2, key=lambda p: p[0])               # 远端碳（新自由基）
+    # 源端：两钩同源于 C=C 双键中点（y<0），一钩源于 Br· 单电子点（y≈0）
+    mid_x = (c0[0] + c1[0]) / 2
+    srcs = [(float(c[0]), float(c[1])) for c in curves]
+    bond_srcs = [s for s in srcs if s[1] < -0.01]
+    br_srcs = [s for s in srcs if s[1] >= -0.01]
+    assert len(bond_srcs) == 2, f"应有两钩同源于 π 键中点: {srcs}"
+    for s in bond_srcs:
+        assert abs(s[0] - mid_x) < 0.6, f"π 键钩源端不在双键中点: {s}"
+    assert len(br_srcs) == 1 and br_srcs[0][0] < 1.5, \
+        f"Br· 钩源端不在单电子点: {br_srcs}"
+    # 尖端（按 x 排序：左侧两钩汇聚于成键位，最右钩指向 C1）：
+    # ①② 钩尖汇聚于 Br 与 C0 之间的空白成键位置（两原子中点，容差 0.45），
+    # 不指向 C0 标签（距其符号中心 >0.30），两钩尖留有微小间隙；
+    # ③ 钩尖指向 C1 原子：距符号中心（node 中心左移 0.26、含下标上移
+    # 0.025）的 0.26 正方形边缘外 0.05（≈0.18~0.23），不压标签。
+    bond_mid = ((brs[0][0] + c0[0]) / 2, (brs[0][1] + c0[1]) / 2)
+    c0_sym = (c0[0] - 0.26, c0[1] + 0.025)
     c1_sym = (c1[0] - 0.26, c1[1] + 0.025)
     tips = sorted((float(c[4]), float(c[5])) for c in curves)
-    up_tip = max(tips, key=lambda t: t[1])
-    down_tip = min(tips, key=lambda t: t[1])
-    up_dist = math.hypot(up_tip[0] - c1_sym[0], up_tip[1] - c1_sym[1])
-    down_dist = math.hypot(down_tip[0] - c1_sym[0], down_tip[1] - c1_sym[1])
-    assert 0.13 < up_dist < 0.30, f"Br· 钩尖端应距 C1 正方形边缘 0.05: {up_tip}"
-    assert 0.13 < down_dist < 0.30, f"π 键钩尖端应距 C1 正方形边缘 0.05: {down_tip}"
-    assert up_tip[1] > c1[1], f"Br· 钩尖端应在标签上方: {up_tip}"
-    assert down_tip[1] < c1[1], f"π 键钩尖端应在标签下方: {down_tip}"
+    conv_tips, atom_tip = tips[:2], tips[2]
+    for t in conv_tips:
+        d_mid = math.hypot(t[0] - bond_mid[0], t[1] - bond_mid[1])
+        d_sym = math.hypot(t[0] - c0_sym[0], t[1] - c0_sym[1])
+        assert d_mid < 0.45, f"成键钩尖未汇聚于空白成键位置: {t}"
+        assert d_sym > 0.30, f"成键钩尖不应指向 C0 标签: {t}"
+    gap = math.hypot(conv_tips[0][0] - conv_tips[1][0],
+                     conv_tips[0][1] - conv_tips[1][1])
+    assert 0.05 < gap < 0.6, f"汇聚钩尖应留有微小间隙: {conv_tips}"
+    d1 = math.hypot(atom_tip[0] - c1_sym[0], atom_tip[1] - c1_sym[1])
+    assert 0.13 < d1 < 0.30, f"π 键钩尖端应距 C1 正方形边缘 0.05: {atom_tip}"
+    assert atom_tip[1] < c1[1], f"π 键钩尖端应在标签下方: {atom_tip}"
 
 
 def test_mech_arrow_origin_label_snap():
     """端点定位单元测试（复用 lewis/charge 的 symbol_center）：带标签的原子
-    端点定位到元素符号（碳标签垂直吸附在 C 正上方、杂原子沿入射方向），
-    距文字 ≈0.10；双键源端在键中点法线方向距外侧杠 0.05；无标签保持原子中心。"""
+    端点返回元素符号中心（on_label，由 aim_end 退让到正方形边缘外 0.05）；
+    双键源端在键中点法线方向距外侧杠 0.05；无标签保持原子中心。"""
     import renderers.mol_primitives as mp
     mol = mp.prepare_mol("CCl")
     ax, ay = mp.atom_pos(mol, 1)
@@ -333,17 +354,18 @@ def test_mech_arrow_origin_label_snap():
     assert abs(pc[0] - scx) < 0.01, \
         f"碳端点未与符号中心对齐: {pc[0]:.2f} vs {scx:.2f}"
     assert abs(pc[1] - scy) < 0.01
-    # 双键源端 = 键中点 + 垂直偏移 (bond_gap/2 + 0.05)：距"靠外杠"0.05
+    # 双键源端按"靠外杠"：键源（bend_side=-1 向下）取 y 最小杠（基准线，
+    # 乙烯 CH₂=CH₂ 两端标签对称 → 修剪中点=原子中点），再向下 0.05。
     alkene = mp.prepare_mol("C=C")
     bx, by = mp.atom_pos(alkene, 0)
     ex, ey = mp.atom_pos(alkene, 1)
-    pb = mp.mech_arrow_origin(alkene, "0-1", toward=(0.0, 0.0))
+    pb = mp.mech_arrow_origin(alkene, "0-1", toward=(0.0, 0.0), bend_side=-1.0)
     assert pb[2] is True
     dx, dy = ex - bx, ey - by
     L = math.hypot(dx, dy)
     px, py = -dy / L, dx / L
-    assert abs(pb[0] - ((bx + ex) / 2 + px * 0.09)) < 0.01
-    assert abs(pb[1] - ((by + ey) / 2 + py * 0.09)) < 0.01
+    assert abs(pb[0] - ((bx + ex) / 2 + px * -0.05)) < 0.01
+    assert abs(pb[1] - ((by + ey) / 2 + py * -0.05)) < 0.01
     # 源端默认 lone_pair_offset=True：Cl 有孤对电子，落在电子点上（不吸附）
     e = mp.mech_arrow_origin(mol, "1", toward=(3.0, 0.0))
     assert e[3] is True and e[4] is False
