@@ -171,6 +171,10 @@ def _convert_latex_markers(text: str) -> str:
     内容压缩为单段（KaTeX 块公式内不能有空行）。公式内的 \\ce{...}
     同步转为 KaTeX 兼容语法。
     """
+    # 空 \text{}（LLM 常在文本与 TikZ 之间留下的残留分隔符）无渲染意义，移除；
+    # 常伴随 LaTeX 换行命令 \\ 与空白一起输出，一并清除（合法命令不受影响）
+    text = re.sub(r"\\text\{\s*\}(?:\\\\|\s)*", "", text)
+
     def _disp(m):
         body = _convert_ce_math(m.group(1))
         body = re.sub(r"[ \t]+", " ", body).strip()
