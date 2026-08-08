@@ -6,21 +6,7 @@
   - label 精确定位：tikzpicture 包裹 + \\node[anchor=north] 置于结构下方
 """
 
-import re
-
-# 游离氢组分（[H]/[H+] 独立组分，前后是 . 或边界）——LLM 违规输出质子的产物。
-# 在 mol2chemfig/RDKit 处理时触发 RemoveHs 警告（Drawbacks C4）且可能渲染失败。
-_FREE_H_RE = re.compile(r"(?:^|(?<=\.))\[H\+?\](?=\.|$)")
-
-
-def _strip_free_hydrogen(smiles: str) -> str:
-    """移除 SMILES 中的游离氢组分（[H]/[H+] 独立组分）。
-
-    有邻居的 [H]（如 [H]O[H] 的水）与 [H][H] 氢气不受影响。
-    返回清理后的 SMILES（可能为空）。
-    """
-    s = _FREE_H_RE.sub("", smiles)
-    return re.sub(r"\.+", ".", s).strip(".")
+import contextlib
 
 
 def smiles_to_chemfig(smiles: str, aromatic: bool = True):
@@ -38,12 +24,15 @@ def smiles_to_chemfig(smiles: str, aromatic: bool = True):
             return None
     except ImportError:
         pass
-    smiles = _strip_free_hydrogen(smiles)
-    if not smiles:
-        return None
     try:
         from mol2chemfigPy3 import mol2chemfig
-        result = mol2chemfig(smiles, aromatic=aromatic, inline=True)
+        from utils.rdkit_utils import FREE_H_COMPONENT_RE, mute_rdkit_warnings
+        # 孤立氢组分（[H+]/[H]/[H-]，合法组分）触发 RDKit RemoveHs 警告
+        # （无害），局部屏蔽
+        cm = (mute_rdkit_warnings() if FREE_H_COMPONENT_RE.search(smiles)
+              else contextlib.nullcontext())
+        with cm:
+            result = mol2chemfig(smiles, aromatic=aromatic, inline=True)
     except Exception:
         return None
     if not isinstance(result, str) or not result.startswith("\\chemfig"):

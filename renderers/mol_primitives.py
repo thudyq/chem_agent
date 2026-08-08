@@ -5,6 +5,7 @@
 2D 坐标计算、键线绘制逻辑抽取到这里，避免复制粘贴。
 """
 
+import contextlib
 import math
 import re
 
@@ -778,67 +779,52 @@ def prepare_mol(smiles: str, *, add_hs: bool = False, kekulize: bool = False,
         from rdkit import Chem
         from rdkit.Chem import AllChem
         from rdkit.Chem.Draw import rdMolDraw2D
+        from utils.rdkit_utils import FREE_H_COMPONENT_RE, mute_rdkit_warnings
     except ImportError:
         return None
 
-    if allow_aromatic:
-        mol = Chem.MolFromSmiles(smiles) if smiles else None
-    else:
-        mol = Chem.MolFromSmiles(smiles, sanitize=False) if smiles else None
-        if mol is not None:
-            mol.UpdatePropertyCache(strict=False)
-            Chem.SanitizeMol(
-                mol,
-                Chem.SanitizeFlags.SANITIZE_ALL
-                ^ Chem.SanitizeFlags.SANITIZE_SETAROMATICITY
-                ^ Chem.SanitizeFlags.SANITIZE_KEKULIZE,
-            )
-    if mol is None:
-        return None
+    # 游离氢组分（[H+]/[H]/[H-] 孤立 H：质子/氢自由基/氢负离子）是合法
+    # 组分，保留并正常绘制（电荷圈/单电子点/孤对电子）；解析与坐标计算
+    # 对孤立 H 的警告（无害，C4）在调用点局部屏蔽。
+    with (mute_rdkit_warnings() if FREE_H_COMPONENT_RE.search(smiles or "")
+          else contextlib.nullcontext()):
+        if allow_aromatic:
+            mol = Chem.MolFromSmiles(smiles) if smiles else None
+        else:
+            mol = Chem.MolFromSmiles(smiles, sanitize=False) if smiles else None
+            if mol is not None:
+                mol.UpdatePropertyCache(strict=False)
+                Chem.SanitizeMol(
+                    mol,
+                    Chem.SanitizeFlags.SANITIZE_ALL
+                    ^ Chem.SanitizeFlags.SANITIZE_SETAROMATICITY
+                    ^ Chem.SanitizeFlags.SANITIZE_KEKULIZE,
+                )
+        if mol is None:
+            return None
 
-    mol = _remove_free_hydrogens(mol)
+        if add_hs:
+            mol = Chem.AddHs(mol)
 
-    if add_hs:
-        mol = Chem.AddHs(mol)
+        if kekulize:
+            try:
+                Chem.Kekulize(mol, clearAromaticFlags=True)
+            except Exception:
+                pass
 
-    if kekulize:
-        try:
-            Chem.Kekulize(mol, clearAromaticFlags=True)
-        except Exception:
-            pass
-
-    if use_prepare:
-        try:
-            prepared = rdMolDraw2D.PrepareMolForDrawing(mol)
-            if prepared is not None:
-                mol = prepared
-        except Exception:
+        if use_prepare:
+            try:
+                prepared = rdMolDraw2D.PrepareMolForDrawing(mol)
+                if prepared is not None:
+                    mol = prepared
+            except Exception:
+                AllChem.Compute2DCoords(mol)
+        else:
             AllChem.Compute2DCoords(mol)
-    else:
-        AllChem.Compute2DCoords(mol)
 
     if allow_aromatic:
         _regularize_kekule(mol)
     return mol
-
-
-def _remove_free_hydrogens(mol):
-    """移除游离氢原子（degree=0，如 SMILES 中独立的 [H]/[H+] 质子组分）。
-
-    RDKit PrepareMolForDrawing 内部 RemoveHs 对无邻居的氢打
-    "not removing hydrogen atom without neighbors" 警告（C4）；游离氢
-    不属于任何化学键（LLM 违规输出质子的产物），提前移除让图干净并消除警告。
-    正常氢（如 [H]O[H] 的 H，有 O 邻居）不受影响。
-    """
-    from rdkit import Chem
-    free = [a.GetIdx() for a in mol.GetAtoms()
-            if a.GetAtomicNum() == 1 and a.GetDegree() == 0]
-    if not free:
-        return mol
-    rw = Chem.RWMol(mol)
-    for idx in sorted(free, reverse=True):
-        rw.RemoveAtom(idx)
-    return rw.GetMol()
 
 
 def atom_pos(mol, idx: int) -> tuple[float, float]:

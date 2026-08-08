@@ -25,9 +25,22 @@ from .tag_parser import RenderTag
 # rdkit 可用性探测：缺失时跳过 SMILES / 原子数语义校验（渲染器内部会兜底）
 try:
     from rdkit import Chem  # noqa: F401
+    from utils.rdkit_utils import FREE_H_COMPONENT_RE, mute_rdkit_warnings
     _RDKIT_OK = True
 except ImportError:
     _RDKIT_OK = False
+    FREE_H_COMPONENT_RE = None
+    mute_rdkit_warnings = None
+
+
+def _parse_mol(smiles: str):
+    """Chem.MolFromSmiles 局部包装：游离氢组分（合法）的无害警告静默。
+    保持经本模块命名空间调用 Chem（fake_rdkit fixture 可替换）。"""
+    if (mute_rdkit_warnings is not None
+            and FREE_H_COMPONENT_RE.search(smiles or "")):
+        with mute_rdkit_warnings():
+            return Chem.MolFromSmiles(smiles)
+    return Chem.MolFromSmiles(smiles)
 
 # label 长度硬上限（字符数）。prompt 建议 ≤10（中文 ≤6），此处为兜底硬拦截
 LABEL_MAX_LEN = 24
@@ -97,7 +110,7 @@ def _smiles_ok(smiles: str) -> bool:
     if not _RDKIT_OK:
         return True
     try:
-        return Chem.MolFromSmiles(smiles) is not None
+        return _parse_mol(smiles) is not None
     except Exception:
         return False
 
@@ -209,7 +222,7 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
         for cid, info in comps.items():
             if info["smiles"]:
                 try:
-                    mol = Chem.MolFromSmiles(info["smiles"])
+                    mol = _parse_mol(info["smiles"])
                     atom_counts[cid] = mol.GetNumAtoms() if mol else 0
                 except Exception:
                     atom_counts[cid] = 0

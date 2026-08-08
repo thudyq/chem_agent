@@ -11,7 +11,7 @@ renderers/layout.py）排成一行：反应物 + 反应物 + ... → 产物 + �
 
 示例：
     [REACTION:c1ccccc1;[O-][N+](=O)[O-]|O=[N+]([O-])c1ccccc1;O|H2SO4, 浓HNO3]
-    [REACTION:C=C;[H]O[H]|CCO|H2SO4]
+    [REACTION:C=C;O|CCO|H2SO4]
 
 设计选择：
 - 分子按结构简式绘制（非环碳写出 CH₃/CH₂/CH，环上碳保持键线式），不画孤对电子；
@@ -117,7 +117,7 @@ if __name__ == "__main__":
 
     print("\n[2] 加成反应（乙烯 + 水 → 乙醇）：")
     print(render_reaction(
-        "C=C;[H]O[H]",
+        "C=C;O",
         "CCO",
         "H2SO4",
     ))
