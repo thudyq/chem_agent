@@ -138,10 +138,21 @@ _CHEM_PREFIX = "化学校验："
 
 _FORMULA_TOKEN_RE = re.compile(r"([A-Z][a-z]?)(\d*)")
 
+# 可识别的真实元素（有机/常见无机）。刻意不含 Ar（氩）、Ac（锕）等——
+# 它们是 prompt 允许的通用基团缩写（Ar=芳基、Ac=乙酰基，见
+# Instruction-for-Structure.md），误判为化学式会把缩写 label 打回。
+_REAL_ELEMENTS = {
+    "H", "B", "C", "N", "O", "F", "Si", "P", "S", "Cl", "Br", "I",
+    "Li", "Na", "K", "Mg", "Ca", "Al", "Fe", "Cu", "Zn", "Ag", "Au",
+    "Hg", "Pb", "Sn", "Se", "Te",
+}
+
 
 def _parse_plain_formula(text: str):
     """把纯化学式 label（CH3Cl / H2SO4 / OH- / NO2+ / H3O+ 等）解析为
-    (元素计数 dict, 净电荷)；含中文/空格/结构括号等非纯化学式返回 None。"""
+    (元素计数 dict, 净电荷)；非纯化学式返回 None——含中文/空格/结构括号、
+    通用基团缩写（R/Ar/X/Ph 等）、或含不可识别"元素"（如占位字母 A）的
+    label 一律跳过不校验。"""
     s = (text or "").strip()
     if not s:
         return None
@@ -154,6 +165,8 @@ def _parse_plain_formula(text: str):
         return None
     counts = {}
     for sym, num in _FORMULA_TOKEN_RE.findall(s):
+        if sym not in _REAL_ELEMENTS:
+            return None
         counts[sym] = counts.get(sym, 0) + (int(num) if num else 1)
     return counts, charge
 
@@ -523,6 +536,8 @@ def degrade_text(tag: RenderTag, reason: str) -> str:
 
 if __name__ == "__main__":
     # 冒烟测试（不依赖 rdkit）
+    import sys
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     demo = (
         "[STRUCT:c1ccccc1] "
         "[STRUCT:XYZXYZ,label=无效结构] "
@@ -530,7 +545,7 @@ if __name__ == "__main__":
         "[ENERGY:abc] "
         "[NEWMAN:CC,60] [NEWMAN:CC,xyz] "
         "[COMPOSITE:energy][ENERGY:0,108,-20]"
-        "[STRUCT:CCl,label=A,at=0][STRUCT:CO,label=B,at=9]"
+        "[STRUCT:CCl,label=反应物,at=0][STRUCT:CO,label=产物,at=9]"
         "[/COMPOSITE]"
     )
     from .tag_parser import parse_tags

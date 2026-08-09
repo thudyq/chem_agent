@@ -117,6 +117,20 @@ class TestChemicalChecks:
         _, invalid = _validate("[STRUCT:CCl,label=氯甲烷]")
         assert len(invalid) == 0
 
+    def test_label_placeholder_letter_skipped(self):
+        """占位字母（非真实元素）不视为化学式，跳过校验。"""
+        pytest.importorskip("rdkit")
+        _, invalid = _validate("[STRUCT:CCl,label=A]")
+        assert len(invalid) == 0
+
+    def test_label_generic_group_skipped(self):
+        """通用基团缩写（Ar=芳基等，prompt 允许）不按化学式校验。"""
+        pytest.importorskip("rdkit")
+        _, invalid = _validate("[STRUCT:CC(=O)c1ccccc1,label=Ar]")
+        assert len(invalid) == 0
+        _, invalid = _validate("[STRUCT:CC(=O)c1ccccc1,label=Ph]")
+        assert len(invalid) == 0
+
     def test_label_charge_formula_passes(self):
         pytest.importorskip("rdkit")
         _, invalid = _validate("[STRUCT:[OH-],label=OH-]")

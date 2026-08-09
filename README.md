@@ -51,7 +51,7 @@ Chem_Agent 将化学图示拆分为三大类、若干最小单元。这些符号
 
 ```text
 [STRUCT:c1ccccc1,label=苯]          → 绘制带标注的苯环
-[ARROW:c1ccccc1,c1ccccc1NO2,硝化]   → 绘制苯→硝基苯的反应箭头
+[ARROW:c1ccccc1,O=[N+]([O-])c1ccccc1,硝化]   → 绘制苯→硝基苯的反应箭头
 [NEWMAN:CC,60]                      → 绘制乙烷的交叉式纽曼投影
 [ENERGY:0,15,25,5,10]               → 绘制五点势能面图
 [REASONING]亲电取代机理...[/REASONING] → 折叠展示推理过程
