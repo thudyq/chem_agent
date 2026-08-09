@@ -38,7 +38,8 @@ def _build_correction_prompt(user_question: str, original: str,
         "",
         "修正要求：",
         "1. 保持回答的内容和结构不变，只修正上述失败标记"
-        "（SMILES、原子编号、组件引用、格式等）。",
+        "（SMILES、原子编号、组件引用、格式、化学一致性——"
+        "label 与 SMILES 指向同一物质、方程式两侧原子守恒）。",
         "2. 不要新增或删除其他标记。",
         "3. 修正后的标记必须严格遵循标记语法。",
     ]

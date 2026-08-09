@@ -50,7 +50,7 @@ def test_smoke_struct():
 
 
 def test_smoke_reaction():
-    outs, bad = _render("[REACTION:CCO;O|CCOCC;O|H2SO4]")
+    outs, bad = _render("[REACTION:CCO;CCO|CCOCC;O|H2SO4]")
     assert len(outs) == 1 and bad == 0
     _assert_ok(outs[0], "very thick")
 
@@ -165,7 +165,7 @@ def test_smoke_retro():
 
 def test_smoke_pipeline_inject():
     """完整管线冒烟：解析 → 校验 → 渲染 → 注入（无 LLM）。"""
-    text = "苯的结构：[STRUCT:c1ccccc1,label=苯] 和 [REACTION:CCO|CCOCC|H2SO4]。"
+    text = "苯的结构：[STRUCT:c1ccccc1,label=苯] 和 [REACTION:CCO;CCO|CCOCC;O|H2SO4]。"
     tags = parse_tags(text)
     valid, invalid = validate_tags(tags)
     assert len(invalid) == 0, [r.reason for r in invalid]

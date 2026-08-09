@@ -128,15 +128,156 @@ def _label_ok(label) -> Tuple[bool, str]:
     return True, ""
 
 
+# ---------------------------------------------------------------------------
+# 化学校验（T2）：label 化学式一致性 + 原子守恒。
+# 失败原因统一以「化学校验：」前缀，metrics 据此统计化学正确率维度。
+# 均为 best-effort：元素计数无法计算（rdkit 缺失/fake mol）时跳过不放行误判。
+# ---------------------------------------------------------------------------
+
+_CHEM_PREFIX = "化学校验："
+
+_FORMULA_TOKEN_RE = re.compile(r"([A-Z][a-z]?)(\d*)")
+
+
+def _parse_plain_formula(text: str):
+    """把纯化学式 label（CH3Cl / H2SO4 / OH- / NO2+ / H3O+ 等）解析为
+    (元素计数 dict, 净电荷)；含中文/空格/结构括号等非纯化学式返回 None。"""
+    s = (text or "").strip()
+    if not s:
+        return None
+    charge = 0
+    m = re.search(r"(\d*)([+-])$", s)
+    if m:
+        charge = int(m.group(1) or 1) * (1 if m.group(2) == "+" else -1)
+        s = s[: m.start()]
+    if not s or not re.fullmatch(r"([A-Z][a-z]?\d*)+", s):
+        return None
+    counts = {}
+    for sym, num in _FORMULA_TOKEN_RE.findall(s):
+        counts[sym] = counts.get(sym, 0) + (int(num) if num else 1)
+    return counts, charge
+
+
+def _mol_counts(mol):
+    """RDKit Mol → (元素计数 dict（重原子 + 隐式 H）, 净电荷)；失败返回 None。"""
+    try:
+        counts, charge = {}, 0
+        for a in mol.GetAtoms():
+            sym = a.GetSymbol()
+            counts[sym] = counts.get(sym, 0) + 1
+            h = a.GetTotalNumHs()
+            if h:
+                counts["H"] = counts.get("H", 0) + h
+            charge += a.GetFormalCharge()
+        return counts, charge
+    except Exception:
+        return None
+
+
+def _hill_str(counts: dict) -> str:
+    """元素计数 → Hill 化学式串（错误提示用；不含电荷）。"""
+    parts = []
+    for sym in sorted(counts, key=lambda s: (s != "C", s != "H", s)):
+        n = counts[sym]
+        parts.append(sym + (str(n) if n > 1 else ""))
+    return "".join(parts)
+
+
+def _check_label_formula(smiles: str, label: str) -> str:
+    """T2-2：label 为纯化学式时与 SMILES 元素计数/电荷比对；不一致返回原因。"""
+    parsed = _parse_plain_formula(label)
+    if parsed is None:
+        return ""
+    mc = _mol_counts(_parse_mol(smiles))
+    if mc is None:
+        return ""
+    if parsed != mc:
+        return (f"{_CHEM_PREFIX}label「{label}」与 SMILES「{smiles}」化学式不一致"
+                f"（label={_hill_str(parsed[0])}，SMILES={_hill_str(mc[0])}，"
+                f"请使 label 与结构指向同一物质）")
+    return ""
+
+
+def _sum_species(smiles_list: list):
+    """一组 SMILES 的元素计数加总（含净电荷，供比对）；任一无法解析返回 None。"""
+    total_c, total_q = {}, 0
+    for smi in smiles_list:
+        mc = _mol_counts(_parse_mol(smi))
+        if mc is None:
+            return None
+        for sym, n in mc[0].items():
+            total_c[sym] = total_c.get(sym, 0) + n
+        total_q += mc[1]
+    return total_c, total_q
+
+
+def _balance_reason(left, right, strict_h: bool, step: str) -> str:
+    """两侧元素计数比对：非 H 元素必须相等；strict_h 时 H 也必须相等。
+    （reaction_mech 容忍 H±差——质子转移/去质子副产 H⁺ 常按惯例不画出；
+    净电荷不比对：旁观离子（如 HSO4⁻）省略是方程式惯例。）"""
+    if left is None or right is None:
+        return ""
+    lc, rc = dict(left[0]), dict(right[0])
+    if not strict_h:
+        lc.pop("H", None)
+        rc.pop("H", None)
+    if lc != rc:
+        detail = f"{_hill_str(left[0])} vs {_hill_str(right[0])}"
+        return (f"{_CHEM_PREFIX}{step}两侧原子不守恒（{detail}，"
+                f"需配平或补全物种；辅助试剂请写入箭头条件而非省略主物种）")
+    return ""
+
+
+def _check_reaction_balance(args: list) -> str:
+    """T2-3：REACTION 两侧全元素（含 H）配平（REACTION 为完整方程式契约）。"""
+    if len(args) < 2:
+        return ""
+    left = _sum_species(_split_multi(args[0]))
+    right = _sum_species(_split_multi(args[1]))
+    return _balance_reason(left, right, strict_h=True, step="方程式")
+
+
+def _check_composite_balance(children: list, layout_name: str) -> str:
+    """T2-3：COMPOSITE 的 reaction_mech 布局按 RXNARROW 分步、逐步比对
+    非 H 元素守恒（容忍 H±差）；row（多步合成序列允许省略辅助试剂）、
+    resonance / energy 跳过。"""
+    if layout_name != "reaction_mech":
+        return ""
+    segments, cur, has_arrow = [], [], False
+    for child in children:
+        if child.type == "STRUCT" and child.args:
+            cur.append(child.args[0].strip())
+        elif child.type == "RXNARROW":
+            has_arrow = True
+            segments.append(cur)
+            cur = []
+    segments.append(cur)
+    if not has_arrow:
+        return ""
+    for i in range(len(segments) - 1):
+        reason = _balance_reason(_sum_species(segments[i]),
+                                 _sum_species(segments[i + 1]),
+                                 strict_h=False, step=f"第 {i + 1} 步")
+        if reason:
+            return reason
+    return ""
+
+
 def _validate_struct_args(args: list) -> Tuple[bool, str]:
-    """校验单个 STRUCT 参数（顶层或容器内）：SMILES 非空 + label 长度。"""
+    """校验单个 STRUCT 参数（顶层或容器内）：SMILES 非空 + label 长度
+    + label 化学式一致性（化学校验 T2-2）。"""
     if not args or not args[0] or not args[0].strip():
         return False, "SMILES 为空"
     ok, reason = _label_ok(args[1] if len(args) > 1 else None)
     if not ok:
         return False, reason
-    if not _smiles_ok(args[0].strip()):
-        return False, f"无效 SMILES「{args[0].strip()}」"
+    smi = args[0].strip()
+    if not _smiles_ok(smi):
+        return False, f"无效 SMILES「{smi}」"
+    if _RDKIT_OK and len(args) > 1 and args[1]:
+        reason = _check_label_formula(smi, str(args[1]))
+        if reason:
+            return False, reason
     return True, ""
 
 
@@ -299,6 +440,11 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
                 a, b = int(m.group(1)), int(m.group(2))
                 if not (0 <= a < n and 0 <= b < n):
                     return False, f"BOND 键 {a}-{b} 超出组件 {ref} 范围 0~{n - 1}"
+
+    if _RDKIT_OK:
+        reason = _check_composite_balance(children, layout_name)
+        if reason:
+            return False, reason
     return True, ""
 
 
@@ -321,6 +467,21 @@ def validate_tag(tag: RenderTag) -> ValidationResult:
     if ttype == "STRUCT":
         ok, reason = _validate_struct_args(args)
         return ValidationResult(tag, ok, reason)
+    if ttype == "REACTION":
+        # 通用 SMILES 字段检查 + 原子守恒（化学校验 T2-3）
+        smi_list = _SMILES_FIELDS["REACTION"](args)
+        if not smi_list:
+            return ValidationResult(tag, False, "缺少 SMILES 字段")
+        for smi in smi_list:
+            if not smi:
+                return ValidationResult(tag, False, "SMILES 为空")
+            if not _smiles_ok(smi):
+                return ValidationResult(tag, False, f"无效 SMILES「{smi}」")
+        if _RDKIT_OK:
+            reason = _check_reaction_balance(args)
+            if reason:
+                return ValidationResult(tag, False, reason)
+        return ValidationResult(tag, True)
 
     # 通用带 SMILES 字段的标记：字段非空 + SMILES 合法
     fields = _SMILES_FIELDS.get(ttype)

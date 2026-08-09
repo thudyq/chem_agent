@@ -35,6 +35,7 @@ def evaluate_compliance(questions: list, *, max_corrections: int = 1) -> dict:
         "tags": 0,
         "valid": 0,
         "invalid": 0,
+        "chem_invalid": 0,
         "renderable": 0,
         "render_ok": 0,
         "render_fail": 0,
@@ -56,6 +57,9 @@ def evaluate_compliance(questions: list, *, max_corrections: int = 1) -> dict:
         stats["tags"] += len(tags)
         stats["valid"] += len(valid)
         stats["invalid"] += len(invalid)
+        # 化学正确率维度（T2-5）：原因带「化学校验：」前缀的非法标记子集
+        stats["chem_invalid"] += sum(
+            1 for r in invalid if r.reason.startswith("化学校验："))
 
         render_ok = render_fail = 0
         renderable = 0
@@ -143,6 +147,8 @@ def format_report(stats: dict) -> str:
         f"标记总数: {tags}",
         f"  合法: {stats['valid']}（{_pct(stats['valid'], tags)}）",
         f"  非法: {stats['invalid']}（{_pct(stats['invalid'], tags)}）",
+        f"  其中化学校验失败: {stats['chem_invalid']}"
+        f"（化学正确率 {_pct(tags - stats['chem_invalid'], tags)}）",
         f"可渲染标记: {renderable}",
         f"渲染成功: {stats['render_ok']}（{_pct(stats['render_ok'], renderable)}）",
         f"渲染失败: {stats['render_fail']}",

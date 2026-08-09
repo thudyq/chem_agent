@@ -10,7 +10,7 @@ renderers/layout.py）排成一行：反应物 + 反应物 + ... → 产物 + �
     [REACTION:反应物1;反应物2;...|产物1;产物2;...|反应条件]
 
 示例：
-    [REACTION:c1ccccc1;[O-][N+](=O)[O-]|O=[N+]([O-])c1ccccc1;O|H2SO4, 浓HNO3]
+    [REACTION:c1ccccc1;[O-][N+](=O)O|O=[N+]([O-])c1ccccc1;O|H2SO4, 浓HNO3]
     [REACTION:C=C;O|CCO|H2SO4]
 
 设计选择：
@@ -113,7 +113,7 @@ if __name__ == "__main__":
 
     print("\n[1] 苯的硝化（条件含化学式，验证自动下标）：")
     print(render_reaction(
-        "c1ccccc1;[O-][N+](=O)[O-]",
+        "c1ccccc1;[O-][N+](=O)O",
         "O=[N+]([O-])c1ccccc1;O",
         "H2SO4, 浓HNO3",
     ))

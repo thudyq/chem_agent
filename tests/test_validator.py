@@ -97,7 +97,85 @@ def test_composite_mecharrow_atom_out_of_range(fake_rdkit):
     assert "超出原子范围" in invalid[0].reason
 
 
+class TestChemicalChecks:
+    """化学校验（T2-2 label 一致性 / T2-3 原子守恒）：需要真实 RDKit，
+    不使用 fake_rdkit（元素计数依赖真实 Mol）。"""
+
+    def test_label_formula_consistent_passes(self):
+        pytest.importorskip("rdkit")
+        _, invalid = _validate("[STRUCT:CCl,label=CH3Cl]")
+        assert len(invalid) == 0
+
+    def test_label_formula_mismatch_rejected(self):
+        pytest.importorskip("rdkit")
+        _, invalid = _validate("[STRUCT:CCl,label=CH4Cl]")
+        assert len(invalid) == 1
+        assert "化学校验" in invalid[0].reason
+
+    def test_label_non_formula_skipped(self):
+        pytest.importorskip("rdkit")
+        _, invalid = _validate("[STRUCT:CCl,label=氯甲烷]")
+        assert len(invalid) == 0
+
+    def test_label_charge_formula_passes(self):
+        pytest.importorskip("rdkit")
+        _, invalid = _validate("[STRUCT:[OH-],label=OH-]")
+        assert len(invalid) == 0
+
+    def test_reaction_balanced_passes(self):
+        pytest.importorskip("rdkit")
+        _, invalid = _validate("[REACTION:C=C;O|CCO|H2SO4]")
+        assert len(invalid) == 0
+
+    def test_reaction_unbalanced_rejected(self):
+        pytest.importorskip("rdkit")
+        _, invalid = _validate("[REACTION:C=C|CCO|H2SO4]")
+        assert len(invalid) == 1
+        assert "化学校验" in invalid[0].reason
+        assert "不守恒" in invalid[0].reason
+
+    def test_reaction_protonation_balanced_passes(self):
+        pytest.importorskip("rdkit")
+        _, invalid = _validate("[REACTION:CCO;[H+]|CC[OH2+]]")
+        assert len(invalid) == 0
+
+    def test_composite_mech_balanced_passes(self):
+        pytest.importorskip("rdkit")
+        _, invalid = _validate(
+            "[COMPOSITE:reaction_mech][STRUCT:CCl][PLUS][STRUCT:[OH-]]"
+            "[RXNARROW][STRUCT:CO][PLUS][STRUCT:[Cl-]][/COMPOSITE]")
+        assert len(invalid) == 0
+
+    def test_composite_mech_unbalanced_rejected(self):
+        pytest.importorskip("rdkit")
+        _, invalid = _validate(
+            "[COMPOSITE:reaction_mech][STRUCT:CCO][PLUS][STRUCT:C[OH2+]]"
+            "[RXNARROW][STRUCT:CCOCC][PLUS][STRUCT:O][/COMPOSITE]")
+        assert len(invalid) == 1
+        assert "化学校验" in invalid[0].reason
+
+    def test_composite_mech_deprotonation_tolerated(self):
+        """EAS 去质子：产物不画 H+ 副产（H 差容忍，非 H 元素守恒）。"""
+        pytest.importorskip("rdkit")
+        _, invalid = _validate(
+            "[COMPOSITE:reaction_mech][STRUCT:c1ccccc1][PLUS][STRUCT:[N+](=O)=O]"
+            "[RXNARROW][STRUCT:O=[N+]([O-])c1ccccc1][/COMPOSITE]")
+        assert len(invalid) == 0
+
+    def test_composite_row_layout_skipped(self):
+        """row 多步合成序列（辅助试剂写箭头条件）不做守恒检查。"""
+        pytest.importorskip("rdkit")
+        _, invalid = _validate(
+            "[COMPOSITE:row][STRUCT:C=C][RXNARROW:H2O / H+]"
+            "[STRUCT:CCO][RXNARROW:CuO, Δ][STRUCT:CC=O][/COMPOSITE]")
+        assert len(invalid) == 0
+
+
 def test_composite_mecharrow_bond_form_midpoint_passes(fake_rdkit):
+    text = ("[COMPOSITE:reaction_mech][STRUCT:CCl,id=r0][RXNARROW]"
+            "[STRUCT:CO,id=p0][MECHARROW:r0:0>>r0:0+p0:0][/COMPOSITE]")
+    _, invalid = _validate(text)
+    assert len(invalid) == 0
     text = ("[COMPOSITE:reaction_mech][STRUCT:CCl,id=r0][RXNARROW]"
             "[STRUCT:CO,id=p0][MECHARROW:r0:0>>r0:0+p0:0][/COMPOSITE]")
     _, invalid = _validate(text)
