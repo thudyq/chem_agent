@@ -132,6 +132,12 @@ def test_smoke_stereo():
     _assert_ok(outs[0])
 
 
+def test_smoke_stereo_with_label():
+    outs, bad = _render("[STEREO:C[C@H](O)C(=O)O,label=(R)-乳酸]")
+    assert len(outs) == 1 and bad == 0
+    _assert_ok(outs[0], "\\node[below]")
+
+
 def test_smoke_lewis():
     outs, bad = _render("[LEWIS:O]")
     assert len(outs) == 1 and bad == 0

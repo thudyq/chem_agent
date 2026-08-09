@@ -19,6 +19,7 @@ renderers/layout.py）排成一行：反应物 + 反应物 + ... → 产物 + �
 """
 
 if __name__ == "__main__":
+    import re
     import sys
     from pathlib import Path
 
@@ -26,6 +27,8 @@ if __name__ == "__main__":
     from renderers.mol_primitives import format_chem_text, prepare_mol, scale_mol_coords
     from renderers.layout import layout_row, molecule_scope_lines
 else:
+    import re
+
     from .mol_primitives import format_chem_text, prepare_mol, scale_mol_coords
     from .layout import layout_row, molecule_scope_lines
 
@@ -53,8 +56,8 @@ def render_reaction(reactants_str: str, products_str: str, conditions: str = "")
     except ImportError:
         return "（反应式渲染失败：rdkit 未安装）"
 
-    reactants = [s.strip() for s in reactants_str.split(";") if s.strip()]
-    products = [s.strip() for s in products_str.split(";") if s.strip()]
+    reactants = [s.strip() for s in re.split(r"[;,]", reactants_str) if s.strip()]
+    products = [s.strip() for s in re.split(r"[;,]", products_str) if s.strip()]
 
     if not reactants:
         return "（反应式渲染失败：反应物不能为空）"

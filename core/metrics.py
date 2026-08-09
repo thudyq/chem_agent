@@ -154,6 +154,9 @@ def format_report(stats: dict) -> str:
 
 
 if __name__ == "__main__":
+    # Windows GBK 控制台打印含 ₆/CJK 的 LLM 输出会 UnicodeEncodeError，
+    # 与 composite.py 同款处理：强制 UTF-8、不可编码字符替换
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     questions = []
     if "--questions-file" in sys.argv:
         i = sys.argv.index("--questions-file")

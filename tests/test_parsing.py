@@ -42,6 +42,23 @@ def test_struct_with_label():
     assert t.args[1] == "乙酸"  # label 正确提取（验证正则 bug 修正）
 
 
+def test_struct_trailing_comma_normalized():
+    """STRUCT 的 SMILES 尾逗号（LLM 笔误）归一化去掉。"""
+    tags = parse_tags("[STRUCT:CC[OH2+],]")
+    assert len(tags) == 1
+    assert tags[0].args[0] == "CC[OH2+]"
+
+
+def test_stereo_with_label():
+    """STEREO 支持可选 ,label=名称（契约扩展，与 STRUCT 同构）。"""
+    tags = parse_tags("[STEREO:C[C@@H](O)C(=O)O,label=(R)-乳酸]")
+    assert len(tags) == 1
+    t = tags[0]
+    assert t.type == "STEREO"
+    assert t.args[0] == "C[C@@H](O)C(=O)O"
+    assert t.args[1] == "(R)-乳酸"
+
+
 def test_reasoning_paired():
     """用例4：REASONING 配对标记。"""
     tags = parse_tags("[REASONING]亲电取代[/REASONING]")

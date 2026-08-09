@@ -123,7 +123,16 @@ def _parse_content(tag_type: str, content: str) -> list:
             lab_start = li + len(",label=")
             after = [p for p in (ii, ai, pi) if p != -1 and p > li]
             label = content[lab_start:min(after)] if after else content[lab_start:]
-        return [smi, label]
+        # LLM 偶发写出尾逗号（如 [STRUCT:CC[OH2+],]），归一化去掉
+        return [smi.strip().rstrip(","), label]
+    if tag_type == "STEREO":
+        # 支持可选 ,label=名称（与 STRUCT 同构；LLM 高频误加的写法，契约化）
+        smi, label = content, None
+        li = content.find(",label=")
+        if li != -1:
+            smi = content[:li]
+            label = content[li + len(",label="):]
+        return [smi.strip().rstrip(","), label]
     if tag_type == "CHARGE":
         if "|" in content:
             smi, _, charges = content.partition("|")

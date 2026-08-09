@@ -8,11 +8,15 @@ RDKit 解析含 @/@@ 的 SMILES → PrepareMolForDrawing（含坐标+楔形方�
 
 import math
 
-from .mol_primitives import atom_label, atom_pos, prepare_mol
+from .mol_primitives import atom_label, atom_pos, format_chem_text, \
+    mol_visual_bbox, prepare_mol
 
 
-def render_stereo(smiles: str) -> str:
-    """[STEREO] 渲染：含立体信息的 SMILES → 楔形式 TikZ。失败返回错误提示。"""
+def render_stereo(smiles: str, label: str = None) -> str:
+    """[STEREO] 渲染：含立体信息的 SMILES → 楔形式 TikZ。失败返回错误提示。
+
+    label 可选：置于结构下方（如 (R)-乳酸）。
+    """
     try:
         from rdkit import Chem
         from rdkit.Chem import BondDir
@@ -76,6 +80,13 @@ def render_stereo(smiles: str) -> str:
             x, y = atom_pos(mol, atom.GetIdx())
             lines.append(f"  \\node[fill=white, inner sep=1pt] at ({x:.2f},{y:.2f}) {{{lab}}};")
 
+    if label:
+        min_x, min_y, max_x, _ = mol_visual_bbox(mol, include_lone_pairs=False)
+        lines.append(
+            f"  \\node[below] at ({(min_x + max_x) / 2.0:.2f},{min_y - 0.15:.2f}) "
+            f"{{{format_chem_text(label)}}};"
+        )
+
     lines.append("\\end{tikzpicture}")
     return "\n".join(lines)
 
@@ -87,3 +98,5 @@ if __name__ == "__main__":
     print(render_stereo("CC[C@@H](N)C(=O)O"))
     print("\n[3] 无手性中心（应提示）:")
     print(render_stereo("CCO"))
+    print("\n[4] 带 label：(R)-乳酸 C[C@H](O)C(=O)O, label=(R)-乳酸:")
+    print(render_stereo("C[C@H](O)C(=O)O", label="(R)-乳酸"))

@@ -47,5 +47,19 @@
     "llm_output": "[COMPOSITE:reaction_mech][STRUCT:CCl,id=nu][RXNARROW][STRUCT:CO,id=pe][MECHARROW:nu:9>pe:0][/COMPOSITE]",
     "expect": {"valid": 0, "invalid": 1},
     "note": "nu 组件仅 2 原子，9 越界，校验层拦截"
+  },
+  {
+    "id": "reaction-trailing-comma",
+    "source": "真实端到端 20260808 metrics 基线（乙醇→乙醚机理题，REACTION 产物带尾逗号：SMILES 'CC[OH2+],' 直达 RDKit 报错）",
+    "llm_output": "乙醇在浓硫酸催化下 140°C 脱水生成乙醚：\n[REACTION:CCO;CCO|CCOCC;CC[OH2+],|H2SO4, 140°C]",
+    "expect": {"valid": 1, "invalid": 0},
+    "note": "尾逗号属良性笔误：SMILES 不含逗号，组分按 [;,] 拆分归一化后放行（20260808 起）"
+  },
+  {
+    "id": "stereo-with-label",
+    "source": "真实端到端 20260808 metrics 基线（(R)-乳酸楔形式题，LLM 给 STEREO 误加 label 参数，整串进 RDKit 报错）",
+    "llm_output": "(R)-乳酸的楔形式结构如下：\n[STEREO:C[C@@H](O)C(=O)O,label=(R)-乳酸]",
+    "expect": {"valid": 1, "invalid": 0},
+    "note": "STEREO 契约扩展支持 ,label=名称（20260808 起），拆分后放行"
   }
 ]

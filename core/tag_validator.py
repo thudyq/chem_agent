@@ -87,8 +87,12 @@ _SMILES_FIELDS = {
 
 
 def _split_multi(seg: str) -> list:
-    """把分号分隔的多组分段拆为 SMILES 列表（过滤空串）。"""
-    return [s.strip() for s in seg.split(";") if s.strip()] if seg else []
+    """把多组分段拆为 SMILES 列表（过滤空串）。
+
+    契约分隔符为分号；LLM 偶发用逗号分隔或写出尾逗号（SMILES 不含逗号），
+    按 [;,] 拆分归一化（与 renderers/reaction.py 保持一致）。
+    """
+    return [s.strip() for s in re.split(r"[;,]", seg or "") if s.strip()]
 
 
 @dataclass
