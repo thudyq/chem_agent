@@ -8,7 +8,9 @@ r"""streamlit_app.py — 本地 Web 界面（本地测试用；清小搭接入�
   重命名为原位编辑，回车或 ✓ 保存）；
 - 主区当前会话消息流（user 问题 + assistant 图文回答）；
 - 底部输入区：st.chat_input 固定窗格（钉在视口底部，向主流大模型聊天界面
-  看齐），内置 ＋ 图片附件（accept_file，streamlit ≥1.46），回车连续追问；
+  看齐），整页最先渲染的可见组分（调用提到脚本最前，delta 最先到达前端），
+  CSS 最高 z-index + 不透明底色保证不被其他组分遮盖；
+  内置 ＋ 图片附件（accept_file，streamlit ≥1.46），回车连续追问；
   旧版 streamlit 回退为 ＋ 弹层上传 + text_input（随内容滚动）；
 - 会话持久化到 data/chat_sessions.json（刷新/重启不丢；data/ 已 gitignore）；
   旧版单会话 data/chat_history.json 首次运行时自动迁移为首个会话。
@@ -466,9 +468,27 @@ st.markdown(
     "footer {visibility: hidden;}"
     "#MainMenu {visibility: hidden;}"
     ".stChatMessage {max-width: 780px; margin: 0 auto;}"
+    ".stChatFloatingInputContainer,[data-testid='stChatInput']"
+    "{z-index: 999999; background-color: var(--background-color);}"
     "</style>",
     unsafe_allow_html=True,
 )
+
+# ---- 输入框：整页最先渲染的可见组分（固定窗格，默认最前不被遮盖） ----
+# st.chat_input 由前端钉在视口底部，与脚本位置无关；提到最前调用使其 delta
+# 最先到达前端——长历史重渲染 / 图片编译回填期间输入框也立即可见可用；
+# 上方 CSS 赋最高 z-index 与不透明底色，其他组分任何时候都不遮盖它。
+_CHAT_FILE_OK = _chat_input_supports_file()
+_CHAT_INPUT_OK = hasattr(st, "chat_input")
+_submitted = None      # 现代路径（含附件）的提交值，页面末尾统一处理
+_legacy_prompt = None  # 中间路径（无附件能力）的提交值
+if _CHAT_FILE_OK:
+    _submitted = st.chat_input(
+        "输入化学问题，可基于上文连续追问；点 ＋ 可上传图片…",
+        accept_file=True, file_type=["png", "jpg", "jpeg"])
+elif _CHAT_INPUT_OK:
+    _legacy_prompt = st.chat_input("输入化学问题，可基于上文连续追问…")
+
 st.title("🧪 有机化学知识智能体")
 
 # 会话初始化：加载 / 迁移旧历史 / 兜底新建
@@ -532,29 +552,24 @@ if cur is not None:
             elif msg["content"].strip():
                 st.markdown(_convert_latex_markers(msg["content"]))
 
-    # ---- 底部输入区：固定窗格（st.chat_input 钉在视口底部，向主流聊天界面看齐） ----
-    if _chat_input_supports_file():
-        # 现代路径（≥1.46）：chat_input 内置 ＋ 附件按钮
+    # ---- 输入处理与附件区（输入框本体已在页面顶部渲染） ----
+    if _CHAT_FILE_OK:
         _handle_pending_upload()
-        submitted = st.chat_input(
-            "输入化学问题，可基于上文连续追问；点 ＋ 可上传图片…",
-            accept_file=True, file_type=["png", "jpg", "jpeg"])
-        if submitted:
-            if submitted.files:
-                f = submitted.files[0]
+        if _submitted:
+            if _submitted.files:
+                f = _submitted.files[0]
                 st.session_state.pending_upload = (f.name, f.getvalue())
-            text = (submitted.text or "").strip()
+            text = (_submitted.text or "").strip()
             if text:
                 _ask(sessions, cur["id"], text)
-            elif submitted.files:
+            elif _submitted.files:
                 _rerun()  # 仅附件无文字：重跑以展示附件预览
-    elif hasattr(st, "chat_input"):
-        # chat_input 固定输入（≥1.24）但无附件能力（<1.46）：保留 ＋ 弹层上传
+    elif _CHAT_INPUT_OK:
+        # chat_input 无附件能力（<1.46）：保留 ＋ 弹层上传
         _attachment_popover()
         _handle_uploaded(st.session_state.get("uploaded"))
-        prompt = st.chat_input("输入化学问题，可基于上文连续追问…")
-        if prompt and prompt.strip():
-            _ask(sessions, cur["id"], prompt.strip())
+        if _legacy_prompt and _legacy_prompt.strip():
+            _ask(sessions, cur["id"], _legacy_prompt.strip())
     else:
         # 远古 streamlit（<1.24）：原 text_input 布局（随内容滚动）
         st.divider()
