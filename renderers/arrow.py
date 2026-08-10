@@ -12,10 +12,11 @@ if __name__ == "__main__":
     from pathlib import Path
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from renderers.mol_primitives import format_chem_text, prepare_mol, scale_mol_coords
+    from renderers.mol_primitives import prepare_mol, scale_mol_coords, \
+        wrap_format_text
     from renderers.layout import layout_row, molecule_scope_lines
 else:
-    from .mol_primitives import format_chem_text, prepare_mol, scale_mol_coords
+    from .mol_primitives import prepare_mol, scale_mol_coords, wrap_format_text
     from .layout import layout_row, molecule_scope_lines
 
 
@@ -58,9 +59,11 @@ def render_arrow(reactant_smi: str, product_smi: str, reaction_type: str = None)
     )
     if reaction_type:
         mid = (main_arrow.x1 + main_arrow.x2) / 2.0
+        text = wrap_format_text(reaction_type)
+        align = "align=center, " if "\\\\" in text else ""
         lines.append(
-            f"  \\node[below] at ({mid:.2f},0) "
-            f"{{\\small\\itshape {format_chem_text(reaction_type)}}};"
+            f"  \\node[{align}below] at ({mid:.2f},0) "
+            f"{{\\small\\itshape {text}}};"
         )
     lines.append("\\end{tikzpicture}")
     return "\n".join(lines)

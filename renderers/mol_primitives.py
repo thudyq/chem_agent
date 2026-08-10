@@ -1154,6 +1154,76 @@ def format_chem_text(text: str) -> str:
     return out.replace("△", r"$\triangle$").replace("Δ", r"$\Delta$")
 
 
+# ---------------------------------------------------------------------------
+# 标签自动换行（C2 / P3 暂缓项）
+# ---------------------------------------------------------------------------
+
+_LABEL_WRAP_MAX = 3.5    # 标签/条件换行默认最大行宽（视觉宽度单位）
+_LABEL_LINE_H = 0.35     # 标签单行高（TikZ 单位，估）
+
+
+def wrap_label_lines(text: str, max_width: float = _LABEL_WRAP_MAX) -> list:
+    """按可视宽度换行长标签/条件（在原始文本上断行）。
+
+    返回行列表；总宽不超过 max_width 时原样单行返回。
+    - 含空格（中英混排/条件，如 "浓H2SO4, 加热"）：贪心断行，优先落在
+      行内最后一个空格处（保持单词完整）；
+    - 纯中文（无空格）：按字符数均分（行数 = ceil(总宽/max_width)），
+      避免贪心在中词断行（如"条件"被拆成"条/件"）。
+    按字符测量 label_visual_width（CJK 全角 ×2），单字宽度超过
+    max_width 时该字独占一行。
+    """
+    if not text:
+        return []
+    if label_visual_width(text) <= max_width:
+        return [text]
+    if " " not in text:
+        n = max(1, math.ceil(label_visual_width(text) / max_width))
+        per = math.ceil(len(text) / n)
+        return [text[i:i + per] for i in range(0, len(text), per)]
+    lines, cur = [], ""
+    for ch in text:
+        trial = cur + ch
+        if cur and label_visual_width(trial) > max_width:
+            sp = cur.rfind(" ")
+            if sp >= 0:
+                lines.append(cur[:sp])
+                cur = cur[sp + 1:] + ch
+            else:
+                lines.append(cur)
+                cur = ch
+        else:
+            cur = trial
+    if cur:
+        lines.append(cur)
+    return lines
+
+
+def label_wrapped_size(text: str, max_width: float = _LABEL_WRAP_MAX) -> tuple:
+    """换行后标签的 (总宽, 总高)（视觉单位），供布局间距估算。
+
+    总宽 = 各行 label_visual_width 最大值；总高 = 行数 × 行高。
+    """
+    lines = wrap_label_lines(text, max_width)
+    w = max((label_visual_width(l) for l in lines), default=0.0)
+    return w, len(lines) * _LABEL_LINE_H
+
+
+def wrap_format_text(text: str, max_width: float = _LABEL_WRAP_MAX) -> str:
+    """长标签/条件自动换行 + 化学排版（TikZ 节点文本）。
+
+    先按可视宽度在原始文本上换行（避免拆开 $...$ 数学段），再逐行
+    format_chem_text（下标/电荷/加热符号），多行以 \\\\ 连接——调用方
+    需为节点加 align=center。总宽未超 max_width 时等价 format_chem_text。
+    """
+    if not text:
+        return ""
+    lines = wrap_label_lines(text, max_width)
+    if len(lines) == 1:
+        return format_chem_text(lines[0])
+    return "\\\\".join(format_chem_text(l) for l in lines)
+
+
 def bond_order_of(mol, spec: str) -> int:
     """"a-b" 键引用对应的键级（1/2/3）；非法或不存在返回 0。"""
     a, _, b = spec.partition("-")

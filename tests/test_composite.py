@@ -71,6 +71,30 @@ def test_cjk_label_caption_shown():
     assert out.count("\\node[below]") == 2
 
 
+def test_long_label_wraps_multiline():
+    """C2 标签自动换行：长中文标签在渲染输出中分多行 + align=center。"""
+    out = _render(
+        "[COMPOSITE:reaction_mech]"
+        "[STRUCT:CCl,label=质子化乙醇的反应中间体][RXNARROW][STRUCT:CO,label=产物]"
+        "[/COMPOSITE]"
+    )
+    # 长标签拆为多行（含 \\\\ 行分隔）且节点启用 align=center
+    assert "质子化乙醇的\\\\反应中间体" in out or "\\\\" in out
+    assert "align=center" in out
+    # 中文标签仍显示
+    assert "质子化乙醇" in out and "反应中间体" in out
+
+
+def test_short_label_no_align_center():
+    """短标签（≤ 3.5 宽）不换行，节点不引入 align=center。"""
+    out = _render(
+        "[COMPOSITE:reaction_mech]"
+        "[STRUCT:CCl,label=底物][RXNARROW][STRUCT:CO,label=产物]"
+        "[/COMPOSITE]"
+    )
+    assert "align=center" not in out
+
+
 def test_bond_origin_arrow_bends_down():
     """键中点出发的断键箭头向下弯，孤对电子进攻箭头向上弯。"""
     out = _render(SN2_DEMO)

@@ -8,8 +8,8 @@ RDKit 解析含 @/@@ 的 SMILES → PrepareMolForDrawing（含坐标+楔形方�
 
 import math
 
-from .mol_primitives import atom_label, atom_pos, format_chem_text, \
-    mol_visual_bbox, prepare_mol
+from .mol_primitives import atom_label, atom_pos, mol_visual_bbox, \
+    prepare_mol, wrap_format_text
 
 
 def render_stereo(smiles: str, label: str = None) -> str:
@@ -82,9 +82,11 @@ def render_stereo(smiles: str, label: str = None) -> str:
 
     if label:
         min_x, min_y, max_x, _ = mol_visual_bbox(mol, include_lone_pairs=False)
+        text = wrap_format_text(label)
+        align = "align=center, " if "\\\\" in text else ""
         lines.append(
-            f"  \\node[below] at ({(min_x + max_x) / 2.0:.2f},{min_y - 0.15:.2f}) "
-            f"{{{format_chem_text(label)}}};"
+            f"  \\node[{align}below] at ({(min_x + max_x) / 2.0:.2f},{min_y - 0.15:.2f}) "
+            f"{{{text}}};"
         )
 
     lines.append("\\end{tikzpicture}")

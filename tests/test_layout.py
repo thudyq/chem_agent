@@ -135,3 +135,64 @@ def test_layout_rows_stacking():
     assert y_offsets[0] == 0.0
     assert y_offsets[1] > 1.0          # 第二行在第一行下方（行高 + 行距）
     assert len(rows[1].resarrows) == 1
+
+
+def test_mol_with_label_reserves_width():
+    """C2：带标签的 mol 按 spacing_bbox 占位——宽标签不压相邻组件。"""
+    items = [
+        ("mol", "a", _mol("CCl"), "质子化乙醇的反应中间体"),
+        ("mol", "b", _mol("CO")),
+    ]
+    result = layout_row(items)
+    a, b = result.mols[0], result.mols[1]
+    # spacing_bbox 横向外延 ≥ 分子 bbox 外延（标签宽于分子）
+    sa, sb = a.spacing_bbox, b.spacing_bbox
+    assert sa[0] <= a.bbox[0] and sa[2] >= a.bbox[2]
+    # 相邻组件全局 spacing 不重叠（pass 1 游标已按 spacing 宽度推进）
+    assert sa[2] + a.shift[0] < sb[0] + b.shift[0]
+
+
+def test_label_spacing_includes_height():
+    """C2：spacing_bbox 纵向含标签外延（分子底边向下 label_gap + 行高）。"""
+    from renderers.mol_primitives import label_wrapped_size
+    label = "质子化乙醇的反应中间体"
+    items = [("mol", "a", _mol("CCl"), label)]
+    result = layout_row(items, label_gap=0.35)
+    sb = result.mols[0].spacing_bbox
+    _, lh = label_wrapped_size(label)
+    # 分子 bbox 底边向下：label_gap(0.35) + 标签总高
+    assert abs((result.mols[0].bbox[1] - 0.35 - lh) - sb[1]) < 1e-9
+
+
+def test_row_stacking_counts_label_height():
+    """C2：多行布局行高计入标签外延——上行标签不压下行分子。"""
+    from renderers.layout import layout_rows
+    label = "质子化乙醇的反应中间体"
+    items = [
+        ("mol", "a", _mol("CCl"), label),
+        ("newline",),
+        ("mol", "b", _mol("CO")),
+    ]
+    rows, y_offsets = layout_rows(items)
+    a, b = rows[0].mols[0], rows[1].mols[0]
+    # y 向下为负：第一行 spacing 底边（含标签）的全局 y 高于（大于）
+    # 第二行分子顶边 → 标签不压下行分子
+    a_bottom = (a.spacing_bbox or a.bbox)[1] + a.shift[1] - y_offsets[0]
+    b_top = b.bbox[3] + b.shift[1] - y_offsets[1]
+    assert a_bottom > b_top
+
+
+def test_two_pass_overlap_resolution():
+    """C2 通用两遍布局：spacing 估算偏窄时 pass 2 把右侧组件推离。"""
+    # 构造：bbox_fn 返回固定窄 bbox（模拟估算不足），两分子间距被 pass 2 拉大
+    def narrow_bbox(mol):
+        return (-0.5, -0.5, 0.5, 0.5)      # 固定 1.0 宽
+    items = [
+        ("mol", "a", _mol("CCl"), "质子化乙醇的反应中间体"),
+        ("mol", "b", _mol("CO"), "质子化乙醇的反应中间体"),
+    ]
+    result = layout_row(items, mol_gap=0.0, bbox_fn=narrow_bbox)
+    a, b = result.mols[0], result.mols[1]
+    sa, sb = a.spacing_bbox, b.spacing_bbox
+    # pass 1 游标按 spacing（含标签）推进 → 无需 pass 2 也已不重叠
+    assert sa[2] + a.shift[0] <= sb[0] + b.shift[0] + 1e-9

@@ -51,11 +51,13 @@ def render_structure(smiles: str, label: str = None) -> str:
 
     # label：tikzpicture 包裹结构为命名节点，label 置于其正下方（tikz 核心 anchor/yshift）
     if label:
-        from .mol_primitives import format_chem_text
+        from .mol_primitives import wrap_format_text
+        text = wrap_format_text(label)
+        align = "align=center, " if "\\\\" in text else ""
         return (
             "\\begin{tikzpicture}\n"
             f"  \\node (mol) {{{chemfig}}};\n"
-            f"  \\node[anchor=north] at ([yshift=-2mm]mol.south) {{{format_chem_text(label)}}};\n"
+            f"  \\node[{align}anchor=north] at ([yshift=-2mm]mol.south) {{{text}}};\n"
             "\\end{tikzpicture}"
         )
     return chemfig

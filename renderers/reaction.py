@@ -24,12 +24,13 @@ if __name__ == "__main__":
     from pathlib import Path
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from renderers.mol_primitives import format_chem_text, prepare_mol, scale_mol_coords
+    from renderers.mol_primitives import prepare_mol, scale_mol_coords, \
+        wrap_format_text
     from renderers.layout import layout_row, molecule_scope_lines
 else:
     import re
 
-    from .mol_primitives import format_chem_text, prepare_mol, scale_mol_coords
+    from .mol_primitives import prepare_mol, scale_mol_coords, wrap_format_text
     from .layout import layout_row, molecule_scope_lines
 
 
@@ -91,11 +92,12 @@ def render_reaction(reactants_str: str, products_str: str, conditions: str = "")
         lines.append(f"  \\node at ({px:.2f},0) {{$+$}};")
 
     main_arrow = layout.arrows[0]
-    cond_text = format_chem_text(main_arrow.condition)
+    cond_text = wrap_format_text(main_arrow.condition)
     if cond_text:
+        align = "align=center, " if "\\\\" in cond_text else ""
         lines.append(
             f"  \\draw[->, very thick] ({main_arrow.x1:.2f},0) -- ({main_arrow.x2:.2f},0) "
-            f"node[midway, above] {{{cond_text}}};"
+            f"node[midway, {align}above] {{{cond_text}}};"
         )
     else:
         lines.append(

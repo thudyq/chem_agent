@@ -13,10 +13,11 @@ if __name__ == "__main__":
     from pathlib import Path
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from renderers.mol_primitives import format_chem_text, prepare_mol, scale_mol_coords
+    from renderers.mol_primitives import prepare_mol, scale_mol_coords, \
+        wrap_format_text
     from renderers.layout import layout_row, molecule_scope_lines
 else:
-    from .mol_primitives import format_chem_text, prepare_mol, scale_mol_coords
+    from .mol_primitives import prepare_mol, scale_mol_coords, wrap_format_text
     from .layout import layout_row, molecule_scope_lines
 
 
@@ -71,9 +72,11 @@ def render_retro(target_smi: str, precursor_smi: str, transform: str = None) -> 
     lines.extend(_retro_arrow_lines(main_arrow.x1, main_arrow.x2))
     if transform:
         mid = (main_arrow.x1 + main_arrow.x2) / 2.0
+        text = wrap_format_text(transform)
+        align = "align=center, " if "\\\\" in text else ""
         lines.append(
-            f"  \\node[above] at ({mid:.2f},0) "
-            f"{{\\small\\itshape {format_chem_text(transform)}}};"
+            f"  \\node[{align}above] at ({mid:.2f},0) "
+            f"{{\\small\\itshape {text}}};"
         )
     lines.append("\\end{tikzpicture}")
     return "\n".join(lines)

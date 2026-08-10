@@ -14,7 +14,8 @@ from typing import Any, Hashable, List, Tuple
 
 from .mol_primitives import (
     _label_flip_for, atom_label, atom_main_label, atom_pos, bond_segments,
-    charge_tikz, label_bond_margin, lone_pair_tikz, mol_visual_bbox,
+    charge_tikz, label_bond_margin, label_wrapped_size, lone_pair_tikz,
+    mol_visual_bbox,
 )
 
 
@@ -25,6 +26,8 @@ class PlacedMol:
     mol: Any                                       # RDKit Mol（局部 2D 坐标）
     shift: Tuple[float, float]                     # scope 平移量（全局 = 局部 + shift）
     bbox: Tuple[float, float, float, float]        # 局部视觉包围盒
+    label: str = ""                                # 组件级标签（宽于分子时计入占位）
+    spacing_bbox: Tuple[float, float, float, float] = None  # 含标签外延的间距包围盒
 
 
 @dataclass
@@ -52,12 +55,15 @@ class RowLayout:
 def layout_row(items: list, *, mol_gap: float = 1.6, plus_w: float = 1.1,
                arrow_w: float = 2.6, arrow_pad: float = 0.65,
                res_w: float = 1.1,
+               label_gap: float = 0.35,
                bbox_fn=mol_visual_bbox) -> RowLayout:
     """把组件序列排成一行。
 
     参数:
         items: 组件序列，元素为
-            ("mol", key, mol)  分子组件（RDKit Mol，已有 2D 坐标）；
+            ("mol", key, mol)             分子组件（RDKit Mol，已有 2D 坐标）；
+            ("mol", key, mol, label)      同上，附组件级标签（宽于分子时
+                                          spacing_bbox 计入标签外延，防重叠）；
             ("plus",)          加号连接符；
             ("arrow", cond)    主反应箭头（cond 为条件文本，可空）；
             ("resarrow",)      共振箭头 ↔ 连接符。
@@ -65,11 +71,15 @@ def layout_row(items: list, *, mol_gap: float = 1.6, plus_w: float = 1.1,
         plus_w / res_w: 加号 / 共振箭头占位宽度。
         arrow_w: 反应箭头占位宽度。
         arrow_pad: 箭头实际线段两端内缩量。
-        bbox_fn: 视觉包围盒函数（默认含标签与孤对电子外延）。
+        label_gap: 标签顶边到分子 bbox 底边的间距（与绘制端一致）。
+        bbox_fn: 分子视觉包围盒函数（默认含原子标签与孤对电子外延）。
 
     规则:
-        - 每个 mol 按视觉包围盒宽度占位，包围盒中心垂直对齐 y=0；
-        - 组件按给定顺序从左到右排布，互不重叠。
+        - 每个 mol 按 spacing_bbox 宽度占位（含标签外延时宽于分子），
+          包围盒中心垂直对齐 y=0；带标签的分子垂直中心仍按分子 bbox
+          （标签在分子下方，不抬升分子）；
+        - 组件按给定顺序从左到右排布；两遍布局（pass 2）：排布后检测
+          相邻组件全局 spacing_bbox 重叠，把右侧组件向右推离（最多 5 轮）。
     """
     cursor = 0.0
     mols: List[PlacedMol] = []
@@ -82,14 +92,29 @@ def layout_row(items: list, *, mol_gap: float = 1.6, plus_w: float = 1.1,
         if kind == "mol":
             if prev_kind == "mol":
                 cursor += mol_gap
-            _, key, mol = item
+            _, key, mol = item[:3]
+            label = item[3] if len(item) > 3 else ""
             bbox = bbox_fn(mol)
             min_x, min_y, max_x, max_y = bbox
-            w = max_x - min_x
-            local_cx = (min_x + max_x) / 2.0
             local_cy = (min_y + max_y) / 2.0
+            if label:
+                # 标签外延：以分子 bbox 中心 x 为轴，左右各扩 label 半宽；
+                # 纵向从分子底边向下 label_gap + 行高×行数
+                cx = (min_x + max_x) / 2.0
+                lw, lh = label_wrapped_size(label)
+                label_half = lw / 2.0
+                spacing = (min(min_x, cx - label_half),
+                           min_y - label_gap - lh,
+                           max(max_x, cx + label_half),
+                           max_y)
+            else:
+                spacing = bbox
+            smin_x, smin_y, smax_x, smax_y = spacing
+            w = smax_x - smin_x
+            local_cx = (smin_x + smax_x) / 2.0
             shift = (cursor + w / 2.0 - local_cx, -local_cy)
-            mols.append(PlacedMol(key=key, mol=mol, shift=shift, bbox=bbox))
+            mols.append(PlacedMol(key=key, mol=mol, shift=shift, bbox=bbox,
+                                  label=label, spacing_bbox=spacing))
             cursor += w
         elif kind == "plus":
             pluses.append(cursor + plus_w / 2.0)
@@ -108,11 +133,40 @@ def layout_row(items: list, *, mol_gap: float = 1.6, plus_w: float = 1.1,
                      resarrows=resarrows)
 
 
+def _resolve_row_overlaps(layout: RowLayout, pad: float = 0.05) -> float:
+    """两遍布局 pass 2：相邻组件全局 spacing_bbox 重叠时右推（原地修改 shift）。
+
+    游标式排布（按 spacing 宽度）本身不重叠，本遍是兜底——当 spacing
+    估算与实际渲染仍有偏差（如标签实际更宽）时把右侧组件推离。
+    返回修正后的总宽（右端最大坐标）。
+    """
+    for _ in range(5):
+        moved = False
+        placed = sorted(layout.mols, key=lambda p: p.shift[0])
+        for i in range(1, len(placed)):
+            a, b = placed[i - 1], placed[i]
+            sba = a.spacing_bbox or a.bbox
+            sbb = b.spacing_bbox or b.bbox
+            ax1 = sba[0] + a.shift[0]
+            bx1 = sbb[0] + b.shift[0]
+            overlap = ax1 + pad - bx1
+            if overlap > 0:
+                b.shift = (b.shift[0] + overlap, b.shift[1])
+                moved = True
+        if not moved:
+            break
+    right = 0.0
+    for p in layout.mols:
+        sbb = p.spacing_bbox or p.bbox
+        right = max(right, sbb[2] + p.shift[0])
+    return right
+
+
 def layout_rows(items: list, *, row_gap: float = 1.2, **kwargs):
     """多行布局：items 中的 ("newline",) 分隔各行（R-6 上下排列）。
 
-    每行用 layout_row 排布（kwargs 透传），再按行内最高组件的高度 + row_gap
-    逐行向下堆叠（y 向下为负方向）。
+    每行用 layout_row 排布（kwargs 透传），再按行内最高组件的间距包围盒
+    高度（含标签向下外延）+ row_gap 逐行向下堆叠（y 向下为负方向）。
 
     返回:
         (rows, y_offsets)：rows 为每行的 RowLayout，y_offsets 为每行相对
@@ -131,9 +185,15 @@ def layout_rows(items: list, *, row_gap: float = 1.2, **kwargs):
     y = 0.0
     for row_items in rows_items:
         layout = layout_row(row_items, **kwargs)
+        # pass 2：相邻组件间距包围盒重叠时右推，总宽随之修正
+        _resolve_row_overlaps(layout)
         rows.append(layout)
         y_offsets.append(y)
-        height = max((p.bbox[3] - p.bbox[1] for p in layout.mols), default=1.0)
+        height = max(
+            ((p.spacing_bbox or p.bbox)[3] - (p.spacing_bbox or p.bbox)[1]
+             for p in layout.mols),
+            default=1.0,
+        )
         y += height + row_gap
     return rows, y_offsets
 
