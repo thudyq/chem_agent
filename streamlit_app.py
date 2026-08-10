@@ -7,7 +7,7 @@ r"""streamlit_app.py — 本地 Web 界面（本地测试用；清小搭接入�
 - 侧边栏会话管理：新对话 + 会话列表（悬停 ⋯ 三点菜单：重命名/删除；
   重命名为原位编辑，回车或 ✓ 保存）；
 - 主区当前会话消息流（user 问题 + assistant 图文回答，每条回答附
-  「复制 Markdown」一键复制按钮）；
+  「复制 Markdown」一键复制按钮）；排版内容列定宽居中、与输入框长度一致；
 - 底部输入区：st.chat_input 固定窗格（钉在视口底部，向主流大模型聊天界面
   看齐），整页最先渲染的可见组分（调用提到脚本最前，delta 最先到达前端），
   stBottom 自带钉底层级与不透明背景（不被其他组分遮盖）；
@@ -512,11 +512,17 @@ st.markdown(
     "<style>"
     "footer {visibility: hidden;}"
     "#MainMenu {visibility: hidden;}"
-    ".stChatMessage {max-width: 780px; margin: 0 auto;}"
     "[data-testid='stChatInput']{"
     "width: max(280px, calc((100vw - 460px) * 0.8)) !important;"
     "max-width: 100% !important;"
     "margin-left: auto !important; margin-right: auto !important;}"
+    "[data-testid='stMainBlockContainer']{"
+    "width: max(440px, calc((100vw - 460px) * 0.8 + 160px)) !important;"
+    "max-width: 100% !important;"
+    "margin-left: auto !important; margin-right: auto !important;}"
+    "@media (max-width: 863.98px){"
+    "[data-testid='stMainBlockContainer']{"
+    "width: max(312px, calc((100vw - 460px) * 0.8 + 32px)) !important;}}"
     "</style>",
     unsafe_allow_html=True,
 )
@@ -527,7 +533,10 @@ st.markdown(
 # delta 最先到达前端——长历史重渲染 / 图片编译回填期间输入框也立即可见可用。
 # 上方 CSS 把可见输入盒（[data-testid="stChatInput"]，无宽度声明、撑满父级，
 # 是长度的真正控制点）固定为原长的 80%：(100vw - 侧边栏300 - 主区padding160)
-# × 0.8，按视口计算与侧边栏状态无关——收起时长度不变、位置随居中左移。
+# × 0.8，按视口计算与侧边栏状态无关——收起时长度不变、位置随居中左移；
+# 主区内容列（stMainBlockContainer，border-box）取同宽 + 主区 padding 并居中，
+# 使标题/消息/图片/按钮整列与输入框左右边缘对齐（padding 在 864px 断点变档
+# 5rem↔1rem，内容列宽度随之补偿）。
 _CHAT_FILE_OK = _chat_input_supports_file()
 _CHAT_INPUT_OK = hasattr(st, "chat_input")
 _submitted = None      # 现代路径（含附件）的提交值，页面末尾统一处理
