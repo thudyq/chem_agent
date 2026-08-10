@@ -231,15 +231,45 @@ def adjust_hbond_conformation(mol, x_idx: int, y_idx: int) -> None:
                                  ay + proj * uy - perp * ux, p.z))
 
 
+def _zigzag_continuation_angle(bond_ang: float) -> float | None:
+    """端原子显式 H 的锯齿延续方向（链状骨架 zigzag 惯例）。
+
+    bond_ang 为原子→邻居方向（_bond_angles 输出）。在入键方向的 ±60°
+    候选中取垂直分量与入键交替者（入键下行则 H 上行，反之亦然）；
+    入键近水平无法判断交替时取向上者；近竖直（两候选同侧）返回 None，
+    由调用方回退到最大空档逻辑。
+    """
+    s = math.sin(math.radians(bond_ang))
+    base = bond_ang + 180.0
+    opts = [(base + 60.0) % 360.0, (base - 60.0) % 360.0]
+    if abs(s) < 0.3:
+        up = [o for o in opts if math.sin(math.radians(o)) > 0]
+        return up[0] if up else None
+    want = 1.0 if s > 0 else -1.0
+    for o in opts:
+        if math.sin(math.radians(o)) * want > 0:
+            return o
+    return None
+
+
 def place_explicit_hs(mol, idx: int, count: int = 1,
                       toward: tuple[float, float] | None = None,
-                      h_len: float = 0.75) -> list:
+                      h_len: float | None = None) -> list:
     """原子 idx 上 count 个显式 H 的位置（互不重叠的空档方向扇形分配）。
 
     toward 非空时首个 H 优先沿该方向（氢键 X—H···Y 直线）；其余按
     最大空档角平分线依次分配，同一空档内多根 H 扇形展开 ±20°。
+    端原子（仅 1 根键）且 toward 为空时，取锯齿延续方向（
+    _zigzag_continuation_angle，与入键垂直分量交替、指向上方）。
+    h_len 缺省取该原子的平均键长（与普通骨架键等长）。
     """
     x, y = atom_pos(mol, idx)
+    if h_len is None:
+        lens = []
+        for b in mol.GetAtomWithIdx(idx).GetBonds():
+            nx, ny = atom_pos(mol, b.GetOtherAtomIdx(idx))
+            lens.append(math.hypot(nx - x, ny - y))
+        h_len = sum(lens) / len(lens) if lens else 0.75
     blocked = sorted(a % 360.0 for a in _bond_angles(mol, idx))
     gaps = []
     if not blocked:
@@ -254,6 +284,11 @@ def place_explicit_hs(mol, idx: int, count: int = 1,
     if toward is not None:
         ang = math.degrees(math.atan2(toward[1] - y, toward[0] - x)) % 360.0
         if all(_ang_diff(ang, b) > 30.0 for b in blocked):
+            angles.append(ang)
+    elif len(blocked) == 1 and count == 1:
+        # 端原子单 H：锯齿延续方向（与入键垂直分量交替，指向上方）
+        ang = _zigzag_continuation_angle(blocked[0])
+        if ang is not None:
             angles.append(ang)
     for gi, (gap, mid) in enumerate(gaps):
         if len(angles) >= count:
@@ -271,11 +306,12 @@ def place_explicit_hs(mol, idx: int, count: int = 1,
 
 
 def place_donor_h(mol, x_idx: int, y_pos: tuple[float, float],
-                  h_len: float = 0.75) -> tuple[float, float]:
+                  h_len: float | None = None) -> tuple[float, float]:
     """给体 X 的显式 H 位置（规范：X—H 用实线画出）。
 
     优先取 X→Y 方向（X—H···Y 尽量呈直线）；该方向与已有键过近（<30°）
     时改取最大空档的角平分线，避免与骨架重叠。
+    h_len 缺省取该原子的平均键长（与普通骨架键等长）。
     """
     return place_explicit_hs(mol, x_idx, 1, toward=y_pos, h_len=h_len)[0]
 
@@ -635,6 +671,28 @@ def charge_tikz(mol, idx: int, shift=(0.0, 0.0), explicit_hs: int = 0) -> str | 
     y = cy + shift[1] + _CHARGE_POS_DIST * math.sin(r)
     return (f"\\node[draw, circle, inner sep=0.6pt, font=\\scriptsize, "
             f"scale={_CHARGE_SCALE}] at ({x:.2f},{y:.2f}) {{{text}}};")
+
+
+_PARTIAL_CHARGE_DIST = 0.34  # 部分电荷到元素符号中心的距离（与 _CHARGE_POS_DIST 一致）
+
+
+def partial_charge_angle(mol, idx: int) -> float:
+    """部分电荷（δ+/δ-）标注方位角（Drawbacks 手动测试第 7 条）。
+
+    起点与形式电荷圈一致（_charge_angle：默认右上 45°；标签氢在右侧
+    且左侧无阻碍时左上 135°），再按 block（直接相连的键/原子 + 标签氢）
+    微调避让（过近 ≤30° 时向 ±30°/±60°/90° 微调；极端拥挤保持原角）。
+    """
+    return _nudge_from_avoid(_charge_angle(mol, idx), _bond_blocks(mol, idx))
+
+
+def partial_charge_pos(mol, idx: int, shift=(0.0, 0.0),
+                       explicit_hs: int = 0) -> tuple[float, float]:
+    """部分电荷标注的画布坐标（元素符号中心 + 方向避让，见 partial_charge_angle）。"""
+    cx, cy = _dot_center(mol, idx, explicit_hs)
+    r = math.radians(partial_charge_angle(mol, idx))
+    return (cx + shift[0] + _PARTIAL_CHARGE_DIST * math.cos(r),
+            cy + shift[1] + _PARTIAL_CHARGE_DIST * math.sin(r))
 
 
 def lone_pair_dot_groups(mol, idx: int, shift=(0.0, 0.0), explicit_hs: int = 0):

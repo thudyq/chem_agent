@@ -72,6 +72,7 @@ if __name__ == "__main__":
         atom_main_label, bond_segments_for, label_bond_margin,
         label_edge_point, prepare_mol, scale_mol_coords, symbol_center,
         atom_pos, place_donor_h, place_explicit_hs, adjust_hbond_conformation,
+        partial_charge_pos,
     )
     from renderers.layout import (
         energy_annotation_placement, energy_point_coords, energy_point_roles,
@@ -87,6 +88,7 @@ else:
         atom_main_label, bond_segments_for, label_bond_margin,
         label_edge_point, prepare_mol, scale_mol_coords, symbol_center,
         atom_pos, place_donor_h, place_explicit_hs, adjust_hbond_conformation,
+        partial_charge_pos,
     )
     from .layout import (
         energy_annotation_placement, energy_point_coords, energy_point_roles,
@@ -521,12 +523,10 @@ def render_composite(layout: str, children: list) -> str:
         for idx, raw_label in info["charges"].items():
             if idx >= mol.GetNumAtoms():
                 continue
-            # 部分电荷以元素符号中心为基准（与孤对电子同一基准）
-            x, y = symbol_center(mol, idx, hs.get(idx, 0))
-            x += info["shift"][0]
-            y += info["shift"][1]
+            # 部分电荷以元素符号中心为基准（与孤对电子同一基准），方向避让
+            x, y = partial_charge_pos(mol, idx, info["shift"], hs.get(idx, 0))
             lines.append(
-                f"  \\node[font=\\small, red] at ({x + 0.24:.2f},{y + 0.24:.2f}) "
+                f"  \\node[font=\\small, red] at ({x:.2f},{y:.2f}) "
                 f"{{{format_partial_charge(raw_label)}}};"
             )
         for fi, ti in info["hbonds"]:

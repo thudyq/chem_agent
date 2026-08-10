@@ -431,28 +431,41 @@ def test_unknown_mech_ref_skipped():
 
 
 def test_charge_annotation_child():
-    """R-2：CHARGE 子标记在对应组件上标注部分电荷（红色 δ，绕元素符号中心）。"""
+    """R-2：CHARGE 子标记在对应组件上标注部分电荷（红色 δ，绕元素符号中心，
+    方向避让键与标签氢——Drawbacks 手动测试第 7 条）。"""
     out = _render(
         "[COMPOSITE:row]"
         "[STRUCT:OCC,label=乙醇,id=et]"
-        "[CHARGE:et|0:δ-,1:δ+]"
+        "[CHARGE:et|0:δ-,1:δ+,2:δ+]"
         "[/COMPOSITE]"
     )
     assert "$\\delta^-$" in out and "$\\delta^+$" in out
     assert "red" in out
-    # δ- 标注在 O（标签 "OH"）的元素符号中心右上：符号中心 = 标签中心左移 0.13
+    # δ- 标注在 O（标签 "OH"）的元素符号中心：符号中心 = 标签中心左移 0.13
     import renderers.mol_primitives as mp
     mol = mp.prepare_mol("OCC")
+    mp.scale_mol_coords(mol, 0.8)   # 与 composite 布局一致（_MOL_SCALE=0.8）
     cx, cy = mp.symbol_center(mol, 0)
     ox, oy = mp.atom_pos(mol, 0)
     assert abs(cx - (ox - 0.13)) < 0.01          # 基准修正存在（绕 O 而非绕 OH）
-    # 输出中 δ- 节点的 x 应接近"符号中心+shift+0.24"（电荷距 0.34 的 45° 投影 ≈ 0.240）
-    dnode = re.search(r"\\node\[font=\\small, red\] at \(([-\d.]+),([-\d.]+)\) \{\$\\delta\^-\$\}", out)
-    assert dnode is not None
-    dx = float(dnode.group(1))
+    # 各 δ 节点应落在 shift + partial_charge_pos（方向避让后的期望坐标）；
+    # shift 由 OH 节点反推（row 布局单分子只平移不缩放）
     o_node = _resolve_node_positions(out, "OH")
     assert o_node
-    assert abs(dx - (o_node[0][0] - 0.13 + 0.24)) < 0.08
+    shift_x, shift_y = o_node[0][0] - ox, o_node[0][1] - oy
+    nodes = re.findall(
+        r"\\node\[font=\\small, red\] at \(([-\d.]+),([-\d.]+)\)", out)
+    assert len(nodes) == 3
+    for i in range(3):
+        ex = shift_x + mp.partial_charge_pos(mol, i)[0]
+        ey = shift_y + mp.partial_charge_pos(mol, i)[1]
+        assert any(abs(float(nx) - ex) < 0.08 and abs(float(ny) - ey) < 0.08
+                   for nx, ny in nodes), f"原子{i} 的电荷节点未落在避让位置"
+    # 避让行为锁定：末端 CH₃（原子 2）的 δ+ 在左上 135°（x 偏移为负）——
+    # 旧逻辑固定右上 45°，会压住 CH₃ 标签的 H₃ 后缀
+    px, py = mp.partial_charge_pos(mol, 2)
+    sx, sy = mp.symbol_center(mol, 2)
+    assert px < sx and py > sy
 
 
 def test_hbond_annotation_child():
@@ -508,15 +521,19 @@ def test_hbond_acceptor_h_away_from_donor():
     sx, sy = float(shift.group(1)), float(shift.group(2))
     ax, ay = mp.atom_pos(mol, 3)
     dx, dy = mp.atom_pos(mol, 0)[0] - ax, mp.atom_pos(mol, 0)[1] - ay
-    # 受体 H 节点（两个 H 节点中离 O(3) 更近的那个）
+    # 受体 H 节点 = 离给体 O(0) 最远的 H 节点（给体 H 沿 O(0)→O(3) 方向，
+    # 键长化后可能比受体 H 更靠近 O(3)，不能再按"离 O(3) 最近"识别）
     h_nodes = [(float(x), float(y)) for x, y in re.findall(
         r"\\node\[fill=white, inner sep=1pt\] at \(([-\d.]+),([-\d.]+)\) \{H\}", out)]
     assert len(h_nodes) == 2
-    ah = min(h_nodes, key=lambda p: math.hypot(p[0] - sx - ax, p[1] - sy - ay))
+    ah = max(h_nodes, key=lambda p: math.hypot(
+        p[0] - sx - mp.atom_pos(mol, 0)[0], p[1] - sy - mp.atom_pos(mol, 0)[1]))
     v = (ah[0] - sx - ax, ah[1] - sy - ay)
     cos = (v[0] * -dx + v[1] * -dy) / (math.hypot(*v) * math.hypot(dx, dy) or 1.0)
     assert cos > 0.5                      # 受体 H 指向远离给体的一侧
-    assert abs(math.hypot(*v) - 0.75) < 0.01   # O—H 键长 0.75
+    # O—H 键长 = 普通骨架键长（受体 O(3) 到其邻居 C(2) 的键长）
+    bx, by = mp.atom_pos(mol, 2)
+    assert abs(math.hypot(*v) - math.hypot(ax - bx, ay - by)) < 0.01
 
 
 def test_hbond_first_dot_inset_from_h():
@@ -658,13 +675,15 @@ def test_hbond_conformation_folding():
 
 
 def test_donor_h_explicit_placement():
-    """显式 H：O—H 长度 0.75，方向沿给体→受体（X—H···Y 直线）。"""
+    """显式 H：O—H 长度 = 普通骨架键长，方向沿给体→受体（X—H···Y 直线）。"""
     import renderers.mol_primitives as mp
     mol = mp.prepare_mol("OCCO")
     mp.adjust_hbond_conformation(mol, 0, 3)
     hx, hy = mp.place_donor_h(mol, 0, mp.atom_pos(mol, 3))
     x0, y0 = mp.atom_pos(mol, 0)
-    assert abs(math.dist((x0, y0), (hx, hy)) - 0.75) < 0.01
+    x1, y1 = mp.atom_pos(mol, 1)
+    bond_len = math.dist((x0, y0), (x1, y1))
+    assert abs(math.dist((x0, y0), (hx, hy)) - bond_len) < 0.01
     # H、O0、O3 近似共线（夹角 > 170°）
     v1 = (hx - x0, hy - y0)
     x3, y3 = mp.atom_pos(mol, 3)
