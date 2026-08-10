@@ -149,26 +149,44 @@ _REAL_ELEMENTS = {
 
 
 def _parse_plain_formula(text: str):
-    """把纯化学式 label（CH3Cl / H2SO4 / OH- / NO2+ / H3O+ 等）解析为
-    (元素计数 dict, 净电荷)；非纯化学式返回 None——含中文/空格/结构括号、
-    通用基团缩写（R/Ar/X/Ph 等）、或含不可识别"元素"（如占位字母 A）的
-    label 一律跳过不校验。"""
+    """把纯化学式 label（CH3Cl / OH- / NO2+ / H3O+ 等）解析为候选
+    (元素计数 dict, 净电荷) 列表；非纯化学式返回 []——含中文/空格/结构括号、
+    通用基团缩写（R/Ar/X/Ph 等）、或含不可识别"元素"（如占位字母 A）一律跳过。
+
+    尾电荷的数字归属有歧义（NO2+ 是 N1O2 带 +1，Ca2+ 是 Ca 带 +2），
+    两种解读都给出候选，由 SMILES 比对定夺。
+    """
     s = (text or "").strip()
     if not s:
-        return None
-    charge = 0
-    m = re.search(r"(\d*)([+-])$", s)
+        return []
+    bodies = []
+    m = re.search(r"(\d+)?([+-])$", s)
     if m:
-        charge = int(m.group(1) or 1) * (1 if m.group(2) == "+" else -1)
-        s = s[: m.start()]
-    if not s or not re.fullmatch(r"([A-Z][a-z]?\d*)+", s):
-        return None
-    counts = {}
-    for sym, num in _FORMULA_TOKEN_RE.findall(s):
-        if sym not in _REAL_ELEMENTS:
-            return None
-        counts[sym] = counts.get(sym, 0) + (int(num) if num else 1)
-    return counts, charge
+        # 尾部数字串归属有歧义：NO2+ 的 2 归元素（N1O2 带 +1）、Ca2+ 的 2
+        # 归电荷（Ca 带 +2）、SO42- 的 4 归元素而 2 归电荷（S1O4 带 -2）。
+        # 按数字串的每个切分点各给一个候选，由 SMILES 比对定夺。
+        sign = 1 if m.group(2) == "+" else -1
+        digits = m.group(1) or ""
+        base = s[: m.start()]
+        for j in range(len(digits) + 1):
+            q = int(digits[j:]) if digits[j:] else 1
+            bodies.append((base + digits[:j], q * sign))
+    else:
+        bodies.append((s, 0))
+    cands = []
+    for body, charge in bodies:
+        if not body or not re.fullmatch(r"([A-Z][a-z]?\d*)+", body):
+            continue
+        counts = {}
+        ok = True
+        for sym, num in _FORMULA_TOKEN_RE.findall(body):
+            if sym not in _REAL_ELEMENTS:
+                ok = False
+                break
+            counts[sym] = counts.get(sym, 0) + (int(num) if num else 1)
+        if ok and (counts, charge) not in cands:
+            cands.append((counts, charge))
+    return cands
 
 
 def _mol_counts(mol):
@@ -198,15 +216,15 @@ def _hill_str(counts: dict) -> str:
 
 def _check_label_formula(smiles: str, label: str) -> str:
     """T2-2：label 为纯化学式时与 SMILES 元素计数/电荷比对；不一致返回原因。"""
-    parsed = _parse_plain_formula(label)
-    if parsed is None:
+    cands = _parse_plain_formula(label)
+    if not cands:
         return ""
     mc = _mol_counts(_parse_mol(smiles))
     if mc is None:
         return ""
-    if parsed != mc:
+    if mc not in cands:
         return (f"{_CHEM_PREFIX}label「{label}」与 SMILES「{smiles}」化学式不一致"
-                f"（label={_hill_str(parsed[0])}，SMILES={_hill_str(mc[0])}，"
+                f"（label={_hill_str(cands[0][0])}，SMILES={_hill_str(mc[0])}，"
                 f"请使 label 与结构指向同一物质）")
     return ""
 
@@ -538,12 +556,14 @@ if __name__ == "__main__":
     # 冒烟测试（不依赖 rdkit）
     import sys
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    # 含故意错误示例：无效 SMILES / 越界 at=（演示校验拦截）
     demo = (
         "[STRUCT:c1ccccc1] "
         "[STRUCT:XYZXYZ,label=无效结构] "
         "[ENERGY:0,108,-20] "
         "[ENERGY:abc] "
         "[NEWMAN:CC,60] [NEWMAN:CC,xyz] "
+        # 故意错误示例：at=9 越界（演示校验拦截）
         "[COMPOSITE:energy][ENERGY:0,108,-20]"
         "[STRUCT:CCl,label=反应物,at=0][STRUCT:CO,label=产物,at=9]"
         "[/COMPOSITE]"

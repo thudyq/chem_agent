@@ -66,6 +66,37 @@ _REASONING_RE = re.compile(r"\[REASONING\](.*?)\[/REASONING\]", re.DOTALL)
 _COMPOSITE_OPEN = "[COMPOSITE:"
 _COMPOSITE_CLOSE = "[/COMPOSITE]"
 
+
+def _only_child_tags_between(text: str, lo: int, hi: int) -> bool:
+    """text[lo:hi] 是否只含容器子标记与空白（夹有正文文字则返回 False）。
+
+    用于区分"[COMPOSITE: 正文提及"与"真嵌套"：前者两个开头之间是中文
+    说明文字，后者之间只有 [STRUCT:...] 等子标记。
+    """
+    i = lo
+    while i < hi:
+        if text[i].isspace():
+            i += 1
+            continue
+        matched = False
+        for opener in _INNER_OPENERS.values():
+            if text.startswith(opener, i):
+                end = _find_tag_end(text, i)
+                if end == -1 or end >= hi:
+                    return False
+                i = end + 1
+                matched = True
+                break
+        if not matched:
+            for token in _INNER_TOKENS.values():
+                if text.startswith(token, i):
+                    i += len(token)
+                    matched = True
+                    break
+        if not matched:
+            return False
+    return True
+
 # COMPOSITE 容器内允许的带子标记 opener（冒号形式）
 _INNER_OPENERS = {
     "STRUCT": "[STRUCT:",
@@ -276,6 +307,15 @@ def parse_tags(text: str) -> List[RenderTag]:
             continue
         close_idx = text.find(_COMPOSITE_CLOSE, open_end + 1)
         if close_idx == -1:
+            search_from = open_end + 1
+            continue
+        inner_open = text.find(_COMPOSITE_OPEN, open_end + 1, close_idx)
+        if inner_open != -1 and not _only_child_tags_between(
+                text, open_end + 1, inner_open):
+            # 外层开头与内层开头之间夹有正文文字 → 外层是正文中的文字提及
+            # （如"用 [COMPOSITE:reaction_mech] 展示："），跳过它，让内层
+            # 真容器与闭合配对；之间只有子标记则是真嵌套（不支持），
+            # 维持外层优先配对（兼容既有行为）
             search_from = open_end + 1
             continue
         layout = text[idx + len(_COMPOSITE_OPEN):open_end].strip()

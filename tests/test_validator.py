@@ -136,6 +136,20 @@ class TestChemicalChecks:
         _, invalid = _validate("[STRUCT:[OH-],label=OH-]")
         assert len(invalid) == 0
 
+    def test_label_nitronium_passes(self):
+        """NO2+：尾数字归元素（N1O2 带 +1）——回归：曾误解析为 NO + 2 价。"""
+        pytest.importorskip("rdkit")
+        _, invalid = _validate("[STRUCT:[N+](=O)=O,label=NO2+]")
+        assert len(invalid) == 0
+
+    def test_label_charge_digit_belongs_to_charge(self):
+        """Ca2+ / SO42-：尾数字归电荷（Ca 带 +2、SO4 带 -2）。"""
+        pytest.importorskip("rdkit")
+        _, invalid = _validate("[STRUCT:[Ca+2],label=Ca2+]")
+        assert len(invalid) == 0
+        _, invalid = _validate("[STRUCT:[O-]S(=O)(=O)[O-],label=SO42-]")
+        assert len(invalid) == 0
+
     def test_reaction_balanced_passes(self):
         pytest.importorskip("rdkit")
         _, invalid = _validate("[REACTION:C=C;O|CCO|H2SO4]")

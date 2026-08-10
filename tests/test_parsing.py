@@ -59,6 +59,22 @@ def test_stereo_with_label():
     assert t.args[1] == "(R)-乳酸"
 
 
+def test_composite_prose_mention_not_swallowed():
+    """正文文字提及 [COMPOSITE:...]（如"用 [COMPOSITE:row] 展示"）时不应
+    与后面的真容器贪婪配对——真容器必须正常解析，不被幻影容器吞掉。"""
+    text = ("下面用 [COMPOSITE:reaction_mech,numbering] 展示序号：\n"
+            "[COMPOSITE:reaction_mech]"
+            "[STRUCT:CCl][RXNARROW][STRUCT:CO]"
+            "[/COMPOSITE]")
+    tags = parse_tags(text)
+    assert len(tags) == 1
+    t = tags[0]
+    assert t.type == "COMPOSITE"
+    assert t.args[0] == "reaction_mech"
+    assert "使用" not in t.raw and "下面" not in t.raw
+    assert len(t.args[1]) == 3  # 2 个 STRUCT + 1 个 RXNARROW
+
+
 def test_reasoning_paired():
     """用例4：REASONING 配对标记。"""
     tags = parse_tags("[REASONING]亲电取代[/REASONING]")

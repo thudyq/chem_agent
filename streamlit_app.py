@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""streamlit_app.py — 本地 Web 界面（本地测试用；清小搭接入用 FastAPI 层）。
+r"""streamlit_app.py — 本地 Web 界面（本地测试用；清小搭接入用 FastAPI 层）。
 
 启动: streamlit run streamlit_app.py
 
@@ -7,13 +7,17 @@
 - 侧边栏会话管理：新对话 + 会话列表（悬停 ⋯ 三点菜单：重命名/删除；
   重命名为原位编辑，回车或 ✓ 保存）；
 - 主区当前会话消息流（user 问题 + assistant 图文回答）；
-- 底部输入区：左侧 ＋ 上传附件（当前支持图片），右侧文本框回车连续追问；
+- 底部输入区：st.chat_input 固定窗格（钉在视口底部，向主流大模型聊天界面
+  看齐），内置 ＋ 图片附件（accept_file，streamlit ≥1.46），回车连续追问；
+  旧版 streamlit 回退为 ＋ 弹层上传 + text_input（随内容滚动）；
 - 会话持久化到 data/chat_sessions.json（刷新/重启不丢；data/ 已 gitignore）；
   旧版单会话 data/chat_history.json 首次运行时自动迁移为首个会话。
 
-将 assistant 回答（文本 + 内联 TikZ）拆段渲染：文本走 markdown，
-TikZ/chemfig 代码段优先编译成 PNG 用 st.image 展示（检测到 LaTeX 引擎时），
-未装 LaTeX 则回退为 st.code(language="latex")。
+将 assistant 回答（文本 + 内联 TikZ）拆段渲染，**文本先行**：按阅读顺序先输出
+全部文本（markdown，`\(...\)`/`\[...\]`/`\ce{...}` 公式先转 KaTeX 可渲染格式）
+与「LaTeX 源码」下拉框，TikZ/chemfig 代码段以 st.empty() 占位，全部文本输出后
+再逐段编译为 PNG 回填（检测到 LaTeX 引擎时），未装 LaTeX 则回退为
+st.code(language="latex")。
 
 已同步管线能力：
 - 多轮对话（A3）：提问携带当前会话历史（assistant 历史剥离渲染代码）；
@@ -22,6 +26,7 @@ TikZ/chemfig 代码段优先编译成 PNG 用 st.image 展示（检测到 LaTeX 
 - P0~P3、A1、B3 均在 process_question 内部生效，界面无需额外处理。
 """
 
+import inspect
 import json
 import re
 import tempfile
@@ -265,33 +270,43 @@ def _detect_backends_cached() -> dict:
 
 
 def _render_answer(text: str) -> None:
-    """拆段渲染 assistant 回答（文本 markdown + TikZ 编译 PNG）。"""
+    """拆段渲染 assistant 回答（文本先行，图片编译后回填占位）。
+
+    st.empty() 占位可在同一轮脚本内稍后回填：先按阅读顺序输出全部文本与
+    「LaTeX 源码」下拉框（用户立即可读），再逐段编译 TikZ 并用 PNG 回填占位
+    ——编译期间用户已在阅读文本，不再被"渲染图示中"整体阻塞。
+    """
     segments = split_segments(text)
     code_segs = [c for k, c in segments if k == "code"]
-    compiled = {}
+    has_engine = False
     if code_segs:
-        backends = _detect_backends_cached()
-        if backends.get("latex_engine"):
-            with st.spinner("渲染图示中（LaTeX 编译，首次较慢）..."):
-                for c in code_segs:
-                    compiled[c] = _render_code_png(c)
-        else:
+        has_engine = bool(_detect_backends_cached().get("latex_engine"))
+        if not has_engine:
             st.caption(
                 "⚠️ 未检测到 LaTeX 引擎，图示以代码形式显示。"
                 "安装 TeX Live / MiKTeX 后即可自动渲染为图片。"
             )
 
+    slots = []  # (占位, TikZ 代码)：全部文本输出完毕后统一编译回填
     for kind, content in segments:
         if kind == "code":
-            png = compiled.get(content)
-            if png:
-                st.image(png)
-                with st.expander("LaTeX 源码（复制到 Overleaf）"):
-                    st.code(content, language="latex")
-            else:
+            if not has_engine:
                 st.code(content, language="latex")
+                continue
+            slot = st.empty()
+            slot.caption("图示渲染中（LaTeX 编译，首次较慢）…")
+            with st.expander("LaTeX 源码（复制到 Overleaf）"):
+                st.code(content, language="latex")
+            slots.append((slot, content))
         elif content.strip():
             st.markdown(_convert_latex_markers(content))
+
+    for slot, code in slots:
+        png = _render_code_png(code)
+        if png:
+            slot.image(png)
+        else:
+            slot.caption("⚠️ 图示编译失败，请展开下方 LaTeX 源码查看。")
 
 
 def split_segments(text: str):
@@ -362,38 +377,85 @@ def _session_menu(s: dict) -> None:
                 _delete_session(s["id"])
 
 
-# ---------------- 输入区（底部） ----------------
+# ---------------- 输入区（底部固定窗格） ----------------
+
+def _chat_input_supports_file() -> bool:
+    """st.chat_input 是否支持 accept_file 附件（streamlit ≥ 1.46）。"""
+    if not hasattr(st, "chat_input"):
+        return False
+    try:
+        return "accept_file" in inspect.signature(st.chat_input).parameters
+    except (TypeError, ValueError):
+        return False
+
 
 def _on_prompt_change() -> None:
-    """text_input 回车触发：暂存问题，由主流程统一处理（避免回调内 rerun）。"""
+    """text_input 回车触发：暂存问题，由主流程统一处理（避免回调内 rerun）。
+
+    仅旧版 streamlit（无 st.chat_input）回退路径使用。
+    """
     q = (st.session_state.get("prompt_input") or "").strip()
     if q:
         st.session_state.pending_question = q
         st.session_state["prompt_input"] = ""
 
 
+def _attachment_popover() -> None:
+    """＋ 附件弹层：旧版 streamlit（chat_input 无附件能力）的上传入口。"""
+    if hasattr(st, "popover"):
+        with st.popover("＋", key="attach"):
+            st.caption("上传图片（PNG/JPG）")
+            st.file_uploader("上传图片", type=["png", "jpg", "jpeg"],
+                             key="uploaded", label_visibility="collapsed")
+    else:
+        st.button("＋", key="attach")
+
+
+def _ocr_and_ask(name: str, data: bytes) -> None:
+    """图片字节 → 临时文件 → 视觉识别 SMILES → 自动提问。"""
+    suffix = "." + name.rsplit(".", 1)[-1].lower()
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp.write(data)
+        tmp_path = tmp.name
+    with st.spinner("识别结构式（视觉模型）..."):
+        from utils.ocr_utils import image_to_smiles
+        smiles = image_to_smiles(tmp_path)
+    if smiles:
+        st.success(f"识别到 SMILES：`{smiles}`")
+        cur = next((s for s in st.session_state.sessions
+                    if s["id"] == st.session_state.current_id), None)
+        if cur:
+            _ask(st.session_state.sessions, cur["id"],
+                 f"这个化合物的 SMILES 是 {smiles}，请分析其结构特征、官能团和基本化学性质。")
+    else:
+        st.error("识别失败。请在 .env 中配置 VISION_MODEL 为支持视觉的模型（如 GLM-4V / Qwen2-VL）。")
+
+
+def _handle_pending_upload() -> None:
+    """chat_input 附件（提交时暂存的字节）：预览 + 识别并分析 / 移除。"""
+    pending = st.session_state.get("pending_upload")
+    if not pending:
+        return
+    name, data = pending
+    st.image(data, caption=f"已上传图片：{name}", width=200)
+    cols = st.columns([0.2, 0.2, 1.0])
+    with cols[0]:
+        if st.button("识别并分析", key="ocr_btn"):
+            st.session_state.pop("pending_upload", None)
+            _ocr_and_ask(name, data)
+    with cols[1]:
+        if st.button("移除", key="ocr_rm"):
+            st.session_state.pop("pending_upload", None)
+            _rerun()
+
+
 def _handle_uploaded(uploaded) -> None:
-    """已选附件（当前图片）：预览 + 识别并分析。"""
+    """已选附件（旧版 file_uploader 路径）：预览 + 识别并分析。"""
     if uploaded is None:
         return
     st.image(uploaded, caption="已上传图片", width=200)
-    suffix = "." + uploaded.name.rsplit(".", 1)[-1].lower()
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp.write(uploaded.getvalue())
-        tmp_path = tmp.name
     if st.button("识别并分析", key="ocr_btn"):
-        with st.spinner("识别结构式（视觉模型）..."):
-            from utils.ocr_utils import image_to_smiles
-            smiles = image_to_smiles(tmp_path)
-        if smiles:
-            st.success(f"识别到 SMILES：`{smiles}`")
-            cur = next((s for s in st.session_state.sessions
-                        if s["id"] == st.session_state.current_id), None)
-            if cur:
-                _ask(st.session_state.sessions, cur["id"],
-                     f"这个化合物的 SMILES 是 {smiles}，请分析其结构特征、官能团和基本化学性质。")
-        else:
-            st.error("识别失败。请在 .env 中配置 VISION_MODEL 为支持视觉的模型（如 GLM-4V / Qwen2-VL）。")
+        _ocr_and_ask(uploaded.name, uploaded.getvalue())
 
 
 # ---------------- 页面 ----------------
@@ -470,27 +532,45 @@ if cur is not None:
             elif msg["content"].strip():
                 st.markdown(_convert_latex_markers(msg["content"]))
 
-    # ---- 底部输入区：左侧 ＋ 附件，右侧文本框 ----
-    st.divider()
-    cols = st.columns([0.08, 1.0])
-    with cols[0]:
-        if hasattr(st, "popover"):
-            with st.popover("＋", key="attach"):
-                st.caption("上传图片（PNG/JPG）")
-                st.file_uploader("上传图片", type=["png", "jpg", "jpeg"],
-                                 key="uploaded", label_visibility="collapsed")
-        else:
-            st.button("＋", key="attach")
-    with cols[1]:
-        st.text_input(
-            "输入化学问题，可基于上文连续追问…",
-            key="prompt_input", label_visibility="collapsed",
-            on_change=_on_prompt_change)
+    # ---- 底部输入区：固定窗格（st.chat_input 钉在视口底部，向主流聊天界面看齐） ----
+    if _chat_input_supports_file():
+        # 现代路径（≥1.46）：chat_input 内置 ＋ 附件按钮
+        _handle_pending_upload()
+        submitted = st.chat_input(
+            "输入化学问题，可基于上文连续追问；点 ＋ 可上传图片…",
+            accept_file=True, file_type=["png", "jpg", "jpeg"])
+        if submitted:
+            if submitted.files:
+                f = submitted.files[0]
+                st.session_state.pending_upload = (f.name, f.getvalue())
+            text = (submitted.text or "").strip()
+            if text:
+                _ask(sessions, cur["id"], text)
+            elif submitted.files:
+                _rerun()  # 仅附件无文字：重跑以展示附件预览
+    elif hasattr(st, "chat_input"):
+        # chat_input 固定输入（≥1.24）但无附件能力（<1.46）：保留 ＋ 弹层上传
+        _attachment_popover()
+        _handle_uploaded(st.session_state.get("uploaded"))
+        prompt = st.chat_input("输入化学问题，可基于上文连续追问…")
+        if prompt and prompt.strip():
+            _ask(sessions, cur["id"], prompt.strip())
+    else:
+        # 远古 streamlit（<1.24）：原 text_input 布局（随内容滚动）
+        st.divider()
+        cols = st.columns([0.08, 1.0])
+        with cols[0]:
+            _attachment_popover()
+        with cols[1]:
+            st.text_input(
+                "输入化学问题，可基于上文连续追问…",
+                key="prompt_input", label_visibility="collapsed",
+                on_change=_on_prompt_change)
 
-    # 待处理问题（text_input 回车暂存）→ 统一走 _ask
-    if st.session_state.get("pending_question"):
-        q = st.session_state.pop("pending_question")
-        _ask(sessions, cur["id"], q)
+        # 待处理问题（text_input 回车暂存）→ 统一走 _ask
+        if st.session_state.get("pending_question"):
+            q = st.session_state.pop("pending_question")
+            _ask(sessions, cur["id"], q)
 
-    # 已选附件处理（上传图片预览 + 识别）
-    _handle_uploaded(st.session_state.get("uploaded"))
+        # 已选附件处理（上传图片预览 + 识别）
+        _handle_uploaded(st.session_state.get("uploaded"))
