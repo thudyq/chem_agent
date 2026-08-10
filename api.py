@@ -34,7 +34,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from app import process_question
-from core.attachments import build_attachments
+from core.attachments import build_attachments, extract_code_blocks
 from core.config import settings
 
 app = FastAPI(title="Chem_Agent", version="1.0.0")
@@ -358,42 +358,77 @@ def _sse_frame(cid: str, created: int, delta: dict,
     return f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
 
 
+# P2 修正触发标记：correction_callback 经 progress_q 传给主循环的哨兵（非文本片段）
+_CORRECTION_MARK = object()
+
+
 def _sse_stream(question: str, history: list, cid: str, created: int,
                 public_base: str):
-    """SSE 帧序列：role 帧 → 思考帧（B2：实时转发 LLM 生成草稿）→
-    content 增量 → stop 帧（usage + x_soda.attachments）→ [DONE]。"""
+    """SSE 帧序列：role 帧 → 思考帧（B2：实时转发 LLM 生成草稿；P2 修正提示）→
+    （有图时）图示渲染提示 → content 增量 → （编译超 3s 心跳）→
+    stop 帧（usage + x_soda.attachments）→ [DONE]。
+
+    文本先行：process_question 一返回立即发 content 帧，附件 PNG 编译在
+    work 线程与 content 发送并行、完成后挂 stop 帧——用户先读到完整文字
+    回答，图示随后到达（与本地界面"文本先行、图片回填"同构）。
+    """
     yield _sse_frame(cid, created, {"role": "assistant"})
     yield _sse_frame(cid, created, {"reasoning": "正在思考并绘制化学图示…"})
 
-    result_q = queue.Queue(maxsize=1)
+    answer_q = queue.Queue(maxsize=1)    # process_question 完成（文本就绪）
+    result_q = queue.Queue(maxsize=1)    # attachments 编译完成
     progress_q = queue.Queue(maxsize=200)
+
+    def _safe_put(item) -> None:
+        # 修正标记是装饰性提示，队列满时丢弃即可，不阻塞管线
+        try:
+            progress_q.put_nowait(item)
+        except queue.Full:
+            pass
 
     def work():
         try:
-            answer = process_question(question, history=history,
-                                      progress_callback=progress_q.put)
+            answer = process_question(
+                question, history=history,
+                progress_callback=progress_q.put,
+                correction_callback=lambda: _safe_put(_CORRECTION_MARK))
+        except Exception as e:  # 管线异常兜底为 stop 帧 + error 字段
+            answer_q.put(e)
+            return
+        answer_q.put(answer)
+        try:
             attachments = build_attachments(answer or "", public_base) \
                 if answer else []
-            result_q.put((answer, attachments))
-        except Exception as e:  # 渲染管线异常兜底为 stop 帧 + error 字段
-            result_q.put(e)
+        except Exception as e:  # 编译异常不拖垮已生成的文本回答
+            print(f"[api] 附件编译异常，降级为无附件: {e}")
+            attachments = []
+        result_q.put(attachments)
 
     threading.Thread(target=work, daemon=True).start()
     draft = []          # LLM 生成草稿（限长保留，reasoning 帧覆盖式显示）
     last_flush = time.time()
     while True:
         try:
-            result = result_q.get_nowait()
+            answer = answer_q.get_nowait()
             break
         except queue.Empty:
             pass
         # 批量取出 LLM 增量（限频，避免每 chunk 一帧刷屏）
         pieces = []
+        correction = False
         while True:
             try:
-                pieces.append(progress_q.get_nowait())
+                p = progress_q.get_nowait()
             except queue.Empty:
                 break
+            if p is _CORRECTION_MARK:
+                correction = True
+            else:
+                pieces.append(p)
+        if correction:
+            draft.clear()  # 修正调用重新生成，旧草稿作废
+            yield _sse_frame(cid, created, {"reasoning": "正在修正回答…"})
+            last_flush = time.time()
         if pieces:
             draft.append("".join(pieces))
             if len(draft) > 4:
@@ -401,24 +436,60 @@ def _sse_stream(question: str, history: list, cid: str, created: int,
             yield _sse_frame(cid, created,
                              {"reasoning": f"正在生成… {''.join(draft)}"})
             last_flush = time.time()
-        elif time.time() - last_flush >= 3.0:
-            yield _sse_frame(cid, created, {"reasoning": "仍在思考…"})
-            last_flush = time.time()
-        else:
-            time.sleep(0.2)
+        elif not correction:
+            if time.time() - last_flush >= 3.0:
+                yield _sse_frame(cid, created, {"reasoning": "仍在思考…"})
+                last_flush = time.time()
+            else:
+                time.sleep(0.2)
 
-    if isinstance(result, Exception):
+    if isinstance(answer, Exception):
         yield _sse_frame(cid, created, {}, finish="stop",
                          usage=_usage(question, ""),
-                         error={"type": "upstream_error", "message": str(result)})
+                         error={"type": "upstream_error", "message": str(answer)})
         yield "data: [DONE]\n\n"
         return
 
-    answer, attachments = result
+    # 收尾排空：answer 就绪时队列里可能仍有未消费的草稿片段/修正标记
+    # （快速回答时主循环来不及逐批取出），丢弃会丢修正提示
+    leftover = []
+    correction = False
+    while True:
+        try:
+            p = progress_q.get_nowait()
+        except queue.Empty:
+            break
+        if p is _CORRECTION_MARK:
+            correction = True
+        else:
+            leftover.append(p)
+    if correction:
+        yield _sse_frame(cid, created, {"reasoning": "正在修正回答…"})
+    if leftover:
+        yield _sse_frame(cid, created,
+                         {"reasoning": f"正在生成… {''.join(leftover)[-200:]}"})
+
     answer = answer or "（未能生成回答）"
+    if extract_code_blocks(answer):
+        yield _sse_frame(cid, created,
+                         {"reasoning": "正在渲染化学图示（LaTeX 编译，首次较慢）…"})
     step = 20
     for i in range(0, len(answer), step):
         yield _sse_frame(cid, created, {"content": answer[i:i + step]})
+
+    # 附件编译在 work 线程并行进行；超 3s 发心跳保活
+    att_flush = time.time()
+    while True:
+        try:
+            attachments = result_q.get_nowait()
+            break
+        except queue.Empty:
+            if time.time() - att_flush >= 3.0:
+                yield _sse_frame(cid, created, {"reasoning": "图示渲染中…"})
+                att_flush = time.time()
+            else:
+                time.sleep(0.2)
+
     yield _sse_frame(cid, created, {}, finish="stop",
                      usage=_usage(question, answer),
                      x_soda={"attachments": attachments} if attachments else None)
