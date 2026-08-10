@@ -6,7 +6,8 @@ r"""streamlit_app.py — 本地 Web 界面（本地测试用；清小搭接入�
 对话式 AI 界面（参考 DeepSeek 布局）：
 - 侧边栏会话管理：新对话 + 会话列表（悬停 ⋯ 三点菜单：重命名/删除；
   重命名为原位编辑，回车或 ✓ 保存）；
-- 主区当前会话消息流（user 问题 + assistant 图文回答）；
+- 主区当前会话消息流（user 问题 + assistant 图文回答，每条回答附
+  「复制 Markdown」一键复制按钮）；
 - 底部输入区：st.chat_input 固定窗格（钉在视口底部，向主流大模型聊天界面
   看齐），整页最先渲染的可见组分（调用提到脚本最前，delta 最先到达前端），
   CSS 最高 z-index + 不透明底色保证不被其他组分遮盖；
@@ -38,6 +39,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import streamlit as st
+import streamlit.components.v1 as st_components
 
 from app import process_question
 from utils.latex_compile import compile_tikz_to_png, detect_backends
@@ -344,6 +346,37 @@ def _chat_ctx(role: str):
         yield
 
 
+def _copy_md_button(text: str) -> None:
+    """每条回答下方的一键复制按钮（复制原始 Markdown）。
+
+    Streamlit 无原生复制按钮，用 components iframe 内嵌按钮实现：
+    优先 navigator.clipboard.writeText，iframe 权限受限时降级
+    textarea + execCommand。payload 经 JSON 转义并转义 `</`，
+    防止回答内容中的 `</script>` 提前闭合脚本块。
+    """
+    payload = json.dumps(text, ensure_ascii=False).replace("</", "<\\/")
+    st_components.html(
+        "<button id='cp' style='padding:2px 10px;border:1px solid #bbb;"
+        "border-radius:6px;background:transparent;color:inherit;"
+        "cursor:pointer;font-size:13px;'>复制 Markdown</button>"
+        "<script>"
+        f"const text = {payload};"
+        "const btn = document.getElementById('cp');"
+        "btn.addEventListener('click', async () => {"
+        "  try { await navigator.clipboard.writeText(text); }"
+        "  catch (e) {"
+        "    const ta = document.createElement('textarea');"
+        "    ta.value = text; document.body.appendChild(ta);"
+        "    ta.select(); document.execCommand('copy'); ta.remove();"
+        "  }"
+        "  btn.textContent = '已复制 ✓';"
+        "  setTimeout(() => { btn.textContent = '复制 Markdown'; }, 1500);"
+        "});"
+        "</script>",
+        height=40,
+    )
+
+
 # ---------------- 会话操作（侧边栏） ----------------
 
 def _apply_rename(sid: str) -> None:
@@ -557,6 +590,7 @@ if cur is not None:
         with _chat_ctx(msg["role"]):
             if msg["role"] == "assistant":
                 _render_answer(msg["content"])
+                _copy_md_button(msg["content"])
             elif msg["content"].strip():
                 st.markdown(_convert_latex_markers(msg["content"]))
 
