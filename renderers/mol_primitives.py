@@ -1131,10 +1131,15 @@ def format_chem_text(text: str) -> str:
     先剥离尾部电荷（含电荷数），再对余下文本转下标，保证「SO42-」
     中 4 为下标、2- 为上标。已含 $（已手工排版）或为空时原样返回。
     Unicode 上下标（H₂SO₄、H⁺、SO₄²⁻、Ca²⁺ 等）先转 LaTeX 命令。
+    加热符号转数学模式：△（U+25B3）/ Δ（U+0394）→ $\\triangle$ /
+    $\\Delta$——△ 在 lmroman 文本字体中缺失（渲染为空白），Δ 在
+    pdflatex 回退路径下不可靠；数学模式两引擎均可靠（与 energy.py
+    的 Ea/ΔH 标注约定一致）。
 
     示例：H2SO4 → H$_2$SO$_4$；CH3Cl → CH$_3$Cl；OH- → OH$^{-}$；
     NH4+ → NH$_4$$^{+}$；SO42- → SO$_4$$^{2-}$；
-    H₂SO₄ → H$_{2}$SO$_{4}$；H⁺ → H$^{+}$；Ca²⁺ → Ca$^{2+}$。
+    H₂SO₄ → H$_{2}$SO$_{4}$；H⁺ → H$^{+}$；Ca²⁺ → Ca$^{2+}$；
+    CuO, △ → CuO, $\\triangle$；CuO, Δ → CuO, $\\Delta$。
     """
     if not text or "$" in text:
         return text
@@ -1144,7 +1149,9 @@ def format_chem_text(text: str) -> str:
     if m:
         charge = f"$^{{{m.group(1) or ''}{m.group(2)}}}$"
         text = text[: m.start()]
-    return _SUBSCRIPT_RE.sub(r"\1$_\2$", text) + charge
+    out = _SUBSCRIPT_RE.sub(r"\1$_\2$", text) + charge
+    # 必须最后替换：提前插入 $ 会使尾部电荷正则 _CHARGE_TAIL_RE 失效
+    return out.replace("△", r"$\triangle$").replace("Δ", r"$\Delta$")
 
 
 def bond_order_of(mol, spec: str) -> int:

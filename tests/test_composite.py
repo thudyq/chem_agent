@@ -218,7 +218,7 @@ def test_arrow_endpoints_near_atoms():
 
 
 def test_format_chem_text():
-    """化学文本排版：数字下标、尾部电荷上标、已排版文本跳过。"""
+    """化学文本排版：数字下标、尾部电荷上标、已排版文本跳过、加热符号转数学模式。"""
     assert format_chem_text("CH3Cl") == "CH$_3$Cl"
     assert format_chem_text("OH-") == "OH$^{-}$"
     assert format_chem_text("H2SO4, 浓HNO3") == "H$_2$SO$_4$, 浓HNO$_3$"
@@ -226,6 +226,10 @@ def test_format_chem_text():
     assert format_chem_text("NH4+") == "NH$_4$$^{+}$"
     assert format_chem_text("OH$^-$") == "OH$^-$"
     assert format_chem_text("") == ""
+    # 加热符号（Drawbacks 第 7 条）：△(U+25B3) lmroman 缺字形 → 数学模式
+    assert format_chem_text("CuO, △") == "CuO, $\\triangle$"
+    assert format_chem_text("CuO, Δ") == "CuO, $\\Delta$"
+    assert format_chem_text("△") == "$\\triangle$"
 
 
 def test_row_layout_multi_step():
@@ -257,7 +261,7 @@ def test_row_layout_four_step_sequence():
     )
     assert out.count("\\begin{scope}[shift=") == 4
     assert out.count("\\draw[->, very thick]") == 3
-    assert "H$_2$O" in out and "CuO, Δ" in out and "O$_2$" in out
+    assert "H$_2$O" in out and "CuO, $\\Delta$" in out and "O$_2$" in out
     scopes = re.findall(r"\\begin\{scope\}\[shift=\{\(([-\d.]+),", out)
     xs = [float(x) for x in scopes]
     assert xs == sorted(xs)                     # 分子按序列从左到右递增
