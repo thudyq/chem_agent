@@ -221,16 +221,25 @@ def _summarize_title(question: str) -> str:
 
 
 def _ask(sessions: list, session_id: str, question: str) -> None:
-    """带多轮历史与生成进度反馈的提问；追加到指定会话并持久化。"""
+    """带多轮历史与生成进度反馈的提问；追加到指定会话并持久化。
+
+    用户消息先入列、持久化并立即渲染（发送后立即可见，不再等到回答完毕）。
+    """
     cur = next((s for s in sessions if s["id"] == session_id), None)
     if cur is None:
         return
+    is_first = not cur["messages"]
     history = [
         {"role": m["role"],
          "content": _strip_render_code(m["content"])
          if m["role"] == "assistant" else m["content"]}
         for m in cur["messages"][-_MAX_HISTORY:]
     ]
+    cur["messages"].append({"role": "user", "content": question})
+    _save_sessions(sessions)
+    with _chat_ctx("user"):
+        if question.strip():
+            st.markdown(_convert_latex_markers(question))
     if hasattr(st, "status"):
         status = st.status("正在思考并绘制化学图示…", expanded=False)
         draft_box = st.empty()
@@ -251,9 +260,8 @@ def _ask(sessions: list, session_id: str, question: str) -> None:
         with st.spinner("思考中（LLM 生成 + 渲染）..."):
             answer = process_question(question, history=history)
 
-    if not cur["messages"]:
+    if is_first:
         cur["title"] = _summarize_title(question)
-    cur["messages"].append({"role": "user", "content": question})
     cur["messages"].append({"role": "assistant", "content": answer})
     _save_sessions(sessions)
     _rerun()
