@@ -117,17 +117,21 @@ def _stream_chat(url: str, headers: dict, payload: dict,
     return (content or None), finish_reason, reasoning_chars
 
 
-def _thinking_stages(config) -> list:
+def _thinking_stages(config, override: str = None) -> list:
     """主模型思考参数的渐进降级链，返回 [(mode, effort), ...]。
 
     mode 为 None 表示不传 thinking 参数（用 API 默认，DeepSeek 默认为开启）。
     「思考过长只输出 reasoning 而无正式回答」时逐级尝试下一级：配置的 effort
     较高或未配时先降到 low，最后一级关思考（disabled）；THINKING_MODE=disabled
     时无降级空间，仅一级。
+    override：调用方覆盖思考模式（"enabled"/"disabled"），修正/标题等
+    机械性调用传 "disabled"——思考链对此类任务收益小、延迟高。
     """
-    if config.thinking_mode == "disabled":
+    mode = (override if override in ("enabled", "disabled")
+            else config.thinking_mode)
+    if mode == "disabled":
         return [("disabled", None)]
-    mode0 = "enabled" if config.thinking_mode == "enabled" else None
+    mode0 = "enabled" if mode == "enabled" else None
     effort0 = (config.reasoning_effort
                if config.reasoning_effort in ("low", "high", "max") else None)
     stages = [(mode0, effort0)]
@@ -145,6 +149,7 @@ def ask_llm(
     retries: int = DEFAULT_RETRIES,
     history: list = None,
     on_piece=None,
+    thinking: str = None,
 ) -> str:
     """调用 LLM（SSE 流式），返回回答文本。
 
@@ -157,6 +162,9 @@ def ask_llm(
         history: 多轮对话历史 [{"role": "user"/"assistant", "content": str}, ...]，
             插在 system_prompt 与当前问题之间；None 表示单轮。
         on_piece: 可选回调，每收到一段生成内容立即调用（B2 流式转发）。
+        thinking: 可选覆盖思考模式（"enabled"/"disabled"），None 用配置；
+            修正/标题等机械性调用传 "disabled"（思考阶段无内容帧，收益小、
+            延迟高，前端看似卡死）。
 
     返回:
         回答文本；配置缺失或重试耗尽返回 None。
@@ -192,7 +200,7 @@ def ask_llm(
     # 而无正式回答时立即进入下一级，不在本级浪费重试）；回退模型作为最后一级
     # 强制 thinking=disabled，保证给出正式回答。非思考类失败（超时/HTTP/截断）
     # 按 retries 重试本级后再进入下一级。
-    stages = [(model, ts) for ts in _thinking_stages(config)]
+    stages = [(model, ts) for ts in _thinking_stages(config, override=thinking)]
     fallback = config.fallback_model_name.strip()
     if fallback and fallback != model:
         stages.append((fallback, ("disabled", None)))

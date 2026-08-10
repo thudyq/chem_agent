@@ -106,3 +106,14 @@ class TestAskLlmDegradation:
         fake_env(_cfg(thinking_mode="enabled", reasoning_effort="low"))
         _stream_recorder(monkeypatch, [(None, "stop", 5000)])
         assert lc.ask_llm("q", system_prompt="x", retries=1) is None
+
+    def test_thinking_override_disabled(self, fake_env, monkeypatch):
+        """thinking="disabled" 覆盖配置（修正/标题等机械调用）：
+        单级、payload 带 disabled、不带 reasoning_effort。"""
+        fake_env(_cfg(thinking_mode="enabled", reasoning_effort="low"))
+        calls = _stream_recorder(monkeypatch, [("答案", "stop", 0)])
+        assert lc.ask_llm("q", system_prompt="x",
+                          thinking="disabled") == "答案"
+        assert len(calls) == 1
+        assert calls[0]["thinking"] == {"type": "disabled"}
+        assert "reasoning_effort" not in calls[0]

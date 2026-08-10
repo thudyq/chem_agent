@@ -47,7 +47,8 @@ def _build_correction_prompt(user_question: str, original: str,
 
 
 def process_question(user_question: str, max_corrections: int = 1,
-                     history: list = None, progress_callback=None) -> str:
+                     history: list = None, progress_callback=None,
+                     correction_callback=None) -> str:
     """端到端处理用户问题，返回含渲染后图示代码的文本。
 
     流程：LLM 生成 → 解析标记 → 契约校验（P1）→ 逐标记渲染 → 注入替换。
@@ -56,6 +57,9 @@ def process_question(user_question: str, max_corrections: int = 1,
     仍失败则降级（校验失败标记 → 友好提示，渲染失败标记 → 渲染器错误串）。
     history: 多轮对话历史（透传给 ask_llm，见 core.llm_client）。
     progress_callback: 可选，LLM 每段生成内容实时回调（B2 流式转发草稿）。
+    correction_callback: 可选，P2 修正触发时回调（无参），前端据此提示
+        "正在修正回答…"；修正调用强制 thinking=disabled（机械性任务，
+        思考链收益小、延迟高）。
     """
     # 1. 调用 LLM（自动加载 system prompt，含标记协议）
     full_response = ask_llm(user_question, history=history,
@@ -95,9 +99,16 @@ def process_question(user_question: str, max_corrections: int = 1,
         #     → 回传 LLM 修正重试
         problems = [(r.tag, r.reason) for r in invalid] + failures
         if problems and attempt < max_corrections:
+            print(f"[process_question] {len(problems)} 个标记未通过校验/渲染，"
+                  f"回传 LLM 修正（第 {attempt + 1}/{max_corrections} 次）：")
+            for tag, err in problems[:5]:
+                print(f"  - {tag.raw[:60]} → {err[:80]}")
+            if correction_callback is not None:
+                correction_callback()
             correction = _build_correction_prompt(
                 user_question, full_response, problems)
-            fixed = ask_llm(correction, on_piece=progress_callback)
+            fixed = ask_llm(correction, on_piece=progress_callback,
+                            thinking="disabled")
             if fixed:
                 full_response = fixed
                 continue

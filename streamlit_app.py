@@ -10,7 +10,8 @@ r"""streamlit_app.py — 本地 Web 界面（本地测试用；清小搭接入�
   「复制 Markdown」一键复制按钮）；
 - 底部输入区：st.chat_input 固定窗格（钉在视口底部，向主流大模型聊天界面
   看齐），整页最先渲染的可见组分（调用提到脚本最前，delta 最先到达前端），
-  CSS 最高 z-index + 不透明底色保证不被其他组分遮盖；
+  stBottom 自带钉底层级与不透明背景（不被其他组分遮盖）；
+  CSS 固定可见输入盒宽度为原长 80% 并居中（侧边栏收起时长度不变、位置左移）；
   内置 ＋ 图片附件（accept_file，streamlit ≥1.46），回车连续追问；
   旧版 streamlit 回退为 ＋ 弹层上传 + text_input（随内容滚动）；
 - 会话持久化到 data/chat_sessions.json（刷新/重启不丢；data/ 已 gitignore）；
@@ -206,7 +207,8 @@ def _summarize_title(question: str) -> str:
     try:
         from core.llm_client import ask_llm
         title = ask_llm(f"提问：{question}\n对话标题：",
-                        system_prompt=_TITLE_SYSTEM, max_tokens=64)
+                        system_prompt=_TITLE_SYSTEM, max_tokens=64,
+                        thinking="disabled")
         if title:
             # 清理：逐行去引号，取首个非空行，截断
             title = title.strip()
@@ -248,7 +250,9 @@ def _ask(sessions: list, session_id: str, question: str) -> None:
         try:
             answer = process_question(
                 question, history=history,
-                progress_callback=_progress_updater(draft_box))
+                progress_callback=_progress_updater(draft_box),
+                correction_callback=lambda: status.update(
+                    label="正在修正回答…", state="running"))
             failed = (not answer) or answer.startswith("（LLM 调用失败")
         except Exception as e:
             answer = f"（生成异常：{e}）"
@@ -509,16 +513,21 @@ st.markdown(
     "footer {visibility: hidden;}"
     "#MainMenu {visibility: hidden;}"
     ".stChatMessage {max-width: 780px; margin: 0 auto;}"
-    ".stChatFloatingInputContainer,[data-testid='stChatInput']"
-    "{z-index: 999999; background-color: var(--background-color);}"
+    "[data-testid='stChatInput']{"
+    "width: max(280px, calc((100vw - 460px) * 0.8)) !important;"
+    "max-width: 100% !important;"
+    "margin-left: auto !important; margin-right: auto !important;}"
     "</style>",
     unsafe_allow_html=True,
 )
 
-# ---- 输入框：整页最先渲染的可见组分（固定窗格，默认最前不被遮盖） ----
-# st.chat_input 由前端钉在视口底部，与脚本位置无关；提到最前调用使其 delta
-# 最先到达前端——长历史重渲染 / 图片编译回填期间输入框也立即可见可用；
-# 上方 CSS 赋最高 z-index 与不透明底色，其他组分任何时候都不遮盖它。
+# ---- 输入框：整页最先渲染的可见组分（固定窗格） ----
+# st.chat_input 由前端钉在视口底部（[data-testid="stBottom"]：sticky，自带主题
+# 层级与不透明背景，不被其他组分遮盖），与脚本位置无关；提到最前调用使其
+# delta 最先到达前端——长历史重渲染 / 图片编译回填期间输入框也立即可见可用。
+# 上方 CSS 把可见输入盒（[data-testid="stChatInput"]，无宽度声明、撑满父级，
+# 是长度的真正控制点）固定为原长的 80%：(100vw - 侧边栏300 - 主区padding160)
+# × 0.8，按视口计算与侧边栏状态无关——收起时长度不变、位置随居中左移。
 _CHAT_FILE_OK = _chat_input_supports_file()
 _CHAT_INPUT_OK = hasattr(st, "chat_input")
 _submitted = None      # 现代路径（含附件）的提交值，页面末尾统一处理
