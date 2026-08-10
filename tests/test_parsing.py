@@ -75,6 +75,22 @@ def test_composite_prose_mention_not_swallowed():
     assert len(t.args[1]) == 3  # 2 个 STRUCT + 1 个 RXNARROW
 
 
+def test_xh_toplevel_parse():
+    """顶层 [XH:SMILES|序号]（单分子位点标注，无需 COMPOSITE）。"""
+    tags = parse_tags("[XH:CC(=O)O|3]")
+    assert len(tags) == 1
+    assert tags[0].type == "XH"
+    assert tags[0].args == ["CC(=O)O", "3"]
+
+
+def test_bond_toplevel_parse():
+    """顶层 [BOND:SMILES|a-b]。"""
+    tags = parse_tags("[BOND:CCC=O|1-2]")
+    assert len(tags) == 1
+    assert tags[0].type == "BOND"
+    assert tags[0].args == ["CCC=O", "1-2"]
+
+
 def test_reasoning_paired():
     """用例4：REASONING 配对标记。"""
     tags = parse_tags("[REASONING]亲电取代[/REASONING]")

@@ -69,6 +69,8 @@ _TAG_NAMES = {
     "CHARGE": "电荷标注",
     "HBOND": "氢键标注",
     "RETRO": "逆合成箭头",
+    "XH": "显式氢标注",
+    "BOND": "键突出标注",
 }
 
 # SMILES 字段提取器：输入 RenderTag，返回需要校验的 SMILES 字符串列表。
@@ -512,6 +514,43 @@ def validate_tag(tag: RenderTag) -> ValidationResult:
             reason = _check_reaction_balance(args)
             if reason:
                 return ValidationResult(tag, False, reason)
+        return ValidationResult(tag, True)
+    if ttype in ("XH", "BOND"):
+        # 顶层形式（[XH:SMILES|序号,...] / [BOND:SMILES|a-b,...]）；
+        # 容器内子标记形式（id 引用）由 _validate_composite 处理
+        if not args or not args[0] or not args[0].strip():
+            return ValidationResult(tag, False, "SMILES 为空")
+        smi = args[0].strip()
+        if not _smiles_ok(smi):
+            return ValidationResult(tag, False, f"无效 SMILES「{smi}」")
+        spec = (args[1] if len(args) > 1 else "").strip()
+        if not spec:
+            return ValidationResult(tag, False, f"{ttype} 缺少标注参数")
+        if _RDKIT_OK:
+            mol = _parse_mol(smi)
+            n = mol.GetNumAtoms() if mol else 0
+            for tok in spec.split(","):
+                tok = tok.strip()
+                if not tok:
+                    continue
+                if ttype == "XH":
+                    try:
+                        i = int(tok)
+                    except ValueError:
+                        return ValidationResult(
+                            tag, False, f"XH 原子编号「{tok}」不是数字")
+                    if not 0 <= i < n:
+                        return ValidationResult(
+                            tag, False, f"XH 原子编号 {i} 超出范围 0~{n - 1}")
+                else:
+                    m = re.fullmatch(r"(\d+)-(\d+)", tok)
+                    if not m:
+                        return ValidationResult(
+                            tag, False, f"BOND 键引用格式错误「{tok}」")
+                    a, b = int(m.group(1)), int(m.group(2))
+                    if not (0 <= a < n and 0 <= b < n):
+                        return ValidationResult(
+                            tag, False, f"BOND 键 {a}-{b} 超出范围 0~{n - 1}")
         return ValidationResult(tag, True)
 
     # 通用带 SMILES 字段的标记：字段非空 + SMILES 合法

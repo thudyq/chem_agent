@@ -16,6 +16,7 @@ from .stereo import render_stereo
 from .charge import render_charge
 from .hbond import render_hbond
 from .retro import render_retro
+from .xh_bond import render_bond, render_xh
 
 RENDERER_REGISTRY = {
     "STRUCT": render_structure,
@@ -29,6 +30,8 @@ RENDERER_REGISTRY = {
     "CHARGE": render_charge,
     "HBOND": render_hbond,
     "RETRO": render_retro,
+    "XH": render_xh,
+    "BOND": render_bond,
 }
 
 

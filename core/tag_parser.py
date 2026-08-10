@@ -57,6 +57,8 @@ _OPENERS = {
     "CHARGE": "[CHARGE:",
     "HBOND": "[HBOND:",
     "RETRO": "[RETRO:",
+    "XH": "[XH:",
+    "BOND": "[BOND:",
 }
 
 # REASONING 配对正则（内容不与括号冲突，可用正则）

@@ -138,6 +138,18 @@ def test_smoke_stereo_with_label():
     _assert_ok(outs[0], "\\node[below]")
 
 
+def test_smoke_xh_toplevel():
+    outs, bad = _render("[XH:CC(=O)O|3]")
+    assert len(outs) == 1 and bad == 0
+    _assert_ok(outs[0], "{H}")
+
+
+def test_smoke_bond_toplevel():
+    outs, bad = _render("[BOND:CCC=O|1-2]")
+    assert len(outs) == 1 and bad == 0
+    _assert_ok(outs[0], "very thick, red")
+
+
 def test_smoke_lewis():
     outs, bad = _render("[LEWIS:O]")
     assert len(outs) == 1 and bad == 0

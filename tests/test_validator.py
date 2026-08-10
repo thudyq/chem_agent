@@ -234,6 +234,40 @@ def test_composite_mecharrow_midpoint_bond_mixed_rejected(fake_rdkit):
     assert "成键空白位端点格式错误" in invalid[0].reason
 
 
+def test_xh_toplevel_valid(fake_rdkit):
+    _, invalid = _validate("[XH:CC=O|1]")
+    assert len(invalid) == 0
+
+
+def test_xh_toplevel_out_of_range(fake_rdkit):
+    _, invalid = _validate("[XH:CC=O|9]")
+    assert len(invalid) == 1
+    assert "超出范围" in invalid[0].reason
+
+
+def test_xh_toplevel_missing_spec(fake_rdkit):
+    _, invalid = _validate("[XH:CC=O]")
+    assert len(invalid) == 1
+    assert "缺少标注参数" in invalid[0].reason
+
+
+def test_bond_toplevel_valid(fake_rdkit):
+    _, invalid = _validate("[BOND:CC=O|1-2]")
+    assert len(invalid) == 0
+
+
+def test_bond_toplevel_bad_format(fake_rdkit):
+    _, invalid = _validate("[BOND:CC=O|1x2]")
+    assert len(invalid) == 1
+    assert "格式错误" in invalid[0].reason
+
+
+def test_bond_toplevel_out_of_range(fake_rdkit):
+    _, invalid = _validate("[BOND:CC=O|1-9]")
+    assert len(invalid) == 1
+    assert "超出范围" in invalid[0].reason
+
+
 def test_composite_real_mechanism_passes(fake_rdkit):
     text = ("[COMPOSITE:reaction_mech][STRUCT:CCO,label=乙醇,id=nu][PLUS]"
             "[STRUCT:CC[OH2+],label=质子化的乙醇,id=pe][RXNARROW]"
