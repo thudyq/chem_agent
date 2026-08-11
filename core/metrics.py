@@ -40,6 +40,7 @@ def evaluate_compliance(questions: list, *, max_corrections: int = 1) -> dict:
         "render_ok": 0,
         "render_fail": 0,
         "needs_correction": 0,
+        "by_type": {},      # 按标记类型统计（第 4 项）
         "responses": [],
     }
     for q in questions:
@@ -61,6 +62,24 @@ def evaluate_compliance(questions: list, *, max_corrections: int = 1) -> dict:
         stats["chem_invalid"] += sum(
             1 for r in invalid if r.reason.startswith("化学校验："))
 
+        # 按标记类型累计（tags/合法/非法/化学失败）
+        def _acc(bt: dict, ttype: str, **kw):
+            slot = bt.setdefault(ttype, {"tags": 0, "valid": 0, "invalid": 0,
+                                         "chem_invalid": 0, "renderable": 0,
+                                         "render_ok": 0, "render_fail": 0})
+            for k, v in kw.items():
+                slot[k] += v
+            return slot
+
+        for tag in tags:
+            _acc(stats["by_type"], tag.type, tags=1)
+        for tag in valid:
+            _acc(stats["by_type"], tag.type, valid=1)
+        for r in invalid:
+            _acc(stats["by_type"], r.tag.type, invalid=1)
+            if r.reason.startswith("化学校验："):
+                _acc(stats["by_type"], r.tag.type, chem_invalid=1)
+
         render_ok = render_fail = 0
         renderable = 0
         for tag in valid:
@@ -74,10 +93,13 @@ def evaluate_compliance(questions: list, *, max_corrections: int = 1) -> dict:
                 out = renderer(*tag.args)
             except Exception:
                 out = None
-            if out and not out.startswith("（"):
+            ok = bool(out) and not out.startswith("（")
+            if ok:
                 render_ok += 1
             else:
                 render_fail += 1
+            _acc(stats["by_type"], tag.type, renderable=1,
+                 render_ok=1 if ok else 0, render_fail=0 if ok else 1)
         stats["render_ok"] += render_ok
         stats["render_fail"] += render_fail
         stats["renderable"] += renderable
@@ -156,6 +178,42 @@ def format_report(stats: dict) -> str:
         f"需要修正的回答数: {stats['needs_correction']}（{_pct(stats['needs_correction'], total)}）",
         f"标记遵循率: {_pct(stats['valid'], tags)}",
     ]
+    if stats.get("by_type"):
+        lines += ["", format_by_type(stats["by_type"])]
+    return "\n".join(lines)
+
+
+def format_by_type(by_type: dict) -> str:
+    """按标记类型统计表：每种标记的 总数/合法/非法/化学失败/渲染/遵循率。
+
+    第 4 项：定位 LLM 最容易写错的标记类型（比只看总数更可操作）。
+    """
+    from .tag_validator import tag_name
+
+    def disp_w(s: str) -> int:
+        # 显示宽度：CJK/全角按 2 列（对齐用）
+        return sum(2 if ord(c) > 0x2E7F else 1 for c in s)
+
+    def lj(s: str, w: int) -> str:
+        return s + " " * max(0, w - disp_w(s))
+
+    header = ("类型", "标记", "合法", "非法", "化学失败", "可渲染",
+              "渲染成功", "渲染失败", "遵循率")
+    widths = [disp_w(h) for h in header]
+    rows = []
+    for ttype, s in sorted(by_type.items()):
+        row = (tag_name(ttype), str(s["tags"]), str(s["valid"]),
+               str(s["invalid"]), str(s["chem_invalid"]), str(s["renderable"]),
+               str(s["render_ok"]), str(s["render_fail"]),
+               _pct(s["valid"], s["tags"]))
+        rows.append(row)
+        for i, cell in enumerate(row):
+            widths[i] = max(widths[i], disp_w(cell))
+    lines = ["按标记类型统计", "=============="]
+    lines.append("  ".join(lj(h, widths[i]) for i, h in enumerate(header)))
+    for row in rows:
+        lines.append("  ".join(lj(cell, widths[i])
+                               for i, cell in enumerate(row)))
     return "\n".join(lines)
 
 
