@@ -290,6 +290,15 @@ def place_explicit_hs(mol, idx: int, count: int = 1,
         ang = _zigzag_continuation_angle(blocked[0])
         if ang is not None:
             angles.append(ang)
+    elif len(blocked) == 2 and count == 2:
+        # 双键位点双 H（如 CH2 示出两个 H）：以两键的镜像轴（大空档角平分线）
+        # 为中心 ±30° 对称扇出；镜像轴贴近 30° 整数倍时吸附——修正 2D 布局
+        # 微旋转导致的视觉歪斜（如 83°→90°，左右对称、同高、60° 夹角）
+        axis = gaps[0][1]
+        snapped = round(axis / 30.0) * 30.0 % 360.0
+        if _ang_diff(snapped, axis) <= 10.0:
+            axis = snapped
+        angles.extend([(axis + 30.0) % 360.0, (axis - 30.0) % 360.0])
     for gi, (gap, mid) in enumerate(gaps):
         if len(angles) >= count:
             break
