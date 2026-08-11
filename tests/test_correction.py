@@ -91,3 +91,17 @@ def test_correction_prompt_contains_failure_info():
     assert "无效 SMILES" in prompt
     assert "画苯" in prompt
     assert "修正要求" in prompt
+
+
+def test_correction_prompt_chem_guidance():
+    """化学校验失败时修正 prompt 给出守恒修正提示（氧化/脱氢补物种）。"""
+    from core.tag_parser import parse_tags
+    from core.tag_validator import validate_tag
+    text = "乙醇氧化：[REACTION:CCO|CC=O|Cu, Δ]"
+    tag = parse_tags(text)[0]
+    vr = validate_tag(tag)
+    assert vr.reason.startswith("化学校验：")
+    prompt = _build_correction_prompt("乙醇氧化成乙醛", text, [(tag, vr.reason)])
+    assert "两侧原子" in prompt                      # 失败原因
+    assert "补全缺失的反应物/生成物" in prompt       # 修正指导
+    assert "催化剂" in prompt and "箭头条件" in prompt  # 辅助试剂归位规则

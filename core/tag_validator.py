@@ -17,6 +17,7 @@
 """
 
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import List, Tuple
 
@@ -357,6 +358,21 @@ def _validate_mech_arrow_pt(pt: str, n_atoms: int) -> bool:
         return False
 
 
+def _check_xh_h_usage(mol, idxs: list, what: str) -> str:
+    """A2：XH 叠加次数不得超过原子可用隐含 H 数（防"幽灵 H"——
+    渲染端纯几何放置，不看 GetTotalNumHs）。fake mol（无 GetAtomWithIdx）
+    时跳过。返回错误原因或 ""。"""
+    gai = getattr(mol, "GetAtomWithIdx", None)
+    if gai is None or not idxs:
+        return ""
+    for a, cnt in Counter(idxs).items():
+        avail = gai(a).GetTotalNumHs()
+        if cnt > avail:
+            return (f"{what}原子 {a} 可用隐含 H 为 {avail} 个，"
+                    f"不足以画出 {cnt} 个")
+    return ""
+
+
 def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
     """COMPOSITE 容器校验：布局合法 + 子标记递归校验 + 引用存在性 + at= 越界。"""
     header = [p.strip() for p in (layout or "").split(",")]
@@ -407,6 +423,7 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
                 atom_counts[cid] = mol.GetNumAtoms() if mol else 0
                 comp_mols[cid] = mol
 
+    xh_usage = {}
     for child in children:
         ctype = child.type
         if ctype == "MECHARROW":
@@ -463,6 +480,7 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
                 n = atom_counts.get(ref, 0)
                 if not 0 <= i < n:
                     return False, f"XH 原子编号 {i} 超出组件 {ref} 范围 0~{n - 1}"
+                xh_usage.setdefault(ref, []).append(i)
         elif ctype == "BOND" and len(child.args) >= 2:
             ref = child.args[0].strip()
             if ref not in comps:
@@ -482,6 +500,10 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
                                    f"（原子 {a} 与 {b} 之间没有化学键）")
 
     if _RDKIT_OK:
+        for ref, idxs in xh_usage.items():
+            reason = _check_xh_h_usage(comp_mols.get(ref), idxs, f"组件 {ref} ")
+            if reason:
+                return False, reason
         reason = _check_composite_balance(children, layout_name)
         if reason:
             return False, reason
@@ -536,6 +558,7 @@ def validate_tag(tag: RenderTag) -> ValidationResult:
         if _RDKIT_OK:
             mol = _parse_mol(smi)
             n = mol.GetNumAtoms() if mol else 0
+            xh_idxs = []
             for tok in spec.split(","):
                 tok = tok.strip()
                 if not tok:
@@ -549,6 +572,7 @@ def validate_tag(tag: RenderTag) -> ValidationResult:
                     if not 0 <= i < n:
                         return ValidationResult(
                             tag, False, f"XH 原子编号 {i} 超出范围 0~{n - 1}")
+                    xh_idxs.append(i)
                 else:
                     m = re.fullmatch(r"(\d+)-(\d+)", tok)
                     if not m:
@@ -564,6 +588,10 @@ def validate_tag(tag: RenderTag) -> ValidationResult:
                         return ValidationResult(
                             tag, False,
                             f"BOND 键 {a}-{b} 不存在（原子 {a} 与 {b} 之间没有化学键）")
+            # A2：XH 叠加不超过原子可用隐含 H 数
+            reason = _check_xh_h_usage(mol, xh_idxs, "XH ")
+            if reason:
+                return ValidationResult(tag, False, reason)
         return ValidationResult(tag, True)
 
     # 通用带 SMILES 字段的标记：字段非空 + SMILES 合法
@@ -600,8 +628,16 @@ def validate_tags(tags: List[RenderTag]) -> Tuple[List[RenderTag], List[Validati
 
 
 def degrade_text(tag: RenderTag, reason: str) -> str:
-    """校验失败标记的降级提示文本。"""
-    return f"（{tag_name(tag.type)}图示无法渲染：{reason}，已省略）"
+    """校验失败标记的降级提示文本。
+
+    用户可见版本：去掉内部校验类别前缀（化学校验：）与括号内详情/修正指导，
+    只留主因（如"方程式两侧原子不守恒"）——完整原因（含元素计数明细）仍
+    通过 P2 修正 prompt 与 metrics 详情供内部使用。
+    """
+    msg = reason
+    if msg.startswith(_CHEM_PREFIX):
+        msg = msg[len(_CHEM_PREFIX):].split("（", 1)[0].strip()
+    return f"（{tag_name(tag.type)}图示无法渲染：{msg}，已省略）"
 
 
 if __name__ == "__main__":

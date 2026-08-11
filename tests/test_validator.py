@@ -162,6 +162,52 @@ class TestChemicalChecks:
         assert "化学校验" in invalid[0].reason
         assert "不守恒" in invalid[0].reason
 
+    def test_ethanol_oxidation_unbalanced_rejected(self):
+        """用户报告（20260811）：乙醇氧化成乙醛只写骨架变化（CCO|CC=O）
+        漏氧化剂/脱氢产物——校验拦截。"""
+        pytest.importorskip("rdkit")
+        _, invalid = _validate("[REACTION:CCO|CC=O|Cu, Δ]")
+        assert len(invalid) == 1
+        assert "化学校验" in invalid[0].reason
+        assert "C2H6O" in invalid[0].reason and "C2H4O" in invalid[0].reason
+
+    def test_ethanol_oxidation_balanced_passes(self):
+        """配平的乙醇氧化（催化氧化 + 脱氢两写法）均放行。"""
+        pytest.importorskip("rdkit")
+        for text in (
+            "[REACTION:CCO;CCO;O=O|CC=O;CC=O;O;O|Cu, Δ]",  # 2EtOH+O2→2CH3CHO+2H2O
+            "[REACTION:CCO|CC=O;[H][H]|Cu, Δ]",            # EtOH→CH3CHO+H2
+        ):
+            _, invalid = _validate(text)
+            assert len(invalid) == 0, f"配平写法被误拦: {text}"
+
+    def test_reaction_second_attempt_still_unbalanced_rejected(self):
+        """用户报告二次修正：CCO;O|CC=O;O 两侧都加水仍不守恒——继续拦截。"""
+        pytest.importorskip("rdkit")
+        _, invalid = _validate("[REACTION:CCO;O|CC=O;O|Cu, Δ]")
+        assert len(invalid) == 1
+        assert "C2H8O2" in invalid[0].reason and "C2H6O2" in invalid[0].reason
+
+    def test_degrade_text_chem_clean_for_user(self):
+        """用户可见降级消息：去「化学校验：」前缀与括号详情/修正指导，
+        只留主因；完整原因仍保留在 reason 中供 P2 修正与 metrics 使用。"""
+        pytest.importorskip("rdkit")
+        _, invalid = _validate("[REACTION:CCO|CC=O|Cu, Δ]")
+        tag, reason = invalid[0].tag, invalid[0].reason
+        shown = tv.degrade_text(tag, reason)
+        assert shown == "（反应方程式图示无法渲染：方程式两侧原子不守恒，已省略）"
+        assert "化学校验：" not in shown
+        assert "辅助试剂" not in shown          # 修正指导不再面向用户
+        assert "C2H6O" in reason                # 完整原因仍保留
+
+    def test_degrade_text_non_chem_unchanged(self):
+        """非化学校验原因（无效 SMILES）降级文本保持原样。"""
+        _, invalid = _validate("[STRUCT:XYZABC]")
+        tag, reason = invalid[0].tag, invalid[0].reason
+        shown = tv.degrade_text(tag, reason)
+        assert "无效 SMILES" in shown
+        assert shown.startswith("（结构式图示无法渲染：")
+
     def test_reaction_protonation_balanced_passes(self):
         pytest.importorskip("rdkit")
         _, invalid = _validate("[REACTION:CCO;[H+]|CC[OH2+]]")
@@ -212,6 +258,34 @@ class TestChemicalChecks:
             "[COMPOSITE:row][STRUCT:CCC=O,id=pr][BOND:pr|0-2][/COMPOSITE]")
         assert len(invalid) == 1
         assert "没有化学键" in invalid[0].reason
+
+    def test_xh_no_available_h_rejected(self):
+        """A2：无隐含 H 的原子（[Cl-]）写 XH 拦截——幽灵 H。"""
+        pytest.importorskip("rdkit")
+        _, invalid = _validate("[XH:[Cl-]|0]")
+        assert len(invalid) == 1
+        assert "可用隐含 H 为 0" in invalid[0].reason
+
+    def test_xh_overstack_rejected(self):
+        """A2：叠加次数超过可用 H 数拦截（醛基碳仅 1 H 叠 2 次）。"""
+        pytest.importorskip("rdkit")
+        _, invalid = _validate("[XH:CCC=O|2,2]")
+        assert len(invalid) == 1
+        assert "可用隐含 H 为 1" in invalid[0].reason
+
+    def test_xh_stacking_within_available_passes(self):
+        """A2：CH2 叠 2 次（恰可用 2 个 H）放行。"""
+        pytest.importorskip("rdkit")
+        _, invalid = _validate("[XH:CCC=O|1,1]")
+        assert len(invalid) == 0
+
+    def test_xh_composite_child_overstack_rejected(self):
+        """A2：容器内多个 XH 子标记累计超限同样拦截。"""
+        pytest.importorskip("rdkit")
+        _, invalid = _validate(
+            "[COMPOSITE:row][STRUCT:CCC=O,id=pr][XH:pr|2][XH:pr|2][/COMPOSITE]")
+        assert len(invalid) == 1
+        assert "可用隐含 H 为 1" in invalid[0].reason
 
 
 def test_composite_mecharrow_bond_form_midpoint_passes(fake_rdkit):
