@@ -277,6 +277,60 @@ def test_x_soda_attachments_stream(client, monkeypatch):
         assert "x_soda" not in f
 
 
+def test_x_soda_attachments_stream_empty(client, monkeypatch):
+    """C3：流式编译失败（build_attachments 返回空）——stop 帧不挂 x_soda，
+    文本回答仍完整送达。"""
+    monkeypatch.setattr(api, "build_attachments", lambda answer, base: [])
+    resp = client.post("/v1/chat/completions",
+                       json=_chat_payload(stream=True), headers=AUTH)
+    assert resp.status_code == 200
+    frames, done = _parse_sse(resp.text)
+    assert done
+    content = "".join(
+        f["choices"][0]["delta"].get("content", "")
+        for f in frames if "content" in f["choices"][0]["delta"]
+    )
+    assert content == FAKE_ANSWER                    # 文本不丢
+    for f in frames:
+        assert "x_soda" not in f                     # 无附件：任何帧都不挂
+    assert frames[-1]["choices"][0]["finish_reason"] == "stop"
+
+
+def test_x_soda_attachments_stream_compile_exception(client, monkeypatch):
+    """C3：流式编译异常（build_attachments raise）——降级为无附件，
+    文本回答不丢、无 error 字段、stop 帧不带 x_soda。"""
+    def _boom(answer, base):
+        raise OSError("附件编译崩溃")
+    monkeypatch.setattr(api, "build_attachments", _boom)
+    resp = client.post("/v1/chat/completions",
+                       json=_chat_payload(stream=True), headers=AUTH)
+    assert resp.status_code == 200
+    frames, done = _parse_sse(resp.text)
+    assert done
+    content = "".join(
+        f["choices"][0]["delta"].get("content", "")
+        for f in frames if "content" in f["choices"][0]["delta"]
+    )
+    assert content == FAKE_ANSWER                    # 文本不丢
+    for f in frames:
+        assert "x_soda" not in f                     # 降级为无附件
+        assert "error" not in f                      # 不视为上游错误
+    assert frames[-1]["choices"][0]["finish_reason"] == "stop"
+
+
+def test_x_soda_attachments_non_stream_compile_exception(client, monkeypatch):
+    """C3：非流式编译异常（build_attachments raise）——降级为无附件，
+    文本回答不丢、响应不带 x_soda、不 500。"""
+    def _boom(answer, base):
+        raise OSError("附件编译崩溃")
+    monkeypatch.setattr(api, "build_attachments", _boom)
+    resp = client.post("/v1/chat/completions", json=_chat_payload(), headers=AUTH)
+    assert resp.status_code == 200                    # 不 500
+    data = resp.json()
+    assert data["choices"][0]["message"]["content"] == FAKE_ANSWER
+    assert "x_soda" not in data
+
+
 def test_serve_attachment(client, tmp_path, monkeypatch):
     """/files/{name}：合法文件可下载；非法名与不存在的文件 404。"""
     import core.attachments as att_mod

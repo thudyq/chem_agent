@@ -547,7 +547,11 @@ async def chat_completions(request: Request, authorization: str | None = Header(
         )
 
     answer = process_question(question, history=history) or "（未能生成回答）"
-    attachments = build_attachments(answer, public_base)
+    try:
+        attachments = build_attachments(answer, public_base)
+    except Exception as e:  # 编译异常不拖垮已生成的文本回答（与流式路径一致）
+        print(f"[api] 附件编译异常，降级为无附件: {e}")
+        attachments = []
     payload = {
         "id": cid,
         "object": "chat.completion",
