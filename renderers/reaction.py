@@ -9,13 +9,16 @@ renderers/layout.py）排成一行：反应物 + 反应物 + ... → 产物 + �
 标记格式：
     [REACTION:反应物1;反应物2;...|产物1;产物2;...|反应条件]
 
-    示例：
+    示例（2a 完整配平）：
     [REACTION:c1ccccc1;[O-][N+](=O)O|O=[N+]([O-])c1ccccc1;O|H2SO4, Δ]
     [REACTION:C=C;O|CCO|H2SO4]
+    示例（2b 箭头补足：省略物种写在条件里，无符号=补反应物侧、-X=补产物侧）：
+    [REACTION:CC(=O)O;CCO|CC(=O)OCC|浓H2SO4, Δ, -H2O]
 
 设计选择：
 - 分子按结构简式绘制（非环碳写出 CH₃/CH₂/CH，环上碳保持键线式），不画孤对电子；
-- 条件中的化学式（如 H2SO4）自动转下标；已含 $ 的文本保持原样。
+- 条件中的化学式（如 H2SO4）自动转下标；已含 $ 的文本保持原样；
+- 校验由 core.tag_validator 完成（2a 全元素+电荷守恒；2b 具体物质补足差额）。
 """
 
 if __name__ == "__main__":
@@ -138,14 +141,21 @@ if __name__ == "__main__":
         "H2SO4",
     ))
 
-    print("\n[3] 无效反应物：")
+    print("\n[3] 酯化 2b 箭头补足（省略产物水，-H2O 写在条件里补产物侧）：")
+    print(render_reaction(
+        "CC(=O)O;CCO",
+        "CC(=O)OCC",
+        "浓H2SO4, Δ, -H2O",
+    ))
+
+    print("\n[4] 无效反应物：")
     print(render_reaction(
         "",
         "CC",
         "",
     ))
 
-    print("\n[4] 无法渲染的 SMILES：")
+    print("\n[5] 无法渲染的 SMILES：")
     print(render_reaction(
         "XYZ_INVALID",
         "CC",
