@@ -743,6 +743,22 @@ ENERGY_DEMO = (
 )
 
 
+def test_energy_layout_annotations_rendered():
+    """B3：energy 布局驻点结构支持 XH/BOND/CHARGE 注解（不再静默丢弃）。"""
+    out = _render(
+        "[COMPOSITE:energy]"
+        "[ENERGY:0,108,-20]"
+        "[STRUCT:CCl.[OH-],label=反应物,at=0,id=r0][CHARGE:r0|0:δ+]"
+        "[STRUCT:CCl.[OH-],label=过渡态,at=1,id=ts]"
+        "[STRUCT:CO.[Cl-],label=产物,at=2,id=p0][XH:p0|1][BOND:p0|0-1]"
+        "[/COMPOSITE]"
+    )
+    assert "\\begin{tikzpicture}" in out
+    assert "delta" in out                     # CHARGE 部分电荷标注
+    assert "very thick, red" in out           # BOND 键突出
+    assert re.search(r"\{H\}", out)           # XH 显式 H 节点
+
+
 def test_energy_layout_full():
     """R-3 正例：势能面曲线 + 3 个驻点结构 + 驻点标签用 STRUCT label。"""
     out = _render(ENERGY_DEMO)

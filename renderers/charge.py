@@ -7,8 +7,8 @@ RDKit 2D 坐标自绘分子骨架，在指定原子旁标注 δ+/δ-（红色）
 """
 
 from .mol_primitives import (
-    atom_label, atom_pos, format_partial_charge, parse_charge_pairs,
-    partial_charge_pos, prepare_mol, bond_segments,
+    atom_label, atom_pos, charge_tikz, format_partial_charge,
+    parse_charge_pairs, partial_charge_pos, prepare_mol, bond_segments,
 )
 
 
@@ -32,12 +32,15 @@ def render_charge(smiles: str, charges_str: str = "") -> str:
         for x1, y1, x2, y2 in segs:
             lines.append(f"  \\draw ({x1:.2f},{y1:.2f}) -- ({x2:.2f},{y2:.2f});")
 
-    # 原子标签
+    # 原子标签（形式电荷统一用圆圈电荷显示，不内嵌上标）
     for atom in mol.GetAtoms():
         lab = atom_label(atom)
         if lab:
             x, y = atom_pos(mol, atom.GetIdx())
             lines.append(f"  \\node[fill=white, inner sep=1pt] at ({x:.2f},{y:.2f}) {{{lab}}};")
+        charge = charge_tikz(mol, atom.GetIdx())
+        if charge:
+            lines.append(f"  {charge}")
 
     # 部分电荷标注（红色，以元素符号中心为基准，方向避让键与标签氢）
     for idx, raw_label in charges.items():

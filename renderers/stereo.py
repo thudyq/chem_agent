@@ -8,8 +8,8 @@ RDKit 解析含 @/@@ 的 SMILES → PrepareMolForDrawing（含坐标+楔形方�
 
 import math
 
-from .mol_primitives import atom_label, atom_pos, mol_visual_bbox, \
-    prepare_mol, wrap_format_text
+from .mol_primitives import atom_label, atom_pos, charge_tikz, \
+    mol_visual_bbox, prepare_mol, wrap_format_text
 
 
 def render_stereo(smiles: str, label: str = None) -> str:
@@ -75,10 +75,15 @@ def render_stereo(smiles: str, label: str = None) -> str:
                 lines.append(f"  \\draw ({x1-px*d:.2f},{y1-py*d:.2f}) -- ({x2-px*d:.2f},{y2-py*d:.2f});")
 
     for atom in mol.GetAtoms():
+        idx = atom.GetIdx()
         lab = atom_label(atom)
         if lab:
-            x, y = atom_pos(mol, atom.GetIdx())
+            x, y = atom_pos(mol, idx)
             lines.append(f"  \\node[fill=white, inner sep=1pt] at ({x:.2f},{y:.2f}) {{{lab}}};")
+        # 形式电荷统一用圆圈电荷显示，不内嵌上标
+        charge = charge_tikz(mol, idx)
+        if charge:
+            lines.append(f"  {charge}")
 
     if label:
         min_x, min_y, max_x, _ = mol_visual_bbox(mol, include_lone_pairs=False)

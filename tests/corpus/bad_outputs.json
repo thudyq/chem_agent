@@ -61,5 +61,19 @@
     "llm_output": "(R)-乳酸的楔形式结构如下：\n[STEREO:C[C@@H](O)C(=O)O,label=(R)-乳酸]",
     "expect": {"valid": 1, "invalid": 0},
     "note": "STEREO 契约扩展支持 ,label=名称（20260808 起），拆分后放行"
+  },
+  {
+    "id": "baseline-20260810-ether-catalyst-misplaced",
+    "source": "真实 metrics 基线 20260810 乙醇→乙醚机理题（Q4）：LLM 把催化剂 H2SO4 误写进反应物 O=S(=O)(O)O 且只写 1 分子乙醇，方程式 C2H8O5S vs C4H12O2 不守恒",
+    "llm_output": "乙醇在浓硫酸催化下 140°C 脱水生成乙醚：\n[REACTION:CCO;O=S(=O)(O)O|CCOCC;O|H2SO4, 140°C]",
+    "expect": {"valid": 0, "invalid": 1},
+    "note": "催化剂/辅助试剂应写箭头条件而非反应物列表；校验以两侧原子不守恒拦截（20260811 prompt 决策表已强化该规则）"
+  },
+  {
+    "id": "baseline-20260810-sn2-transition-state-smiles",
+    "source": "真实 metrics 基线 20260810 SN2 势能面题（Q6）：LLM 为过渡态硬写 SMILES [OH-]CCl（过渡态不是稳定分子，无法用 SMILES 表达）",
+    "llm_output": "[COMPOSITE:energy][ENERGY:0,100,-40][STRUCT:CCl.[OH-],label=反应物,at=0][STRUCT:[OH-]CCl,label=过渡态(示意),at=1][STRUCT:CO.[Cl-],label=产物,at=2][/COMPOSITE]",
+    "expect": {"valid": 0, "invalid": 1},
+    "note": "过渡态/中间体写不准 SMILES 时校验拦截；P2 修正与降级提示兜底（20260811 维持可写+校验策略，不禁止）"
   }
 ]

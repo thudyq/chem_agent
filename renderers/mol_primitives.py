@@ -20,7 +20,7 @@ def _only_h_neighbors(atom) -> bool:
 
 
 def atom_label(atom, explicit_hs: int = 0, flip: bool = False) -> str | None:
-    """生成非隐式碳原子的标签（如 OH、NH₂、Cl、$^{+}$ 等）。
+    """生成非隐式碳原子的标签（如 OH、NH₂、Cl）。
 
     纯碳原子（原子序 6、形式电荷 0）返回 None，表示不显示标签（键线式）。
     explicit_hs：已显式画出的 H 数（[XH]/氢键给体），从标签 H 计数中
@@ -28,6 +28,8 @@ def atom_label(atom, explicit_hs: int = 0, flip: bool = False) -> str | None:
     水分子特例：O 只连 H 时写 H₂O（H 在前）。
     flip=True：键端在标签右侧时元素符号右移（OH→HO、NH₂→H₂N，
     使键连接的原子靠近键端，Drawbacks 第 6 条）。
+    电荷一律不在标签内嵌上标——统一由 charge_tikz 的圆圈电荷显示
+    （Instruction-for-Electrons §三；此前与圆圈并存导致双重显示）。
     """
     z = atom.GetAtomicNum()
     if z == 6 and atom.GetFormalCharge() == 0:
@@ -46,12 +48,6 @@ def atom_label(atom, explicit_hs: int = 0, flip: bool = False) -> str | None:
             parts += "H"
         elif h > 1:
             parts += f"H$_{{{h}}}$"
-
-    fc = atom.GetFormalCharge()
-    if fc:
-        num = str(abs(fc)) if abs(fc) > 1 else ""
-        sign = "+" if fc > 0 else "-"
-        parts += f"$^{{{num}{sign}}}$"
 
     return parts
 
@@ -75,11 +71,6 @@ def _carbon_label(atom) -> str:
         parts += "H"
     elif h > 1:
         parts += f"H$_{{{h}}}$"
-    fc = atom.GetFormalCharge()
-    if fc:
-        num = str(abs(fc)) if abs(fc) > 1 else ""
-        sign = "+" if fc > 0 else "-"
-        parts += f"$^{{{num}{sign}}}$"
     return parts
 
 
