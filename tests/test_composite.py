@@ -733,6 +733,35 @@ def test_annotation_unknown_ref_ignored():
     assert "delta" not in out and "teal" not in out
 
 
+def test_annotation_bad_bond_ref_ignored():
+    """渲染端容错固化：BOND 引用不存在的键（绕过校验层直调渲染器）
+    静默跳过不崩溃、无红线；XH 叠加超限（绕过 A2 校验）渲染不崩溃。"""
+    out = _render(
+        "[COMPOSITE:row]"
+        "[STRUCT:CCC=O,id=pr]"
+        "[BOND:pr|0-2]"
+        "[/COMPOSITE]"
+    )
+    assert out.startswith("\\begin{tikzpicture}")
+    assert "very thick" not in out             # 不存在的键不画红
+    out2 = _render(
+        "[COMPOSITE:row]"
+        "[STRUCT:CCC=O,id=pr]"
+        "[XH:pr|2][XH:pr|2][XH:pr|2]"          # 醛基碳仅 1 H，叠 3 次
+        "[/COMPOSITE]"
+    )
+    assert out2.startswith("\\begin{tikzpicture}")
+
+
+def test_place_explicit_hs_gap_shortage_warns(capsys):
+    """空档不足截断告警（E6）：请求数超过可分配空档时打印告警并少画。"""
+    import renderers.mol_primitives as mp
+    mol = mp.prepare_mol("CCC=O")
+    positions = mp.place_explicit_hs(mol, 1, 10)
+    assert len(positions) < 10
+    assert "空档不足" in capsys.readouterr().out
+
+
 ENERGY_DEMO = (
     "[COMPOSITE:energy]"
     "[ENERGY:0,108,-20]"

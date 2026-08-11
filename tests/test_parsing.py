@@ -311,3 +311,20 @@ def test_composite_struct_at_pos_attrs():
     assert child.args == ["CCl", "底物"]
     assert ",at=1" in child.raw and ",pos=below" in child.raw
 
+
+def test_composite_xh_bond_children():
+    """[COMPOSITE] 内 XH/BOND 子标记解析（容器内 id 引用形式），不作为顶层标记。"""
+    text = (
+        "[COMPOSITE:row]"
+        "[STRUCT:CCC=O,id=pr]"
+        "[XH:pr|1]"
+        "[BOND:pr|1-2]"
+        "[/COMPOSITE]"
+    )
+    tags = parse_tags(text)
+    assert [t.type for t in tags] == ["COMPOSITE"]
+    children = tags[0].args[1]
+    assert [c.type for c in children] == ["STRUCT", "XH", "BOND"]
+    assert children[1].args == ["pr", "1"]
+    assert children[2].args == ["pr", "1-2"]
+

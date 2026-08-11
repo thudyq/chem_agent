@@ -500,6 +500,48 @@ def test_bond_toplevel_out_of_range(fake_rdkit):
     assert "超出范围" in invalid[0].reason
 
 
+def test_composite_xh_child_unknown_id(fake_rdkit):
+    text = ("[COMPOSITE:row][STRUCT:CC=O,id=pr][XH:ghost|1][/COMPOSITE]")
+    _, invalid = _validate(text)
+    assert len(invalid) == 1
+    assert "未知组件" in invalid[0].reason
+
+
+def test_composite_xh_child_bad_format(fake_rdkit):
+    text = ("[COMPOSITE:row][STRUCT:CC=O,id=pr][XH:pr|x][/COMPOSITE]")
+    _, invalid = _validate(text)
+    assert len(invalid) == 1
+    assert "不是数字" in invalid[0].reason
+
+
+def test_composite_xh_child_out_of_range(fake_rdkit):
+    text = ("[COMPOSITE:row][STRUCT:CC=O,id=pr][XH:pr|9][/COMPOSITE]")
+    _, invalid = _validate(text)
+    assert len(invalid) == 1
+    assert "超出" in invalid[0].reason
+
+
+def test_composite_bond_child_unknown_id(fake_rdkit):
+    text = ("[COMPOSITE:row][STRUCT:CC=O,id=pr][BOND:ghost|1-2][/COMPOSITE]")
+    _, invalid = _validate(text)
+    assert len(invalid) == 1
+    assert "未知组件" in invalid[0].reason
+
+
+def test_composite_bond_child_bad_format(fake_rdkit):
+    text = ("[COMPOSITE:row][STRUCT:CC=O,id=pr][BOND:pr|1x2][/COMPOSITE]")
+    _, invalid = _validate(text)
+    assert len(invalid) == 1
+    assert "格式错误" in invalid[0].reason
+
+
+def test_composite_bond_child_out_of_range(fake_rdkit):
+    text = ("[COMPOSITE:row][STRUCT:CC=O,id=pr][BOND:pr|1-9][/COMPOSITE]")
+    _, invalid = _validate(text)
+    assert len(invalid) == 1
+    assert "超出" in invalid[0].reason
+
+
 def test_composite_real_mechanism_passes(fake_rdkit):
     text = ("[COMPOSITE:reaction_mech][STRUCT:CCO,label=乙醇,id=nu][PLUS]"
             "[STRUCT:CC[OH2+],label=质子化的乙醇,id=pe][RXNARROW]"

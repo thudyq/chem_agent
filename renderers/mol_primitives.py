@@ -301,8 +301,14 @@ def place_explicit_hs(mol, idx: int, count: int = 1,
             off = (s - (slots - 1) / 2.0) * 20.0
             angles.append((mid + off) % 360.0)
 
-    return [(x + h_len * math.cos(math.radians(a)),
-             y + h_len * math.sin(math.radians(a))) for a in angles[:count]]
+    positions = [(x + h_len * math.cos(math.radians(a)),
+                  y + h_len * math.sin(math.radians(a)))
+                 for a in angles[:count]]
+    if len(positions) < count:
+        # 空档不足截断（E6）：相邻空档过近被跳过时少画，告警而非静默
+        print(f"[mol_primitives] 显式 H 空档不足：原子 {idx} 请求 {count} 个，"
+              f"实际画出 {len(positions)} 个")
+    return positions
 
 
 def place_donor_h(mol, x_idx: int, y_pos: tuple[float, float],
