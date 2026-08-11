@@ -198,6 +198,21 @@ class TestChemicalChecks:
             "[STRUCT:CCO][RXNARROW:CuO, Δ][STRUCT:CC=O][/COMPOSITE]")
         assert len(invalid) == 0
 
+    def test_bond_nonexistent_toplevel_rejected(self):
+        """A1：BOND 的 a-b 必须真实成键——非相邻原子拦截（顶层形式）。"""
+        pytest.importorskip("rdkit")
+        _, invalid = _validate("[BOND:CCC=O|0-2]")
+        assert len(invalid) == 1
+        assert "没有化学键" in invalid[0].reason
+
+    def test_bond_nonexistent_composite_child_rejected(self):
+        """A1：容器内子标记形式同样拦截非相邻键。"""
+        pytest.importorskip("rdkit")
+        _, invalid = _validate(
+            "[COMPOSITE:row][STRUCT:CCC=O,id=pr][BOND:pr|0-2][/COMPOSITE]")
+        assert len(invalid) == 1
+        assert "没有化学键" in invalid[0].reason
+
 
 def test_composite_mecharrow_bond_form_midpoint_passes(fake_rdkit):
     text = ("[COMPOSITE:reaction_mech][STRUCT:CCl,id=r0][RXNARROW]"

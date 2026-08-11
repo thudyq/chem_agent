@@ -396,14 +396,16 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
 
     # 引用校验：需要原子数时先解析所有组件 SMILES
     atom_counts = {}
+    comp_mols = {}
     if _RDKIT_OK:
         for cid, info in comps.items():
             if info["smiles"]:
                 try:
                     mol = _parse_mol(info["smiles"])
-                    atom_counts[cid] = mol.GetNumAtoms() if mol else 0
                 except Exception:
-                    atom_counts[cid] = 0
+                    mol = None
+                atom_counts[cid] = mol.GetNumAtoms() if mol else 0
+                comp_mols[cid] = mol
 
     for child in children:
         ctype = child.type
@@ -473,6 +475,11 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
                 a, b = int(m.group(1)), int(m.group(2))
                 if not (0 <= a < n and 0 <= b < n):
                     return False, f"BOND 键 {a}-{b} 超出组件 {ref} 范围 0~{n - 1}"
+                # A1：a-b 必须真实成键（渲染端对不存在的键静默跳过）
+                gba = getattr(comp_mols.get(ref), "GetBondBetweenAtoms", None)
+                if gba is not None and gba(a, b) is None:
+                    return False, (f"BOND 键 {a}-{b} 在组件 {ref} 中不存在"
+                                   f"（原子 {a} 与 {b} 之间没有化学键）")
 
     if _RDKIT_OK:
         reason = _check_composite_balance(children, layout_name)
@@ -551,6 +558,12 @@ def validate_tag(tag: RenderTag) -> ValidationResult:
                     if not (0 <= a < n and 0 <= b < n):
                         return ValidationResult(
                             tag, False, f"BOND 键 {a}-{b} 超出范围 0~{n - 1}")
+                    # A1：a-b 必须真实成键（渲染端对不存在的键静默跳过）
+                    gba = getattr(mol, "GetBondBetweenAtoms", None)
+                    if gba is not None and gba(a, b) is None:
+                        return ValidationResult(
+                            tag, False,
+                            f"BOND 键 {a}-{b} 不存在（原子 {a} 与 {b} 之间没有化学键）")
         return ValidationResult(tag, True)
 
     # 通用带 SMILES 字段的标记：字段非空 + SMILES 合法
