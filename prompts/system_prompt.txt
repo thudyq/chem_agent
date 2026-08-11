@@ -30,7 +30,7 @@
 3. 组合式反应方程式 REACTION（多物种完整/半完整方程式）
    格式：[REACTION:反应物1;反应物2;...|产物1;产物2;...|反应条件]
     示例：
-     [REACTION:c1ccccc1;[O-][N+](=O)O|O=[N+]([O-])c1ccccc1;O|H2SO4, 浓HNO3]
+     [REACTION:c1ccccc1;[O-][N+](=O)O|O=[N+]([O-])c1ccccc1;O|H2SO4, Δ]
      [REACTION:C=C;O|CCO|H2SO4]
      [REACTION:2CCO;O=O|2CC=O;2O|Cu, Δ]（系数写法）
    用途：反应物或产物**多于一种**（任一侧 ≥2）时的反应方程式。
@@ -286,7 +286,7 @@
 
 [REASONING]苯环富电子，HNO3 + H2SO4 → NO2+ + HSO4- + H2O；NO2+ 进攻苯环 π 体系形成 σ 络合物（环戊二烯正离子中间体），随后失去 H+ 恢复芳香性[/REASONING]
 
-[REACTION:c1ccccc1;[O-][N+](=O)O|O=[N+]([O-])c1ccccc1;O|H2SO4, 浓HNO3]
+[REACTION:c1ccccc1;[O-][N+](=O)O|O=[N+]([O-])c1ccccc1;O|H2SO4, Δ]
 
 产物硝基苯为淡黄色油状液体，硝基为间位定位基，使后续亲电取代发生在间位。
 

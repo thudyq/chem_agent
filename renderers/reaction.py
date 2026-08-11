@@ -9,8 +9,8 @@ renderers/layout.py）排成一行：反应物 + 反应物 + ... → 产物 + �
 标记格式：
     [REACTION:反应物1;反应物2;...|产物1;产物2;...|反应条件]
 
-示例：
-    [REACTION:c1ccccc1;[O-][N+](=O)O|O=[N+]([O-])c1ccccc1;O|H2SO4, 浓HNO3]
+    示例：
+    [REACTION:c1ccccc1;[O-][N+](=O)O|O=[N+]([O-])c1ccccc1;O|H2SO4, Δ]
     [REACTION:C=C;O|CCO|H2SO4]
 
 设计选择：
@@ -124,11 +124,11 @@ if __name__ == "__main__":
     print("[REACTION] 组合式反应方程式测试")
     print("=" * 60)
 
-    print("\n[1] 苯的硝化（条件含化学式，验证自动下标）：")
+    print("\n[1] 苯的硝化（HNO3 已写入反应物，条件仅催化剂 H2SO4）：")
     print(render_reaction(
         "c1ccccc1;[O-][N+](=O)O",
         "O=[N+]([O-])c1ccccc1;O",
-        "H2SO4, 浓HNO3",
+        "H2SO4, Δ",
     ))
 
     print("\n[2] 加成反应（乙烯 + 水 → 乙醇）：")
@@ -138,21 +138,14 @@ if __name__ == "__main__":
         "H2SO4",
     ))
 
-    print("\n[3] 单一反应物/产物：")
-    print(render_reaction(
-        "C=C",
-        "CC",
-        "",
-    ))
-
-    print("\n[4] 无效反应物：")
+    print("\n[3] 无效反应物：")
     print(render_reaction(
         "",
         "CC",
         "",
     ))
 
-    print("\n[5] 无法渲染的 SMILES：")
+    print("\n[4] 无法渲染的 SMILES：")
     print(render_reaction(
         "XYZ_INVALID",
         "CC",

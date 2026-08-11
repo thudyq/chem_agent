@@ -17,13 +17,14 @@ rdkit = pytest.importorskip("rdkit", reason="rdkit 未安装，跳过渲染测�
 
 def test_reaction_basic_layout():
     """REACTION：多反应物 + 多产物 + 条件，组件 scope 化、加号与主箭头齐全。"""
-    out = render_reaction("c1ccccc1;[O-][N+](=O)[O-]",
-                          "O=[N+]([O-])c1ccccc1;O", "H2SO4, 浓HNO3")
+    out = render_reaction("c1ccccc1;[O-][N+](=O)O",
+                          "O=[N+]([O-])c1ccccc1;O", "H2SO4, Δ")
     assert out.startswith("\\begin{tikzpicture}")
     assert out.count("\\begin{scope}[shift=") == 4     # 4 个分子组件
     assert len(re.findall(r"\\node at \([-\d.]+,[-\d.]+\) \{\$\+\$\}", out)) == 2   # 两侧各一个加号
     assert out.count("\\draw[->, very thick]") == 1
-    assert "H$_2$SO$_4$, 浓HNO$_3$" in out             # 条件自动下标
+    assert "H$_2$SO$_4$, $\\Delta$" in out          # 条件自动下标（HNO3 已在反应物，不重复）
+    assert "浓HNO$_3$" not in out                       # 催化剂条件不重复已写物种
     assert "\\fill" not in out                         # 普通方程式不画孤对电子
 
 
