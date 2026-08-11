@@ -1233,6 +1233,36 @@ def wrap_format_text(text: str, max_width: float = _LABEL_WRAP_MAX) -> str:
     return "\\\\".join(format_chem_text(l) for l in lines)
 
 
+# 物种系数前缀：整数（2CCO）或 n/2（1/2O2、3/2O2）；与 core.tag_validator
+# 的 _parse_coeff 规则一致（渲染端独立实现，避免跨包导入）。
+_SP_COEFF_RE = re.compile(r"^(-?\d+)(?:/(\d+))?")
+
+
+def split_species_coeff(seg: str) -> list:
+    """多物种分段 → [(coeff, bare_smiles), ...]（支持系数前缀）。
+
+    "2CCO;1/2O2" → [(2, "CCO"), (0.5, "O2")]。非法系数组分丢弃（返回空对）；
+    系数 1 省略。供 REACTION/ARROW 渲染时剥离系数、显示系数节点。
+    """
+    out = []
+    for tok in re.split(r"[;,]", seg or ""):
+        tok = tok.strip()
+        if not tok:
+            continue
+        m = _SP_COEFF_RE.match(tok)
+        if not m:
+            out.append((1, tok))
+            continue
+        num, den = int(m.group(1)), m.group(2)
+        if num == 0 or (den is not None and (int(den) != 2 or num % 2 == 0)):
+            continue  # 非法系数（0 / 非 n/2）跳过，与校验层一致
+        coeff = num / 2.0 if den else float(num)
+        bare = tok[m.end():].strip()
+        if bare:
+            out.append((coeff, bare))
+    return out
+
+
 def bond_order_of(mol, spec: str) -> int:
     """"a-b" 键引用对应的键级（1/2/3）；非法或不存在返回 0。"""
     a, _, b = spec.partition("-")

@@ -72,7 +72,7 @@ if __name__ == "__main__":
         atom_main_label, bond_segments_for, label_bond_margin,
         label_edge_point, prepare_mol, scale_mol_coords, symbol_center,
         atom_pos, place_donor_h, place_explicit_hs, adjust_hbond_conformation,
-        partial_charge_pos, wrap_format_text,
+        partial_charge_pos, split_species_coeff, wrap_format_text,
     )
     from renderers.layout import (
         energy_annotation_placement, energy_point_coords, energy_point_roles,
@@ -88,7 +88,7 @@ else:
         atom_main_label, bond_segments_for, label_bond_margin,
         label_edge_point, prepare_mol, scale_mol_coords, symbol_center,
         atom_pos, place_donor_h, place_explicit_hs, adjust_hbond_conformation,
-        partial_charge_pos, wrap_format_text,
+        partial_charge_pos, split_species_coeff, wrap_format_text,
     )
     from .layout import (
         energy_annotation_placement, energy_point_coords, energy_point_roles,
@@ -101,6 +101,13 @@ _PLUS_W = 1.1     # [PLUS] 连接符占宽
 _ARR_W = 2.6      # [RXNARROW] 占宽
 _ARR_PAD = 0.65   # 主箭头两端内缩余量（箭头实际长度 1.3）
 _MOL_SCALE = 0.8  # 分子坐标缩放因子（紧凑化，不影响字号）
+
+
+def _fmt_coeff(c: float) -> str:
+    """系数显示：整数原样、n/2 分数形式（1/2、3/2）。"""
+    if c == int(c):
+        return str(int(c))
+    return f"{int(c * 2)}/2"
 
 _MECH_ARROW_RE = re.compile(
     r"^\s*([A-Za-z0-9_]+)\s*:\s*(\d+(?:-\d+)?)\s*(>>|>)\s*"
@@ -239,9 +246,12 @@ def _collect_components(children):
         if child.type == "STRUCT":
             cid = child.attrs.get("id") or f"r{len(structs)}"
             label = child.args[1] if len(child.args) > 1 else None
+            parsed = split_species_coeff(child.args[0])
+            smi = parsed[0][1] if parsed else child.args[0].strip()
             structs.append({
                 "id": cid,
-                "smiles": child.args[0].strip(),
+                "smiles": smi,
+                "coeff": parsed[0][0] if parsed else 1.0,
                 "label": label,
                 "at": child.attrs.get("at"),
                 "pos": child.attrs.get("pos", "above"),
@@ -435,6 +445,7 @@ def render_composite(layout: str, children: list) -> str:
         mols[comp["id"]] = {
             "mol": mol,
             "label": comp["label"],
+            "coeff": comp.get("coeff", 1.0),
             "shift": (0.0, 0.0),
             "charges": parse_charge_pairs(anno.get("charge", "")),
             "hbonds": parse_hbond_pairs(anno.get("hbond", "")),
@@ -472,7 +483,7 @@ def render_composite(layout: str, children: list) -> str:
         if el[0] == "mol":
             cid = structs[el[1]]["id"]
             items.append(("mol", cid, mols[cid]["mol"],
-                          mols[cid]["label"] or ""))
+                          mols[cid]["coeff"]))
         elif el[0] in ("plus", "resarrow", "newline"):
             items.append((el[0],))
         elif el[0] == "arrow":
@@ -516,6 +527,14 @@ def render_composite(layout: str, children: list) -> str:
         # 只在反应位点画出显式键），普通分子保持结构简式（原有逻辑不变）
         bond_line = bool(info["xh"] or info["bonds"] or info["hbonds"])
         labeler = _mech_labeler(info)
+        if info.get("coeff", 1.0) != 1.0:
+            bbox = info.get("bbox")
+            if bbox:
+                bx = bbox[0] + info["shift"][0] - 0.35
+                lines.append(
+                    f"  \\node at ({bx:.2f},{info['shift'][1]:.2f}) "
+                    f"{{{_fmt_coeff(info['coeff'])}}};"
+                )
         lines.extend(molecule_scope_lines(mol, info["shift"],
                                           show_numbers=show_numbers,
                                           show_lone_pairs=show_lone_pairs,

@@ -79,7 +79,9 @@ _TAG_NAMES = {
 _SMILES_FIELDS = {
     "STRUCT": lambda a: [a[0]] if a and a[0] else [],
     "ARROW": lambda a: [a[i] for i in (0, 1) if i < len(a) and a[i]],
-    "REACTION": lambda a: _split_multi(a[0]) + _split_multi(a[1]) if len(a) >= 2 else [],
+    "REACTION": lambda a: [s for _, s in _split_multi_coeff(a[0])]
+                          + [s for _, s in _split_multi_coeff(a[1])]
+                          if len(a) >= 2 else [],
     "NEWMAN": lambda a: [a[0]] if a and a[0] else [],
     "LEWIS": lambda a: [a[0]] if a and a[0] else [],
     "STEREO": lambda a: [a[0]] if a and a[0] else [],
@@ -96,6 +98,44 @@ def _split_multi(seg: str) -> list:
     按 [;,] 拆分归一化（与 renderers/reaction.py 保持一致）。
     """
     return [s.strip() for s in re.split(r"[;,]", seg or "") if s.strip()]
+
+
+# 系数前缀：整数（2CCO）或 n/2（n 为奇数，1/2O2、3/2O2）。负系数仅用于
+# 箭头补足（2b，-H2O），不用于物种列表。
+_COEFF_RE = re.compile(r"^(-?\d+)(?:/(\d+))?")
+
+
+def _parse_coeff(token: str) -> tuple | None:
+    """解析系数前缀：返回 (coeff, 余下文本)；非法系数返回 None。
+
+    允许：无系数（1）、正整数（2）、负整数（-1，仅箭头补足）、n/2（n 奇数，
+    如 1/2、3/2、-1/2）。其他分数（1/3、2/3）与"0"拒绝。
+    """
+    m = _COEFF_RE.match(token.strip())
+    if not m:
+        return (1, token.strip())
+    num, den = int(m.group(1)), m.group(2)
+    if num == 0:
+        return None
+    if den is None:
+        return (num, token.strip()[m.end():].strip())
+    if int(den) != 2 or num % 2 == 0:
+        return None  # 仅允许 n/2（n 奇数）
+    return (num / 2.0, token.strip()[m.end():].strip())
+
+
+def _split_multi_coeff(seg: str) -> list:
+    """多组分段拆为 (coeff, smiles) 列表（过滤空串/非法系数）。
+
+    系数缺失视为 1；非法系数（0、1/3、2/3）的组分整体丢弃（校验层另行
+    报格式错误，此处只负责安全拆分）。
+    """
+    out = []
+    for tok in _split_multi(seg):
+        parsed = _parse_coeff(tok)
+        if parsed is not None and parsed[1]:
+            out.append(parsed)
+    return out
 
 
 @dataclass
@@ -208,6 +248,20 @@ def _mol_counts(mol):
         return None
 
 
+def _formula_or_smiles_counts(token: str):
+    """物种计数：优先 SMILES（RDKit），失败回退纯化学式（H2O/O2/H2 等）。
+
+    ARROW/REACTION 的物种可以是 SMILES（CCO、c1ccccc1）或教科书化学式
+    （O2 氧气、H2 氢气、H2O 水）——后者不是合法 SMILES，按公式数原子。
+    返回 (counts, charge)；都无法解析返回 None。
+    """
+    mol = _parse_mol(token)
+    if mol is not None:
+        return _mol_counts(mol)
+    cands = _parse_plain_formula(token)
+    return cands[0] if cands else None
+
+
 def _hill_str(counts: dict) -> str:
     """元素计数 → Hill 化学式串（错误提示用；不含电荷）。"""
     parts = []
@@ -232,23 +286,33 @@ def _check_label_formula(smiles: str, label: str) -> str:
     return ""
 
 
-def _sum_species(smiles_list: list):
-    """一组 SMILES 的元素计数加总（含净电荷，供比对）；任一无法解析返回 None。"""
+def _sum_species(species: list):
+    """一组 (coeff, smiles) 的元素计数加总（含净电荷，供比对）。
+
+    系数相乘：1/2O2 → 1 个 O；分数原子（如 1/2×奇数个某元素）产生
+    非整数计数 → 返回 None（校验层据此拒绝）。任一物种无法解析（既非
+    SMILES 也非纯化学式）返回 None。
+    """
     total_c, total_q = {}, 0
-    for smi in smiles_list:
-        mc = _mol_counts(_parse_mol(smi))
+    for coeff, smi in species:
+        mc = _formula_or_smiles_counts(smi)
         if mc is None:
             return None
         for sym, n in mc[0].items():
-            total_c[sym] = total_c.get(sym, 0) + n
-        total_q += mc[1]
+            v = n * coeff
+            if v != int(v):
+                return None  # 分数原子（n/2 但该元素计数为奇数）
+            total_c[sym] = total_c.get(sym, 0) + int(v)
+        total_q += mc[1] * coeff
     return total_c, total_q
 
 
-def _balance_reason(left, right, strict_h: bool, step: str) -> str:
+def _balance_reason(left, right, strict_h: bool, step: str,
+                    check_charge: bool = True) -> str:
     """两侧元素计数比对：非 H 元素必须相等；strict_h 时 H 也必须相等。
-    （reaction_mech 容忍 H±差——质子转移/去质子副产 H⁺ 常按惯例不画出；
-    净电荷不比对：旁观离子（如 HSO4⁻）省略是方程式惯例。）"""
+    （reaction_mech 容忍 H±差——质子转移/去质子副产 H⁺ 常按惯例不画出。）
+    净电荷：check_charge=True（REACTION/2b）时两侧电荷必须相等；
+    reaction_mech 分步保持"旁观离子省略"惯例不比对电荷。"""
     if left is None or right is None:
         return ""
     lc, rc = dict(left[0]), dict(right[0])
@@ -259,40 +323,164 @@ def _balance_reason(left, right, strict_h: bool, step: str) -> str:
         detail = f"{_hill_str(left[0])} vs {_hill_str(right[0])}"
         return (f"{_CHEM_PREFIX}{step}两侧原子不守恒（{detail}，"
                 f"需配平或补全物种；辅助试剂请写入箭头条件而非省略主物种）")
+    if check_charge and left[1] != right[1]:
+        return (f"{_CHEM_PREFIX}{step}两侧净电荷不守恒"
+                f"（{left[1]:+d} vs {right[1]:+d}，需补全离子或修正电荷）")
     return ""
 
 
+# ---------------------------------------------------------------------------
+# 箭头补足物种（REACTION 2b）：条件字段中可解析为具体化学式的 token，
+# 无符号前缀 = 反应物侧补足，"-" 前缀 = 产物侧补足。
+# 禁止 [O]/[H] 等占位符作为配平物质（prompt 约束；此处解析不到即忽略）。
+# ---------------------------------------------------------------------------
+
+# 条件 token 拆分：逗号分隔（含中文逗号）；系数（如 1/2、-1/2）由 _parse_coeff 处理
+_ARROW_TOKEN_SPLIT = re.compile(r"[,，]")
+
+
+def _arrow_supplement_tokens(condition: str) -> list:
+    """把条件字段拆为可参与补足的 (coeff, counts, charge, side) token 列表。
+
+    side: "L"（无符号前缀，补反应物侧）或 "R"（- 前缀，补产物侧）。
+    不可解析为具体化学式的 token（催化剂、Δ、温度等）被忽略——
+    只有"恰好能匹配差额"的 token 才会在 _balance_reason 2b 分支被选中，
+    催化剂不匹配差额 → 自然排除，不误判。
+    """
+    tokens = []
+    for raw in _ARROW_TOKEN_SPLIT.split(condition or ""):
+        tok = raw.strip()
+        if not tok:
+            continue
+        if tok in ("[O]", "[H]"):
+            continue  # 裸占位符禁止作为配平物质（[H+]/[OH-] 等具体离子放行）
+        neg = tok.startswith("-")
+        body = tok[1:].strip() if neg else tok
+        parsed = _parse_coeff(body)
+        if parsed is None:
+            continue
+        coeff, formula = parsed
+        cands = _parse_plain_formula(formula)
+        if not cands:
+            # 括号式具体物种（[H+]/[OH-] 等合法 SMILES 离子）回退 RDKit 计数
+            mc = _formula_or_smiles_counts(formula)
+            if mc is None:
+                continue
+            counts, charge = mc
+        else:
+            counts, charge = cands[0]  # 纯化学式候选唯一（无 SMILES 定夺需求）
+        if neg:
+            coeff = -coeff
+        tokens.append((coeff, counts, charge, "L" if not neg else "R"))
+    return tokens
+
+
+def _sum_supplements(tokens: list) -> tuple | None:
+    """箭头补足 token 加总（元素 + 电荷）；分数原子返回 None。"""
+    total_c, total_q = {}, 0
+    for coeff, counts, charge, side in tokens:
+        for sym, n in counts.items():
+            v = n * coeff
+            if v != int(v):
+                return None
+            total_c[sym] = total_c.get(sym, 0) + int(v)
+        total_q += charge * coeff
+    return total_c, total_q
+
+
+def _arrow_supplement_matches(left, right, condition: str,
+                              strict_h: bool, check_charge: bool) -> bool:
+    """2b：条件字段中的具体物质 token 子集恰好补足两侧差额。
+
+    无符号 token 补反应物侧、-X 补产物侧；补足成立 ⟺
+    Σ(L) - Σ(R) == 差额（元素，strict_h 时含 H；电荷按 check_charge 比对）。
+    禁止 [O]/[H] 占位符（_arrow_supplement_tokens 已过滤）。
+    """
+    tokens = _arrow_supplement_tokens(condition)
+    if not tokens:
+        return False
+    if not strict_h:
+        # H 差容忍：token 的 H 计数与两侧 H 一样不参与比对
+        tokens = [(c, {k: v for k, v in ct.items() if k != "H"}, q, s)
+                  for c, ct, q, s in tokens]
+    lc, rc = dict(left[0]), dict(right[0])
+    if not strict_h:
+        lc.pop("H", None)
+        rc.pop("H", None)
+    deficit_c = {k: rc.get(k, 0) - lc.get(k, 0)
+                 for k in set(lc) | set(rc)}
+    deficit_c = {k: v for k, v in deficit_c.items() if v}
+    deficit_q = (right[1] - left[1]) if check_charge else 0
+    from itertools import combinations
+    for r in range(1, len(tokens) + 1):
+        for comb in combinations(tokens, r):
+            sup = _sum_supplements(list(comb))
+            if sup is None:
+                continue
+            sc, sq = sup
+            if ((sq == deficit_q if check_charge else True)
+                    and all(sc.get(k, 0) == deficit_c.get(k, 0)
+                            for k in set(sc) | set(deficit_c))):
+                return True
+    return False
+
+
 def _check_reaction_balance(args: list) -> str:
-    """T2-3：REACTION 两侧全元素（含 H）配平（REACTION 为完整方程式契约）。"""
+    """T2-3：REACTION 配平（2a 全元素+电荷）或箭头补足（2b）。
+
+    2a：两侧全元素（含 H）与净电荷严格守恒（REACTION 为完整方程式契约）。
+    2b：不守恒时，条件字段中的具体物质 token 若恰好补足差额（元素+电荷）
+        视为已配平——无符号 token 补反应物侧、-X 补产物侧（如酯化 -H2O、
+        乙醇→乙酸 O2,-H2O）；禁止 [O]/[H] 占位符配平。催化剂不匹配差额自然忽略。
+    """
     if len(args) < 2:
         return ""
-    left = _sum_species(_split_multi(args[0]))
-    right = _sum_species(_split_multi(args[1]))
-    return _balance_reason(left, right, strict_h=True, step="方程式")
+    left = _sum_species(_split_multi_coeff(args[0]))
+    right = _sum_species(_split_multi_coeff(args[1]))
+    if left is None or right is None:
+        return ""  # 具体解析错误由 SMILES/系数校验层另行报告
+    reason = _balance_reason(left, right, strict_h=True, step="方程式")
+    if not reason:
+        return ""
+    cond = args[2] if len(args) > 2 else ""
+    if _arrow_supplement_matches(left, right, cond,
+                                 strict_h=True, check_charge=True):
+        return ""
+    return reason
 
 
 def _check_composite_balance(children: list, layout_name: str) -> str:
     """T2-3：COMPOSITE 的 reaction_mech 布局按 RXNARROW 分步、逐步比对
-    非 H 元素守恒（容忍 H±差）；row（多步合成序列允许省略辅助试剂）、
-    resonance / energy 跳过。"""
+    非 H 元素守恒（容忍 H±差，质子转移/去质子副产 H⁺ 惯例不画出）；
+    row（多步合成序列允许省略辅助试剂）、resonance / energy 跳过。
+    跨步不求和——每步只查本步差额；每步可用 RXNARROW 条件做 2b 箭头补足
+    （非 H 元素差额被条件中具体物质 token 抵消，同 REACTION 2b 规则）。"""
     if layout_name != "reaction_mech":
         return ""
-    segments, cur, has_arrow = [], [], False
+    segments, conds, cur, has_arrow = [], [], [], False
     for child in children:
         if child.type == "STRUCT" and child.args:
             cur.append(child.args[0].strip())
         elif child.type == "RXNARROW":
             has_arrow = True
             segments.append(cur)
+            conds.append(child.args[0] if child.args else "")
             cur = []
     segments.append(cur)
+    conds.append("")
     if not has_arrow:
         return ""
     for i in range(len(segments) - 1):
-        reason = _balance_reason(_sum_species(segments[i]),
-                                 _sum_species(segments[i + 1]),
-                                 strict_h=False, step=f"第 {i + 1} 步")
+        left = _sum_species(_split_multi_coeff(".".join(segments[i])))
+        right = _sum_species(_split_multi_coeff(".".join(segments[i + 1])))
+        # reaction_mech 保持旁观离子省略惯例：电荷不比对
+        reason = _balance_reason(left, right, strict_h=False,
+                                 check_charge=False, step=f"第 {i + 1} 步")
         if reason:
+            # 本步 2b：条件字段补足非 H 元素差额（电荷/ H 差仍按惯例容忍）
+            if _arrow_supplement_matches(left, right, conds[i],
+                                         strict_h=False, check_charge=False):
+                continue
             return reason
     return ""
 
@@ -327,6 +515,41 @@ def _validate_newman(args: list) -> Tuple[bool, str]:
         return False, f"角度 {a:g} 超出 0~360"
     if not _smiles_ok(args[0].strip()):
         return False, f"无效 SMILES「{args[0].strip()}」"
+    return True, ""
+
+
+def _validate_arrow(args: list) -> Tuple[bool, str]:
+    """ARROW 校验：SMILES（支持系数前缀）+ 当量检验（C 原子数守恒）。
+
+    系数：整数或 n/2（n 奇数），如 2CCO、1/2O2。当量检验只比 C 原子数
+    （Σcoeff×C 两侧相等）——ARROW 为单→单骨架展示，O/H 增减是氧化/脱氢
+    的常态，不做全元素守恒（与 REACTION 2a 的区别）。
+    """
+    if len(args) < 2 or not args[0] or not args[1]:
+        return False, "ARROW 需要反应物与产物 SMILES"
+    sides = []
+    for smi in (args[0], args[1]):
+        parsed = _parse_coeff(smi)
+        if parsed is None:
+            return False, f"非法系数「{smi}」"
+        coeff, bare = parsed
+        if not bare:
+            return False, "SMILES 为空"
+        sides.append((coeff, bare))
+    if not _RDKIT_OK:
+        return True, ""
+    # 物种须可计数（SMILES 或纯化学式 O2/H2/H2O 均可）
+    for _, bare in sides:
+        if _formula_or_smiles_counts(bare) is None:
+            return False, f"无效 SMILES「{bare}」"
+    left = _sum_species(sides[:1])
+    right = _sum_species(sides[1:])
+    if left is None or right is None:
+        return False, "ARROW 当量检验失败（物种无法计数）"
+    lc, rc = left[0].get("C", 0), right[0].get("C", 0)
+    if lc != rc:
+        return False, (f"化学校验：反应箭头两侧碳原子数不守恒"
+                       f"（左 {lc} vs 右 {rc}，系数参与计算）")
     return True, ""
 
 
@@ -544,6 +767,10 @@ def validate_tag(tag: RenderTag) -> ValidationResult:
             if reason:
                 return ValidationResult(tag, False, reason)
         return ValidationResult(tag, True)
+    if ttype == "ARROW":
+        # 通用 SMILES 字段检查 + 当量检验（C 原子数守恒，系数参与；O/H 随意）
+        ok, reason = _validate_arrow(args)
+        return ValidationResult(tag, ok, reason)
     if ttype in ("XH", "BOND"):
         # 顶层形式（[XH:SMILES|序号,...] / [BOND:SMILES|a-b,...]）；
         # 容器内子标记形式（id 引用）由 _validate_composite 处理

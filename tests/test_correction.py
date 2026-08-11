@@ -103,5 +103,7 @@ def test_correction_prompt_chem_guidance():
     assert vr.reason.startswith("化学校验：")
     prompt = _build_correction_prompt("乙醇氧化成乙醛", text, [(tag, vr.reason)])
     assert "两侧原子" in prompt                      # 失败原因
-    assert "补全缺失的反应物/生成物" in prompt       # 修正指导
+    assert "补全缺失的具体反应物/生成物" in prompt   # 修正指导
     assert "催化剂" in prompt and "箭头条件" in prompt  # 辅助试剂归位规则
+    assert "[O]" in prompt and "[H]" in prompt        # 占位符禁止提示
+    assert "2b 箭头补足" in prompt                    # 2b 方案提示

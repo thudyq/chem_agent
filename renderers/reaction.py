@@ -19,18 +19,16 @@ renderers/layout.py）排成一行：反应物 + 反应物 + ... → 产物 + �
 """
 
 if __name__ == "__main__":
-    import re
     import sys
     from pathlib import Path
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from renderers.mol_primitives import prepare_mol, scale_mol_coords, \
-        wrap_format_text
+        split_species_coeff, wrap_format_text
     from renderers.layout import layout_row, molecule_scope_lines
 else:
-    import re
-
-    from .mol_primitives import prepare_mol, scale_mol_coords, wrap_format_text
+    from .mol_primitives import prepare_mol, scale_mol_coords, \
+        split_species_coeff, wrap_format_text
     from .layout import layout_row, molecule_scope_lines
 
 
@@ -39,6 +37,13 @@ _PLUS_W = 1.1
 _ARR_W = 2.6
 _ARR_PAD = 0.65
 _MOL_SCALE = 0.8
+
+
+def _fmt_coeff(c: float) -> str:
+    """系数显示：整数原样、n/2 分数形式（1/2、3/2）。"""
+    if c == int(c):
+        return str(int(c))
+    return f"{int(c * 2)}/2"
 
 
 def render_reaction(reactants_str: str, products_str: str, conditions: str = "") -> str:
@@ -57,35 +62,41 @@ def render_reaction(reactants_str: str, products_str: str, conditions: str = "")
     except ImportError:
         return "（反应式渲染失败：rdkit 未安装）"
 
-    reactants = [s.strip() for s in re.split(r"[;,]", reactants_str) if s.strip()]
-    products = [s.strip() for s in re.split(r"[;,]", products_str) if s.strip()]
+    reactants = split_species_coeff(reactants_str)
+    products = split_species_coeff(products_str)
 
     if not reactants:
         return "（反应式渲染失败：反应物不能为空）"
     if not products:
         return "（反应式渲染失败：产物不能为空）"
 
-    mols = []
-    for smi in reactants + products:
+    all_species = reactants + products
+    species = []
+    for coeff, smi in all_species:
         mol = prepare_mol(smi)
         if mol is None:
             return f"（反应式渲染失败：无法为「{smi}」生成结构式）"
         scale_mol_coords(mol, _MOL_SCALE)
-        mols.append(mol)
+        species.append((coeff, mol))
 
     items = []
     n_react = len(reactants)
-    for i, mol in enumerate(mols):
+    for i, (coeff, mol) in enumerate(species):
         if i == n_react:
             items.append(("arrow", conditions.strip()))
         elif i > 0:
             items.append(("plus",))
-        items.append(("mol", i, mol))
+        items.append(("mol", i, mol, coeff))
     layout = layout_row(items, mol_gap=_MOL_GAP, plus_w=_PLUS_W,
                         arrow_w=_ARR_W, arrow_pad=_ARR_PAD)
 
     lines = [r"\begin{tikzpicture}"]
     for placed in layout.mols:
+        if placed.coeff != 1:
+            # 系数节点：分子 scope 左侧，垂直居中（与分子同行）
+            bbox = placed.bbox
+            bx = bbox[0] + placed.shift[0] - 0.35
+            lines.append(f"  \\node at ({bx:.2f},0) {{{_fmt_coeff(placed.coeff)}}};")
         lines.extend(molecule_scope_lines(placed.mol, placed.shift,
                                           show_lone_pairs=False))
     for px in layout.pluses:

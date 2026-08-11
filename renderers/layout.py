@@ -27,6 +27,7 @@ class PlacedMol:
     shift: Tuple[float, float]                     # scope 平移量（全局 = 局部 + shift）
     bbox: Tuple[float, float, float, float]        # 局部视觉包围盒
     label: str = ""                                # 组件级标签（宽于分子时计入占位）
+    coeff: float = 1.0                             # 化学计量系数（渲染系数节点）
     spacing_bbox: Tuple[float, float, float, float] = None  # 含标签外延的间距包围盒
 
 
@@ -62,8 +63,11 @@ def layout_row(items: list, *, mol_gap: float = 1.6, plus_w: float = 1.1,
     参数:
         items: 组件序列，元素为
             ("mol", key, mol)             分子组件（RDKit Mol，已有 2D 坐标）；
-            ("mol", key, mol, label)      同上，附组件级标签（宽于分子时
+            ("mol", key, mol, label)      同上，附组件级标签（字符串，宽于分子时
                                           spacing_bbox 计入标签外延，防重叠）；
+            ("mol", key, mol, coeff)      同上，附化学计量系数（数字，如 2 或
+                                          0.5；渲染端负责画系数节点，布局仅预留
+                                          左侧宽度）；
             ("plus",)          加号连接符；
             ("arrow", cond)    主反应箭头（cond 为条件文本，可空）；
             ("resarrow",)      共振箭头 ↔ 连接符。
@@ -93,10 +97,14 @@ def layout_row(items: list, *, mol_gap: float = 1.6, plus_w: float = 1.1,
             if prev_kind == "mol":
                 cursor += mol_gap
             _, key, mol = item[:3]
-            label = item[3] if len(item) > 3 else ""
+            extra = item[3] if len(item) > 3 else ""
+            label = extra if isinstance(extra, str) else ""
+            coeff = extra if isinstance(extra, (int, float)) else 0.0
             bbox = bbox_fn(mol)
             min_x, min_y, max_x, max_y = bbox
             local_cy = (min_y + max_y) / 2.0
+            # 系数节点左侧留白（"2" / "1/2" 约 0.5 宽，乘位数缩放）
+            coeff_pad = 0.6 if coeff and coeff != 1 else 0.0
             if label:
                 # 标签外延：以分子 bbox 中心 x 为轴，左右各扩 label 半宽；
                 # 纵向从分子底边向下 label_gap + 行高×行数
@@ -110,11 +118,12 @@ def layout_row(items: list, *, mol_gap: float = 1.6, plus_w: float = 1.1,
             else:
                 spacing = bbox
             smin_x, smin_y, smax_x, smax_y = spacing
-            w = smax_x - smin_x
-            local_cx = (smin_x + smax_x) / 2.0
+            w = smax_x - smin_x + coeff_pad
+            local_cx = (smin_x + smax_x) / 2.0 + coeff_pad / 2.0
             shift = (cursor + w / 2.0 - local_cx, -local_cy)
             mols.append(PlacedMol(key=key, mol=mol, shift=shift, bbox=bbox,
-                                  label=label, spacing_bbox=spacing))
+                                  label=label, coeff=coeff or 1.0,
+                                  spacing_bbox=spacing))
             cursor += w
         elif kind == "plus":
             pluses.append(cursor + plus_w / 2.0)

@@ -288,6 +288,149 @@ class TestChemicalChecks:
         assert "可用隐含 H 为 1" in invalid[0].reason
 
 
+class TestCoeffAndBalanceRules:
+    """20260811：系数解析 / ARROW 当量检验 / REACTION 2b 箭头补足 / 电荷守恒。
+
+    规则要点：
+    - 系数：整数或 n/2（n 奇数），如 2CCO、1/2O2；其他分数拒绝；
+    - ARROW：单→单骨架，只查 C 原子数守恒（O/H 增减允许）；
+    - REACTION 2a：全元素 + 净电荷守恒；2b：条件中具体物质补足差额
+      （无符号=反应物侧、-X=产物侧）；[O]/[H] 占位符禁止配平；
+    - COMPOSITE reaction_mech：每步局部差额补足，跨步不求和。
+    """
+
+    def test_coeff_parse(self):
+        """系数解析：整数、1/2、3/2、负系数；非法（0、1/3、2/3）拒绝。"""
+        from core.tag_validator import _parse_coeff, _split_multi_coeff
+        assert _parse_coeff("2CCO") == (2, "CCO")
+        assert _parse_coeff("1/2O2") == (0.5, "O2")
+        assert _parse_coeff("3/2O2") == (1.5, "O2")
+        assert _parse_coeff("CCO") == (1, "CCO")
+        assert _parse_coeff("-H2O") is not None  # 负系数仅箭头补足用
+        assert _parse_coeff("0CCO") is None
+        assert _parse_coeff("1/3O2") is None
+        assert _parse_coeff("2/3O2") is None
+        assert _split_multi_coeff("2CCO;1/2O2") == [(2, "CCO"), (0.5, "O2")]
+
+    def test_arrow_c_conservation(self):
+        """ARROW 当量检验：C 守恒通过（O/H 增减允许），C 不守恒拦截。"""
+        pytest.importorskip("rdkit")
+        _, invalid = _validate("[ARROW:CCO,CC=O,Cu, Δ]")       # C2=C2 氧化
+        assert len(invalid) == 0
+        _, invalid = _validate("[ARROW:2CCO,CCOCC,浓H2SO4,140℃]")  # C4=C4 系数
+        assert len(invalid) == 0
+        _, invalid = _validate("[ARROW:CCO,CCC,Cu]")            # C2≠C3
+        assert len(invalid) == 1
+        assert "碳原子数不守恒" in invalid[0].reason
+
+    def test_arrow_formula_species(self):
+        """ARROW 物种可为化学式（O2/H2O）而非 SMILES（公式回退计数）。"""
+        pytest.importorskip("rdkit")
+        _, invalid = _validate("[ARROW:1/2O2,H2O,燃烧]")        # C0=C0
+        assert len(invalid) == 0
+
+    def test_arrow_illegal_coeff_rejected(self):
+        """ARROW 非法系数（1/3）拦截。"""
+        pytest.importorskip("rdkit")
+        _, invalid = _validate("[ARROW:1/3O2,H2O,x]")
+        assert len(invalid) == 1
+
+    def test_reaction_2b_esterification(self):
+        """2b 酯化：-H2O 补产物侧，差额抵消。"""
+        pytest.importorskip("rdkit")
+        _, invalid = _validate(
+            "[REACTION:CC(=O)O;CCO|CC(=O)OCC|浓H2SO4, Δ, -H2O]")
+        assert len(invalid) == 0
+
+    def test_reaction_2b_hydrolysis(self):
+        """2b 水解：无符号 H2O 补反应物侧（催化剂 NaOH 不误判）。"""
+        pytest.importorskip("rdkit")
+        _, invalid = _validate(
+            "[REACTION:CC(=O)OCC|CC(=O)O;CCO|NaOH, H2O, Δ]")
+        assert len(invalid) == 0
+
+    def test_reaction_2b_ethanol_to_acetic_acid(self):
+        """2b 乙醇→乙酸：O2 补反应物侧 + -H2O 补产物侧（双 token）。"""
+        pytest.importorskip("rdkit")
+        _, invalid = _validate("[REACTION:CCO|CC(=O)O|O2, -H2O]")
+        assert len(invalid) == 0
+
+    def test_reaction_2b_ethylene_to_glycol(self):
+        """2b 乙烯→乙二醇：1/2O2 分数系数补反应物侧。"""
+        pytest.importorskip("rdkit")
+        _, invalid = _validate("[REACTION:C=C;O|OCCO|1/2O2]")
+        assert len(invalid) == 0
+
+    def test_reaction_2b_dehydration_single_to_single(self):
+        """单→单也允许 2b：乙醇→乙烯 -H2O（与 ARROW 并存不冲突）。"""
+        pytest.importorskip("rdkit")
+        _, invalid = _validate("[REACTION:CCO|C=C|-H2O]")
+        assert len(invalid) == 0
+
+    def test_reaction_2b_aromatization(self):
+        """芳构化真实放氢：-3H2 补产物侧（环己烷→苯 + 3H2）。"""
+        pytest.importorskip("rdkit")
+        _, invalid = _validate("[REACTION:C1CCCCC1|c1ccccc1|-3H2, Δ]")
+        assert len(invalid) == 0
+
+    def test_reaction_2b_placeholder_forbidden(self):
+        """[O]/[H] 占位符禁止作为配平物质。"""
+        pytest.importorskip("rdkit")
+        _, invalid = _validate("[REACTION:CCO|CC=O|[O], Cu]")
+        assert len(invalid) == 1
+        assert "不守恒" in invalid[0].reason
+
+    def test_reaction_2b_no_declaration_rejected(self):
+        """无箭头声明的不守恒方程式拦截（乙醇→乙醛骨架缺 O2/H2）。"""
+        pytest.importorskip("rdkit")
+        _, invalid = _validate("[REACTION:CCO|CC=O|Cu, Δ]")
+        assert len(invalid) == 1
+
+    def test_reaction_2b_catalyst_not_mistaken(self):
+        """催化剂（NaOH）出现在条件但不匹配差额 → 不误判为补足。"""
+        pytest.importorskip("rdkit")
+        _, invalid = _validate(
+            "[REACTION:CC(=O)O;CCO|CC(=O)OCC|NaOH, Δ]")
+        assert len(invalid) == 1
+
+    def test_reaction_charge_conservation(self):
+        """2a 净电荷守恒：H+ 参与的质子化放行；电荷不平衡拦截。"""
+        pytest.importorskip("rdkit")
+        _, invalid = _validate("[REACTION:CCO;[H+]|CC[OH2+]]")
+        assert len(invalid) == 0
+        # 原子相同但电荷不等（[H] 中性 vs [H+] 带 +1）→ 纯电荷不守恒
+        _, invalid = _validate("[REACTION:[H]|[H+]]")
+        assert len(invalid) == 1
+        assert "电荷不守恒" in invalid[0].reason
+
+    def test_reaction_2b_charge_supplement(self):
+        """2b 补足物质可含电荷（[H+] 补反应物侧平衡电荷差）。"""
+        pytest.importorskip("rdkit")
+        # 乙醚 + H+ → 质子化乙醚（H+ 补反应物侧，电荷 +1 一并平衡）
+        _, invalid = _validate("[REACTION:CCOCC|CC[OH+]CC|[H+], Δ]")
+        assert len(invalid) == 0
+
+    def test_composite_step_local_supplement(self):
+        """COMPOSITE reaction_mech 每步局部：RXNARROW 条件可 2b 补足。"""
+        pytest.importorskip("rdkit")
+        # 第一步：乙醇 → 乙烯（-H2O 补本步产物侧）；第二步跨步不求和
+        _, invalid = _validate(
+            "[COMPOSITE:reaction_mech]"
+            "[STRUCT:CCO][RXNARROW:-H2O][STRUCT:C=C]"
+            "[/COMPOSITE]")
+        assert len(invalid) == 0
+
+    def test_composite_step_charge_tolerated(self):
+        """COMPOSITE 分步保持旁观离子省略惯例：电荷不比对。"""
+        pytest.importorskip("rdkit")
+        _, invalid = _validate(
+            "[COMPOSITE:reaction_mech]"
+            "[STRUCT:CCl][PLUS][STRUCT:[OH-]]"
+            "[RXNARROW][STRUCT:CO][PLUS][STRUCT:[Cl-]]"
+            "[/COMPOSITE]")
+        assert len(invalid) == 0
+
+
 def test_composite_mecharrow_bond_form_midpoint_passes(fake_rdkit):
     text = ("[COMPOSITE:reaction_mech][STRUCT:CCl,id=r0][RXNARROW]"
             "[STRUCT:CO,id=p0][MECHARROW:r0:0>>r0:0+p0:0][/COMPOSITE]")

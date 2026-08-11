@@ -45,11 +45,13 @@ def test_reaction_error_paths():
 
 
 def test_arrow_basic():
-    """ARROW：两个组件 + 箭头 + 类型标注（下方斜体）。"""
+    """ARROW：两个组件 + 箭头 + 类型标注（箭头上方，与 REACTION 一致）。"""
     out = render_arrow("c1ccccc1", "c1ccccc1N", "amination")
     assert out.count("\\begin{scope}[shift=") == 2
     assert "\\draw[->, thick]" in out
-    assert "\\itshape amination" in out
+    assert "node[midway, above] {amination};" in out
+    assert "\\itshape" not in out          # 不再斜体（与 REACTION 条件一致）
+    assert "\\node[below]" not in out
     assert "无效" not in out
 
 
