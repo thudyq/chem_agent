@@ -27,11 +27,11 @@ if __name__ == "__main__":
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from renderers.mol_primitives import prepare_mol, scale_mol_coords, \
-        split_species_coeff, wrap_format_text
+        split_arrow_condition, split_species_coeff, wrap_format_text
     from renderers.layout import layout_row, molecule_scope_lines
 else:
     from .mol_primitives import prepare_mol, scale_mol_coords, \
-        split_species_coeff, wrap_format_text
+        split_arrow_condition, split_species_coeff, wrap_format_text
     from .layout import layout_row, molecule_scope_lines
 
 
@@ -106,17 +106,20 @@ def render_reaction(reactants_str: str, products_str: str, conditions: str = "")
         lines.append(f"  \\node at ({px:.2f},0) {{$+$}};")
 
     main_arrow = layout.arrows[0]
-    cond_text = wrap_format_text(main_arrow.condition)
-    if cond_text:
-        align = "align=center, " if "\\\\" in cond_text else ""
-        lines.append(
-            f"  \\draw[->, very thick] ({main_arrow.x1:.2f},0) -- ({main_arrow.x2:.2f},0) "
-            f"node[midway, {align}above] {{{cond_text}}};"
-        )
+    above, below = split_arrow_condition(main_arrow.condition)
+    arrow_node = f"  \\draw[->, very thick] ({main_arrow.x1:.2f},0) -- ({main_arrow.x2:.2f},0)"
+    # 条件分上下：-X 补足（产物侧）在箭头下方，其余在上方（上方末尾无逗号）
+    parts = []
+    for text, pos in ((above, "above"), (below, "below")):
+        t = wrap_format_text(text)
+        if not t:
+            continue
+        align = "align=center, " if "\\\\" in t else ""
+        parts.append(f"node[midway, {align}{pos}] {{{t}}}")
+    if parts:
+        lines.append(arrow_node + " " + " ".join(parts) + ";")
     else:
-        lines.append(
-            f"  \\draw[->, very thick] ({main_arrow.x1:.2f},0) -- ({main_arrow.x2:.2f},0);"
-        )
+        lines.append(arrow_node + ";")
 
     lines.append(r"\end{tikzpicture}")
     return "\n".join(lines)

@@ -1233,6 +1233,20 @@ def wrap_format_text(text: str, max_width: float = _LABEL_WRAP_MAX) -> str:
     return "\\\\".join(format_chem_text(l) for l in lines)
 
 
+def split_arrow_condition(cond: str) -> tuple:
+    """反应条件按箭头上下拆分：带 "-" 前缀的 token（2b 产物侧补足，
+    如 -H2O、-3H2）放箭头下方，其余（催化剂/温度/反应物侧补足）放上方。
+
+    返回 (上方文本, 下方文本)；任一侧为空返回 ""。上方 join 用 ", "，
+    末尾不带逗号（拆分后自然无尾逗号）。供 reaction/composite 主箭头渲染。
+    """
+    tokens = [t.strip() for t in re.split(r"[，,]", cond or "") if t.strip()]
+    above, below = [], []
+    for t in tokens:
+        (below if t.startswith("-") else above).append(t)
+    return ", ".join(above), ", ".join(below)
+
+
 # 物种系数前缀：整数（2CCO）或 n/2（1/2O2、3/2O2）；与 core.tag_validator
 # 的 _parse_coeff 规则一致（渲染端独立实现，避免跨包导入）。
 _SP_COEFF_RE = re.compile(r"^(-?\d+)(?:/(\d+))?")

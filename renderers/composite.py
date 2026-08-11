@@ -72,7 +72,7 @@ if __name__ == "__main__":
         atom_main_label, bond_segments_for, label_bond_margin,
         label_edge_point, prepare_mol, scale_mol_coords, symbol_center,
         atom_pos, place_donor_h, place_explicit_hs, adjust_hbond_conformation,
-        partial_charge_pos, split_species_coeff, wrap_format_text,
+        partial_charge_pos, split_arrow_condition, split_species_coeff, wrap_format_text,
     )
     from renderers.layout import (
         energy_annotation_placement, energy_point_coords, energy_point_roles,
@@ -88,7 +88,7 @@ else:
         atom_main_label, bond_segments_for, label_bond_margin,
         label_edge_point, prepare_mol, scale_mol_coords, symbol_center,
         atom_pos, place_donor_h, place_explicit_hs, adjust_hbond_conformation,
-        partial_charge_pos, split_species_coeff, wrap_format_text,
+        partial_charge_pos, split_arrow_condition, split_species_coeff, wrap_format_text,
     )
     from .layout import (
         energy_annotation_placement, energy_point_coords, energy_point_roles,
@@ -642,15 +642,19 @@ def render_composite(layout: str, children: list) -> str:
         lines.append(f"  \\node[font=\\large] at ({rx:.2f},{-yoff:.2f}) {{$\\leftrightarrow$}};")
 
     for x1, x2, cond, yoff in main_arrows:
-        cond_text = wrap_format_text(cond)
-        if cond_text:
-            align = "align=center, " if "\\\\" in cond_text else ""
-            lines.append(
-                f"  \\draw[->, very thick] ({x1:.2f},{-yoff:.2f}) -- ({x2:.2f},{-yoff:.2f}) "
-                f"node[midway, {align}above] {{{cond_text}}};"
-            )
+        above, below = split_arrow_condition(cond)
+        arrow_node = f"  \\draw[->, very thick] ({x1:.2f},{-yoff:.2f}) -- ({x2:.2f},{-yoff:.2f})"
+        parts = []
+        for text, pos in ((above, "above"), (below, "below")):
+            t = wrap_format_text(text)
+            if not t:
+                continue
+            align = "align=center, " if "\\\\" in t else ""
+            parts.append(f"node[midway, {align}{pos}] {{{t}}}")
+        if parts:
+            lines.append(arrow_node + " " + " ".join(parts) + ";")
         else:
-            lines.append(f"  \\draw[->, very thick] ({x1:.2f},{-yoff:.2f}) -- ({x2:.2f},{-yoff:.2f});")
+            lines.append(arrow_node + ";")
 
     lines.extend(draw_mech_arrows(mols, _parse_mech_arrows(mech_specs)))
 
