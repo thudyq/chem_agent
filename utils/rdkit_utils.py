@@ -16,16 +16,23 @@ FREE_H_COMPONENT_RE = re.compile(r"(?:^|(?<=\.))\[H[+-]?\](?=\.|$)")
 
 
 @contextlib.contextmanager
-def mute_rdkit_warnings():
-    """局部屏蔽 RDKit warning 日志（进程级开关，仅影响日志输出）。
+def mute_rdkit_warnings(include_error: bool = False):
+    """局部屏蔽 RDKit 日志（进程级开关，仅影响日志输出）。
 
-    并发调用时最坏情况是漏掉一条无关警告，可接受。
+    include_error=False（默认）：仅屏蔽 rdApp.warning（无害警告，如孤立氢）。
+    include_error=True：同时屏蔽 rdApp.error——用于"探测性"解析（如条件 token
+    试解析 SMILES，失败是常态），此时解析错误属噪音。
+    并发调用时最坏情况是漏掉一条无关日志，可接受。
     """
     RDLogger.DisableLog("rdApp.warning")
+    if include_error:
+        RDLogger.DisableLog("rdApp.error")
     try:
         yield
     finally:
         RDLogger.EnableLog("rdApp.warning")
+        if include_error:
+            RDLogger.EnableLog("rdApp.error")
 
 
 def parse_smiles(smiles: str):

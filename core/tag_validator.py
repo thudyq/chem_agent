@@ -254,8 +254,14 @@ def _formula_or_smiles_counts(token: str):
     ARROW/REACTION 的物种可以是 SMILES（CCO、c1ccccc1）或教科书化学式
     （O2 氧气、H2 氢气、H2O 水）——后者不是合法 SMILES，按公式数原子。
     返回 (counts, charge)；都无法解析返回 None。
+    SMILES 探测为"试探性"解析：失败是常态（条件字段含大量非物种 token，
+    如 Δ、140℃、浓H2SO4），RDKit 警告属噪音，静默。
     """
-    mol = _parse_mol(token)
+    if mute_rdkit_warnings is not None:
+        with mute_rdkit_warnings(include_error=True):
+            mol = _parse_mol(token)
+    else:
+        mol = _parse_mol(token)
     if mol is not None:
         return _mol_counts(mol)
     cands = _parse_plain_formula(token)
