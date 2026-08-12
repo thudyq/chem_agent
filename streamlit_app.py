@@ -32,6 +32,7 @@ st.code(language="latex")。
 
 import inspect
 import json
+import base64
 import os
 import re
 import tempfile
@@ -225,28 +226,59 @@ def _summarize_title(question: str) -> str:
     return question[:_TITLE_MAX_LEN]
 
 
-def _ask(sessions: list, session_id: str, question: str) -> None:
-    """带多轮历史与生成进度反馈的提问；追加到指定会话并持久化。
-
-    用户消息先入列、持久化并立即渲染（发送后立即可见，不再等到回答完毕）。
-    """
-    cur = next((s for s in sessions if s["id"] == session_id), None)
-    if cur is None:
-        return
-    is_first = not cur["messages"]
-    history = [
+def _build_history(cur: dict) -> list:
+    """多轮历史：assistant 剥离渲染代码；空 content（图片理解失败残留）跳过。"""
+    return [
         {"role": m["role"],
          "content": _strip_render_code(m["content"])
          if m["role"] == "assistant" else m["content"]}
         for m in cur["messages"][-_MAX_HISTORY:]
+        if (m.get("content") or "").strip()
     ]
-    cur["messages"].append({"role": "user", "content": question})
-    _save_sessions(sessions)
+
+
+def _render_user_bubble(msg: dict, image_bytes: bytes | None = None) -> None:
+    """渲染用户气泡：图片（全宽 + 下载按钮）+ 展示文本（display 优先，解 9c/10c）。"""
     with _chat_ctx("user"):
-        if question.strip():
-            st.markdown(_convert_latex_markers(question))
+        b64 = msg.get("image")
+        data = image_bytes if image_bytes is not None else (
+            base64.b64decode(b64) if b64 else None)
+        if data:
+            st.image(data, use_container_width=True)   # 与文字气泡同宽（解 9b）
+            st.download_button("下载图片", data=data,
+                               file_name=msg.get("image_name") or "image.png",
+                               key=f"dl_{uuid.uuid4().hex[:10]}")
+        text = msg.get("display") if msg.get("display") is not None \
+            else msg.get("content", "")
+        if (text or "").strip():
+            st.markdown(_convert_latex_markers(text))
+
+
+def _append_user_msg(cur: dict, sessions: list, *, content: str = "",
+                     display: str | None = None,
+                     image_bytes: bytes | None = None,
+                     image_name: str = "") -> dict:
+    """用户消息入列（display 与 content 分离、image 以 base64 持久化，解 9d/10d）
+    并立即渲染气泡。"""
+    msg = {"role": "user",
+           "content": content or (display or ""),
+           "display": display,
+           "image": (base64.b64encode(image_bytes).decode()
+                     if image_bytes else None),
+           "image_name": image_name or None}
+    cur["messages"].append(msg)
+    _save_sessions(sessions)
+    _render_user_bubble(msg, image_bytes=image_bytes)
+    return msg
+
+
+def _generate_answer(sessions: list, cur: dict, question: str,
+                     history: list, is_first: bool, status=None) -> None:
+    """状态框 + 草稿流 + process_question + 标题 + 入列持久化 + 重跑。
+    status 已存在时复用（图片流：视觉理解阶段已创建）。"""
     if hasattr(st, "status"):
-        status = st.status("正在思考并绘制化学图示…", expanded=False)
+        if status is None:
+            status = st.status("正在思考并绘制化学图示…", expanded=False)
         draft_box = st.empty()
         try:
             answer = process_question(
@@ -272,6 +304,17 @@ def _ask(sessions: list, session_id: str, question: str) -> None:
     cur["messages"].append({"role": "assistant", "content": answer})
     _save_sessions(sessions)
     _rerun()
+
+
+def _ask(sessions: list, session_id: str, question: str) -> None:
+    """纯文字提问：消息先入列立即可见，再生成。"""
+    cur = next((s for s in sessions if s["id"] == session_id), None)
+    if cur is None:
+        return
+    is_first = not cur["messages"]
+    history = _build_history(cur)
+    _append_user_msg(cur, sessions, content=question)
+    _generate_answer(sessions, cur, question, history, is_first)
 
 
 @st.cache_data(show_spinner=False)
@@ -459,67 +502,71 @@ def _attachment_popover() -> None:
         st.button("＋", key="attach")
 
 
-def _describe_and_ask(name: str, data: bytes, question: str = "") -> None:
-    """图片字节 → 视觉理解 → 与用户文字合并提问（question 为空时按图片内容自问）。
-
-    多模态两段式（B 方案）：图片描述与用户文字合并为同一条问题传给主模型，
-    覆盖"解答截图 + 针对其中内容提问"场景。
-    """
-    suffix = "." + name.rsplit(".", 1)[-1].lower()
+def _describe_image_bytes(data: bytes, name: str) -> dict | None:
+    """图片字节 → 临时文件 → 视觉理解 → 清理临时文件。"""
+    suffix = "." + (name or "x.png").rsplit(".", 1)[-1].lower()
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp.write(data)
         tmp_path = tmp.name
-    with st.spinner("理解图片内容（视觉模型）..."):
-        from utils.ocr_utils import describe_image
-        desc = describe_image(tmp_path)
     try:
-        os.unlink(tmp_path)
-    except OSError:
-        pass
+        from utils.ocr_utils import describe_image
+        return describe_image(tmp_path)
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
+def _merge_image_question(question_text: str, desc: dict) -> str:
+    """用户文字 + 图片描述合并为发给 LLM 的完整问题（仅提示词层使用，
+    不进展示气泡——气泡由 display 字段承载，解 9c/10c）。"""
+    if question_text.strip():
+        return f"{question_text}\n（附图内容（{desc['type']}）：{desc['content']}）"
+    return (f"用户上传了一张图片，图片内容（{desc['type']}）如下：\n"
+            f"{desc['content']}\n请解答或分析其中的化学内容。")
+
+
+def _ask_with_image(sessions: list, session_id: str, *, name: str,
+                    data: bytes, question_text: str = "") -> None:
+    """图文/纯图提问：图片+文字先入列立即可见（解 9e），再视觉理解、
+    合并问题生成。display 与 content 分离：气泡只显示图片与用户文字。"""
+    cur = next((s for s in sessions if s["id"] == session_id), None)
+    if cur is None:
+        return
+    is_first = not cur["messages"]
+    history = _build_history(cur)
+    # 1. 入列：content 先放用户文字（描述成功后回填完整提示词）
+    msg = _append_user_msg(cur, sessions, content=question_text,
+                           display=question_text,
+                           image_bytes=data, image_name=name)
+    # 2. 视觉理解（消息已可见；status 先占"理解中"再转"生成中"）
+    status = (st.status("正在理解图片内容（视觉模型）…", expanded=False)
+              if hasattr(st, "status") else None)
+    desc = _describe_image_bytes(data, name)
     if not desc or not desc.get("content"):
+        if status:
+            status.update(label="图片理解失败", state="error")
         st.error("图片理解失败。请在 .env 中配置 VISION_MODEL 为支持视觉的模型（如 GLM-4.6V）。")
         return
-    if question:
-        merged = f"{question}\n（附图内容（{desc['type']}）：{desc['content']}）"
-    else:
-        merged = (f"用户上传了一张图片，图片内容（{desc['type']}）如下：\n"
-                  f"{desc['content']}\n请解答或分析其中的化学内容。")
-    cur = next((s for s in st.session_state.sessions
-                if s["id"] == st.session_state.current_id), None)
-    if cur:
-        _ask(st.session_state.sessions, cur["id"], merged)
-
-
-def _ocr_and_ask(name: str, data: bytes) -> None:
-    """仅图片（无附带文字）：视觉理解后按图片内容组织提问。"""
-    _describe_and_ask(name, data)
-
-
-def _handle_pending_upload() -> None:
-    """chat_input 附件（提交时暂存的字节）：预览 + 识别并分析 / 移除。"""
-    pending = st.session_state.get("pending_upload")
-    if not pending:
-        return
-    name, data = pending
-    st.image(data, caption=f"已上传图片：{name}", width=200)
-    cols = st.columns([0.2, 0.2, 1.0])
-    with cols[0]:
-        if st.button("识别并分析", key="ocr_btn"):
-            st.session_state.pop("pending_upload", None)
-            _ocr_and_ask(name, data)
-    with cols[1]:
-        if st.button("移除", key="ocr_rm"):
-            st.session_state.pop("pending_upload", None)
-            _rerun()
+    question = _merge_image_question(question_text, desc)
+    msg["content"] = question       # 回填完整提示词（供多轮历史沿用；不进气泡）
+    _save_sessions(sessions)
+    if status:
+        status.update(label="正在思考并绘制化学图示…", state="running")
+    _generate_answer(sessions, cur, question, history, is_first,
+                     status=status)
 
 
 def _handle_uploaded(uploaded) -> None:
-    """已选附件（旧版 file_uploader 路径）：预览 + 识别并分析。"""
+    """已选附件（旧版 file_uploader 路径）：预览 + 识别并分析（统一图片流）。"""
     if uploaded is None:
         return
     st.image(uploaded, caption="已上传图片", width=200)
     if st.button("识别并分析", key="ocr_btn"):
-        _ocr_and_ask(uploaded.name, uploaded.getvalue())
+        _ask_with_image(st.session_state.sessions,
+                        st.session_state.current_id,
+                        name=uploaded.name, data=uploaded.getvalue())
 
 
 # ---------------- 页面 ----------------
@@ -622,27 +669,24 @@ with st.sidebar:
 cur = next((s for s in sessions if s["id"] == current_id), None)
 if cur is not None:
     for msg in cur["messages"]:
-        with _chat_ctx(msg["role"]):
-            if msg["role"] == "assistant":
+        if msg["role"] == "assistant":
+            with _chat_ctx("assistant"):
                 _render_answer(msg["content"])
                 _copy_md_button(msg["content"])
-            elif msg["content"].strip():
-                st.markdown(_convert_latex_markers(msg["content"]))
+        else:
+            _render_user_bubble(msg)
 
     # ---- 输入处理与附件区（输入框本体已在页面顶部渲染） ----
     if _CHAT_FILE_OK:
-        _handle_pending_upload()
         if _submitted:
             text = (_submitted.text or "").strip()
-            if _submitted.files and text:
-                # 图文同传：先理解图片，再与文字合并为同一条问题
+            if _submitted.files:
+                # 图文/纯图统一：提交后直接处理——消息先入列立即可见（解 9e），
+                # 再视觉理解与生成，不再二次点击"识别并分析"（解 9a）
                 f = _submitted.files[0]
-                _describe_and_ask(f.name, f.getvalue(), text)
-            elif _submitted.files:
-                # 仅附件无文字：暂存并展示预览（识别并分析/移除）
-                f = _submitted.files[0]
-                st.session_state.pending_upload = (f.name, f.getvalue())
-                _rerun()
+                _ask_with_image(sessions, cur["id"],
+                                name=f.name, data=f.getvalue(),
+                                question_text=text)
             elif text:
                 _ask(sessions, cur["id"], text)
     elif _CHAT_INPUT_OK:
