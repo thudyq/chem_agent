@@ -141,6 +141,21 @@ def _find_tag_end(text: str, start: int) -> int:
     return -1
 
 
+def _strip_fake_label(s: str) -> str:
+    """剥离非 STRUCT 标记 SMILES 字段里误写的 ,label= 尾随（问题 C-2）。
+
+    LLM 高频错误：以为所有标记都支持 label，在 [XH:O,label=苯酚|0]、
+    [CHARGE:O,label=苯酚|0:δ-] 等标记里误写 label。按 `|` 分割后 SMILES
+    字段会是 "O,label=苯酚"，直接进 RDKit 报 SMILES Parse Error。
+    这里把 ,label= 及其后的内容剥掉（SMILES 本身不含逗号，安全）。
+    """
+    s = s.strip()
+    li = s.find(",label=")
+    if li != -1:
+        s = s[:li]
+    return s.strip().rstrip(",")
+
+
 def _parse_content(tag_type: str, content: str) -> list:
     """把标记内部内容拆为参数列表。SMILES 不含逗号，按逗号切分安全。"""
     if tag_type == "STRUCT":
@@ -169,13 +184,13 @@ def _parse_content(tag_type: str, content: str) -> list:
     if tag_type == "CHARGE":
         if "|" in content:
             smi, _, charges = content.partition("|")
-            return [smi.strip(), charges.strip()]
-        return [content.strip(), ""]
+            return [_strip_fake_label(smi), charges.strip()]
+        return [_strip_fake_label(content), ""]
     if tag_type == "HBOND":
         if "|" in content:
             smi, _, pairs = content.partition("|")
-            return [smi.strip(), pairs.strip()]
-        return [content.strip(), ""]
+            return [_strip_fake_label(smi), pairs.strip()]
+        return [_strip_fake_label(content), ""]
     if tag_type == "ARROW":
         parts = content.split(",", 2)
         while len(parts) < 3:
@@ -201,8 +216,8 @@ def _parse_content(tag_type: str, content: str) -> list:
     if tag_type in ("XH", "BOND"):
         if "|" in content:
             ref, _, spec = content.partition("|")
-            return [ref.strip(), spec.strip()]
-        return [content.strip(), ""]
+            return [_strip_fake_label(ref), spec.strip()]
+        return [_strip_fake_label(content), ""]
     return [content]  # ENERGY / 其他
 
 

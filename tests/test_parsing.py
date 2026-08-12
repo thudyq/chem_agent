@@ -91,6 +91,23 @@ def test_bond_toplevel_parse():
     assert tags[0].args == ["CCC=O", "1-2"]
 
 
+def test_xh_bond_label_miswrite_stripped():
+    """Drawbacks 九 C-2：非 STRUCT 标记（XH/BOND/CHARGE/HBOND）误写
+    ,label=（LLM 以为所有标记都支持 label）时，SMILES/ref 字段必须剥离
+    label 尾随，否则整串 'O,label=苯酚' 进 RDKit 报 SMILES Parse Error。"""
+    for raw, expect in [
+        ("[XH:O,label=苯酚|0]", ["O", "0"]),
+        ("[BOND:O,label=苯酚|0-1]", ["O", "0-1"]),
+        ("[HBOND:O,label=苯酚|0-1]", ["O", "0-1"]),
+        ("[CHARGE:O,label=苯酚|0:δ-]", ["O", "0:δ-"]),
+        ("[XH:CC(=O)O|3]", ["CC(=O)O", "3"]),   # 无 label 正常不受影响
+        ("[BOND:CCC=O|1-2]", ["CCC=O", "1-2"]),
+    ]:
+        tags = parse_tags(raw)
+        assert len(tags) == 1, raw
+        assert tags[0].args == expect, f"{raw} → {tags[0].args}"
+
+
 def test_reasoning_paired():
     """用例4：REASONING 配对标记。"""
     tags = parse_tags("[REASONING]亲电取代[/REASONING]")

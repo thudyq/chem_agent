@@ -36,12 +36,20 @@ except ImportError:
 
 def _parse_mol(smiles: str):
     """Chem.MolFromSmiles 局部包装：游离氢组分（合法）的无害警告静默。
-    保持经本模块命名空间调用 Chem（fake_rdkit fixture 可替换）。"""
-    if (mute_rdkit_warnings is not None
-            and FREE_H_COMPONENT_RE.search(smiles or "")):
-        with mute_rdkit_warnings():
-            return Chem.MolFromSmiles(smiles)
-    return Chem.MolFromSmiles(smiles)
+    保持经本模块命名空间调用 Chem（fake_rdkit fixture 可替换）。
+
+    校验是**探测性解析**（非法 SMILES 是常态输入，P1 要拦截并提示），
+    失败时的 RDKit 日志（SMILES Parse Error / Explicit valence 超限）对
+    用户与日志都无价值——统一屏蔽 rdApp.error，避免终端被噪音刷屏
+    （Drawbacks 九 C-1：O 价态 4 超限的 Explicit valence 日志）。
+    """
+    cm = None
+    if mute_rdkit_warnings is not None:
+        cm = mute_rdkit_warnings(include_error=True)
+    if cm is None:
+        return Chem.MolFromSmiles(smiles)
+    with cm:
+        return Chem.MolFromSmiles(smiles)
 
 # label 长度硬上限（字符数）。prompt 建议 ≤10（中文 ≤6），此处为兜底硬拦截
 LABEL_MAX_LEN = 24
