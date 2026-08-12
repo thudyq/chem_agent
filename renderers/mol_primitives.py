@@ -10,6 +10,11 @@ import math
 import re
 
 
+# 氢化物惯例：H 写在元素前的非金属（电负性 > 2.0，如 HF/HCl/HBr/HI/H2O/H2S）。
+# 其余氢化物元素写在 H 前（NH3/PH3/BH3/CH4/SiH4）——N/P/B/Si/C 排除。
+_H_PREFIX_ELEMENTS = {9, 17, 35, 53, 8, 16, 34, 52}  # F Cl Br I, O S Se Te
+
+
 def _only_h_neighbors(atom) -> bool:
     """原子是否只连氢（无重原子邻居）——如孤立水分子 O。
 
@@ -56,11 +61,11 @@ def atom_label(atom, explicit_hs: int = 0, flip: bool = False) -> str | None:
     sym = atom.GetSymbol()
     sym = sym[0].upper() + sym[1:]
     h = max(0, atom.GetTotalNumHs() - explicit_hs)
-    if (h >= 1 and z != 6 and atom.GetFormalCharge() == 0
-            and _only_h_neighbors(atom)):
-        # 孤立中性非碳原子（只连 H，如 HCl、HBr、H₂O、H₂S）：H 前置（氢化物
-        # 惯例）；带电离子保持 XH（如 OH⁻ 写 OH，不写 HO）；碳始终 CHn
-        # （C 在前，自由基 ·CH3 也写作 CH3）（问题 4）
+    if (h >= 1 and atom.GetAtomicNum() in _H_PREFIX_ELEMENTS
+            and atom.GetFormalCharge() == 0 and _only_h_neighbors(atom)):
+        # 氢化物惯例 H 前置（HF/HCl/HBr/HI/H2O/H2S）；带电离子保持 XH
+        # （如 OH⁻ 写 OH，不写 HO）；碳始终 CHn（C 在前，·CH3 也写 CH3）；
+        # N/P/B/Si 的氢化物写 NH3/PH3/BH3/SiH4（元素在前）——问题 2（NH3→H3N）
         parts = (f"H$_{{{h}}}$" if h > 1 else "H") + sym
     elif flip:
         parts = (f"H$_{{{h}}}$" if h > 1 else ("H" if h == 1 else "")) + sym
@@ -497,7 +502,7 @@ def _bond_blocks(mol, idx: int) -> list:
     if _implicit_shown_hs(atom) > 0:
         # H 前置（标签以 H 开头）→ H 在左侧 180°；否则 H 在右侧 0°
         z = atom.GetAtomicNum()
-        h_prefixed = (z != 6 and atom.GetFormalCharge() == 0
+        h_prefixed = (z in _H_PREFIX_ELEMENTS and atom.GetFormalCharge() == 0
                       and _only_h_neighbors(atom))
         blocked.append(180.0 if h_prefixed else 0.0)
     return blocked
@@ -706,10 +711,11 @@ def atom_main_label(atom, explicit_hs: int = 0, flip: bool = False) -> str | Non
         sym = atom.GetSymbol()
         sym = sym[0].upper() + sym[1:]
     h = max(0, atom.GetTotalNumHs() - explicit_hs)
-    # 孤立中性非碳原子（只连 H，如 HCl、HBr、H₂O、H₂S）：H 前置（氢化物
-    # 惯例）；带电离子保持 XH（如 OH⁻ 写 OH，不写 HO）；碳始终 CHn
-    if (h >= 1 and atom.GetAtomicNum() != 6 and atom.GetFormalCharge() == 0
-            and _only_h_neighbors(atom)):
+    # 氢化物惯例 H 前置（HF/HCl/HBr/HI/H2O/H2S，见 _H_PREFIX_ELEMENTS）；
+    # 带电离子保持 XH（如 OH⁻ 写 OH，不写 HO）；碳始终 CHn；N/P/B/Si
+    # 氢化物写 NH3/PH3/BH3/SiH4（元素在前）——问题 2（NH3→H3N）
+    if (h >= 1 and atom.GetAtomicNum() in _H_PREFIX_ELEMENTS
+            and atom.GetFormalCharge() == 0 and _only_h_neighbors(atom)):
         parts = (f"H$_{{{h}}}$" if h > 1 else "H") + sym
     elif flip:
         parts = (f"H$_{{{h}}}$" if h > 1 else ("H" if h == 1 else "")) + sym
@@ -1246,16 +1252,17 @@ def format_chem_text(text: str) -> str:
 
     先剥离尾部电荷（含电荷数），再对余下文本转下标，保证「SO42-」
     中 4 为下标、2- 为上标。已含 $（已手工排版）或为空时原样返回。
-    Unicode 上下标（H₂SO₄、H⁺、SO₄²⁻、Ca²⁺ 等）先转 LaTeX 命令。
-    加热符号转数学模式：△（U+25B3）/ Δ（U+0394）→ $\\triangle$ /
-    $\\Delta$——△ 在 lmroman 文本字体中缺失（渲染为空白），Δ 在
-    pdflatex 回退路径下不可靠；数学模式两引擎均可靠（与 energy.py
-    的 Ea/ΔH 标注约定一致）。
+     Unicode 上下标（H₂SO₄、H⁺、SO₄²⁻、Ca²⁺ 等）先转 LaTeX 命令。
+     加热/希腊符号转数学模式：△（U+25B3）/ Δ（U+0394）→ $\\triangle$ /
+     $\\Delta$，ν（U+03BD，光照 hν）→ $\\nu$——△/ν 在 lmroman 文本
+     字体中缺失（渲染为空白），Δ 在 pdflatex 回退路径下不可靠；
+     数学模式两引擎均可靠（与 energy.py 的 Ea/ΔH 标注约定一致）。
 
     示例：H2SO4 → H$_2$SO$_4$；CH3Cl → CH$_3$Cl；OH- → OH$^{-}$；
     NH4+ → NH$_4$$^{+}$；SO42- → SO$_4$$^{2-}$；
     H₂SO₄ → H$_{2}$SO$_{4}$；H⁺ → H$^{+}$；Ca²⁺ → Ca$^{2+}$；
-    CuO, △ → CuO, $\\triangle$；CuO, Δ → CuO, $\\Delta$。
+    CuO, △ → CuO, $\\triangle$；CuO, Δ → CuO, $\\Delta$；
+    hν → h$\\nu$。
     """
     if not text or "$" in text:
         return text
@@ -1267,7 +1274,8 @@ def format_chem_text(text: str) -> str:
         text = text[: m.start()]
     out = _SUBSCRIPT_RE.sub(r"\1$_\2$", text) + charge
     # 必须最后替换：提前插入 $ 会使尾部电荷正则 _CHARGE_TAIL_RE 失效
-    return out.replace("△", r"$\triangle$").replace("Δ", r"$\Delta$")
+    return (out.replace("△", r"$\triangle$").replace("Δ", r"$\Delta$")
+            .replace("ν", r"$\nu$"))
 
 
 # ---------------------------------------------------------------------------

@@ -96,9 +96,11 @@ def render_reaction(reactants_str: str, products_str: str, conditions: str = "")
     lines = [r"\begin{tikzpicture}"]
     for placed in layout.mols:
         if placed.coeff != 1:
-            # 系数节点：分子 scope 左侧，垂直居中（与分子同行）
+            # 系数节点：紧贴分子 bbox 左缘（布局已预留 coeff_pad=0.6 空间）。
+            # 系数半宽约 0.15，中心放 bbox 左缘 -0.15 → 右缘恰好贴住标签区
+            # （原 -0.35 使系数离标签过远、离加号过近，Drawbacks 十-1）。
             bbox = placed.bbox
-            bx = bbox[0] + placed.shift[0] - 0.35
+            bx = bbox[0] + placed.shift[0] - 0.15
             lines.append(f"  \\node at ({bx:.2f},0) {{{_fmt_coeff(placed.coeff)}}};")
         lines.extend(molecule_scope_lines(placed.mol, placed.shift,
                                           show_lone_pairs=False))

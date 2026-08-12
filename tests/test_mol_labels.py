@@ -32,6 +32,17 @@ def test_water_label_is_h2o():
     assert atom_label(o) == "H$_{2}$O"
 
 
+def test_ammonia_label_is_nh3():
+    """问题 2（NH3→H3N）：N/P/B 氢化物元素在前（NH3/PH3/BH3），
+    仅 F/Cl/Br/I/O/S/Se/Te 的氢化物 H 在前（HF/HCl/H2O/H2S）。"""
+    for smi, expect in [("N", "NH$_{3}$"), ("P", "PH$_{3}$"),
+                        ("B", "BH$_{3}$")]:
+        mol = prepare_mol(smi)
+        a = _atom(mol, smi)
+        assert atom_main_label(a) == expect, f"{smi} → {atom_main_label(a)}"
+        assert atom_label(a) == expect, f"{smi} → {atom_label(a)}"
+
+
 def test_alcohol_oh_not_h2o():
     mol = prepare_mol("CCO")
     o = _atom(mol, "O")

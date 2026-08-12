@@ -327,7 +327,7 @@ def _molecule_with_annotations_lines(info: dict, *, show_numbers: bool,
     if info.get("coeff", 1.0) != 1.0:
         bbox = info.get("bbox")
         if bbox:
-            bx = bbox[0] + info["shift"][0] - 0.35
+            bx = bbox[0] + info["shift"][0] - 0.15
             lines.append(
                 f"  \\node at ({bx:.2f},{info['shift'][1]:.2f}) "
                 f"{{{_fmt_coeff(info['coeff'])}}};"
