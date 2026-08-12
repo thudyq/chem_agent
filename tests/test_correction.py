@@ -124,6 +124,22 @@ def test_correction_prompt_invalid_smiles_guidance():
     assert "降级为文字描述" in prompt                 # 降级策略
 
 
+def test_correction_prompt_inorganic_salt_guidance():
+    """无机盐/含氧酸盐 SMILES 非法时修正 prompt 给出离子式改法
+    （KMnO4 写成 K[Mn](=O)(=O)=O / KMn(=O)=O——金属与中心原子无直接键）。"""
+    from core.tag_parser import parse_tags
+    from core.tag_validator import validate_tag
+    text = "[REACTION:CCO;K[Mn](=O)(=O)=O|CC=O|]"
+    tag = parse_tags(text)[0]
+    vr = validate_tag(tag)
+    assert "无效 SMILES" in vr.reason or "化学校验" in vr.reason
+    prompt = _build_correction_prompt("乙醇被高锰酸钾氧化", text,
+                                      [(tag, vr.reason)])
+    assert "K[Mn](=O)(=O)=O" in prompt              # 失败标记原文
+    assert "[K+].[O-][Mn](=O)(=O)=O" in prompt      # 离子式改法
+    assert "离子式" in prompt                        # 引导策略
+
+
 def test_retry_succeeds_after_smiles_fix(fake_rdkit, fake_renderers,
                                          monkeypatch):
     """修正重试成功闭环：首次无效 SMILES 校验拦截 → 修正版渲染成功。
