@@ -251,6 +251,24 @@ def ask_llm(
                             print(f"[ask_llm] 第 {attempt}/{retries} 次失败（无内容返回，"
                                   f"finish_reason={finish_reason or '无'}）")
                     elif finish_reason == "length":
+                        # 思考退化：reasoning 字符数远超实际回答（≥2×）时，
+                        # 说明思考循环吃光预算（用户观察：1 万字重复思考后
+                        # 截断）——重试只会重复同一循环，直接降级下一 stage
+                        # （同 content is None 的降级逻辑）。
+                        if (reasoning_chars and content
+                                and len(content) * 2 < reasoning_chars
+                                and stage_i < len(stages) - 1):
+                            nmodel, (nmode, neffort) = stages[stage_i + 1]
+                            if nmodel != current_model:
+                                nxt = f"切换回退模型 {nmodel}（强制关闭思考）"
+                            else:
+                                nxt = (f"降级思考参数（thinking={nmode or '默认'}, "
+                                       f"effort={neffort or '默认'}）")
+                            print(f"[ask_llm] 模型 {current_model} 思考循环吃光预算"
+                                  f"（reasoning {reasoning_chars} 字符 >> 回答 "
+                                  f"{len(content)} 字符，finish_reason=length），{nxt} ...")
+                            advanced = True
+                            break
                         print(f"[ask_llm] 第 {attempt}/{retries} 次失败"
                               "（输出被 max_tokens 截断，finish_reason=length）")
                     else:

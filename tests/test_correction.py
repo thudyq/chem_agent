@@ -107,3 +107,40 @@ def test_correction_prompt_chem_guidance():
     assert "催化剂" in prompt and "箭头条件" in prompt  # 辅助试剂归位规则
     assert "[O]" in prompt and "[H]" in prompt        # 占位符禁止提示
     assert "2b 箭头补足" in prompt                    # 2b 方案提示
+
+
+def test_correction_prompt_invalid_smiles_guidance():
+    """无效 SMILES（配离子写法错误）时修正 prompt 给出具体改法
+    （Drawbacks 十：银镜反应 [Ag(NH3)2]OH / NH3 裸写）。"""
+    from core.tag_parser import parse_tags
+    from core.tag_validator import validate_tag
+    text = "[REACTION:CC=O;2[Ag(NH3)2]OH|CC(=O)[O-];2Ag;3NH3;H2O|Δ]"
+    tag = parse_tags(text)[0]
+    vr = validate_tag(tag)
+    prompt = _build_correction_prompt("银镜反应", text, [(tag, vr.reason)])
+    assert "[Ag(NH3)2]OH" in prompt                  # 失败标记原文
+    assert "[Ag]([NH3])[NH3]" in prompt              # 配离子拆分改法
+    assert "NH3" in prompt and "裸写" in prompt       # 氨写法提醒
+    assert "降级为文字描述" in prompt                 # 降级策略
+
+
+def test_retry_succeeds_after_smiles_fix(fake_rdkit, fake_renderers,
+                                         monkeypatch):
+    """修正重试成功闭环：首次无效 SMILES 校验拦截 → 修正版渲染成功。
+
+    注：fake_rdkit 的 _FakeMol 无元素计数，ARROW/REACTION 的守恒校验
+    在 fake 下必然拦截——用 [STRUCT:XYZABC]（无效 SMILES，校验明确
+    拦截）触发首次失败，验证"改简单标记后重试成功"的闭环。"""
+    calls = []
+    answers = [
+        # 首次：无效 SMILES（配离子/复杂物种写错的一类）→ 校验拦截
+        "乙醛氧化：[STRUCT:XYZABC]",
+        # 修正版：简单结构渲染成功
+        "乙醛氧化：[STRUCT:CCO]",
+    ]
+    monkeypatch.setattr(
+        "app.ask_llm", lambda *a, **k: calls.append(a[0] if a else None) or answers.pop(0))
+    result = process_question("写出乙醛发生银镜反应的化学方程式。")
+    assert len(calls) == 2, "首次失败应触发一次修正重试"
+    assert "RENDERED:CCO" in result                # 修正版已渲染
+    assert "无法渲染" not in result                # 无降级提示

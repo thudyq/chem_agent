@@ -117,3 +117,33 @@ class TestAskLlmDegradation:
         assert len(calls) == 1
         assert calls[0]["thinking"] == {"type": "disabled"}
         assert "reasoning_effort" not in calls[0]
+
+    def test_reasoning_loop_length_truncation_degrades(
+            self, fake_env, monkeypatch):
+        """思考循环吃光预算（reasoning >> content，finish_reason=length）：
+        直接降级下一 stage，不重试——避免 1 万字重复思考循环浪费
+        （用户实测：追问完整方程式后思考 1 万字重复后截断）。"""
+        fake_env(_cfg(thinking_mode="enabled", reasoning_effort="low"))
+        calls = _stream_recorder(
+            monkeypatch,
+            [("短", "length", 10000),     # 思考退化：reasoning 10000 >> content 1
+             ("答案", "stop", 0)])
+        assert lc.ask_llm("q", system_prompt="x", retries=2) == "答案"
+        assert len(calls) == 2, "思考退化应降级而非重试 3 次"
+        assert calls[0]["thinking"] == {"type": "enabled"}
+        assert calls[1]["thinking"] == {"type": "disabled"}
+
+    def test_normal_length_truncation_retries_not_degrades(
+            self, fake_env, monkeypatch):
+        """reasoning 与 content 相当时 length 截断属正常输出超长：
+        走重试（同 stage），不误降级。"""
+        fake_env(_cfg(thinking_mode="enabled", reasoning_effort="low"))
+        long_content = "较长的回答内容" * 40   # 280 字符
+        calls = _stream_recorder(
+            monkeypatch,
+            [(long_content, "length", 100),    # reasoning 100 < content 280
+             ("答案", "stop", 0)])
+        assert lc.ask_llm("q", system_prompt="x", retries=2) == "答案"
+        assert len(calls) == 2
+        assert calls[0]["thinking"] == {"type": "enabled"}
+        assert calls[1]["thinking"] == {"type": "enabled"}
