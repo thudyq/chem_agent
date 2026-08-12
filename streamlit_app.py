@@ -37,12 +37,12 @@ import os
 import re
 import tempfile
 import time
+import urllib.parse
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
 import streamlit as st
-import streamlit.components.v1 as st_components
 
 from app import process_question
 from utils.latex_compile import compile_tikz_to_png, detect_backends
@@ -244,7 +244,7 @@ def _render_user_bubble(msg: dict, image_bytes: bytes | None = None) -> None:
         data = image_bytes if image_bytes is not None else (
             base64.b64decode(b64) if b64 else None)
         if data:
-            st.image(data, use_container_width=True)   # 与文字气泡同宽（解 9b）
+            st.image(data, width="stretch")   # 与文字气泡同宽（解 9b）
             st.download_button("下载图片", data=data,
                                file_name=msg.get("image_name") or "image.png",
                                key=f"dl_{uuid.uuid4().hex[:10]}")
@@ -394,16 +394,37 @@ def _chat_ctx(role: str):
         yield
 
 
+def _copy_iframe(srcdoc: str, height: int = 40) -> None:
+    """内嵌 HTML iframe（st.iframe data-URL / components.v1.html 版本兼容）。
+
+    st.iframe 只收 URL（1.59 无 srcdoc）→ HTML 经 URL 编码成 data: URL；
+    脚本在 iframe 内可执行，navigator.clipboard 在 data: 源不可用时
+    自动走按钮内的 textarea + execCommand 降级。
+    """
+    if hasattr(st, "iframe"):
+        # charset 必写：data: URL 缺省 US-ASCII，中文 Windows 浏览器回退 GBK
+        # 会把 UTF-8 中文渲染成乱码
+        st.iframe("data:text/html;charset=utf-8,"
+                  + urllib.parse.quote(srcdoc), height=height)
+    else:
+        import streamlit.components.v1 as st_components
+        st_components.html(srcdoc, height=height)
+
+
 def _copy_md_button(text: str) -> None:
     """每条回答下方的一键复制按钮（复制原始 Markdown）。
 
-    Streamlit 无原生复制按钮，用 components iframe 内嵌按钮实现：
+    Streamlit 无原生复制按钮，用 iframe 内嵌按钮实现：
     优先 navigator.clipboard.writeText，iframe 权限受限时降级
     textarea + execCommand。payload 经 JSON 转义并转义 `</`，
     防止回答内容中的 `</script>` 提前闭合脚本块。
     """
     payload = json.dumps(text, ensure_ascii=False).replace("</", "<\\/")
-    st_components.html(
+    # body margin:0 + overflow:hidden：按钮高度贴边，避免 iframe 溢出出现
+    # 滚动条（Windows 经典滚动条在右缘显示为 ▲➖▼）
+    _copy_iframe(
+        "<!DOCTYPE html><html><head><meta charset='utf-8'></head>"
+        "<body style='margin:0;overflow:hidden'>"
         "<button id='cp' style='padding:2px 10px;border:1px solid #bbb;"
         "border-radius:6px;background:transparent;color:inherit;"
         "cursor:pointer;font-size:13px;'>复制 Markdown</button>"
@@ -420,7 +441,7 @@ def _copy_md_button(text: str) -> None:
         "  btn.textContent = '已复制 ✓';"
         "  setTimeout(() => { btn.textContent = '复制 Markdown'; }, 1500);"
         "});"
-        "</script>",
+        "</script></body></html>",
         height=40,
     )
 
@@ -454,10 +475,10 @@ def _session_menu(s: dict) -> None:
     """会话行右侧 ⋯ 菜单（重命名/删除）；旧版 streamlit 降级为展开。"""
     if hasattr(st, "popover"):
         with st.popover("⋯", key=f"menu_{s['id']}"):
-            if st.button("✏️ 重命名", key=f"mr_{s['id']}", use_container_width=True):
+            if st.button("✏️ 重命名", key=f"mr_{s['id']}", width="stretch"):
                 st.session_state.renaming_id = s["id"]
                 _rerun()  # 立即重绘该行为输入框（原位编辑）
-            if st.button("🗑 删除", key=f"md_{s['id']}", use_container_width=True):
+            if st.button("🗑 删除", key=f"md_{s['id']}", width="stretch"):
                 _delete_session(s["id"])
     else:
         with st.expander("⋯", key=f"menu_{s['id']}"):
@@ -630,7 +651,7 @@ current_id = st.session_state.current_id
 # ---- 侧边栏：会话管理 ----
 with st.sidebar:
     st.markdown("### 💬 对话")
-    if st.button("＋ 新对话", use_container_width=True):
+    if st.button("＋ 新对话", width="stretch"):
         s = _new_session(sessions)
         st.session_state.current_id = s["id"]
         _save_sessions(sessions)
@@ -651,7 +672,7 @@ with st.sidebar:
                 is_cur = s["id"] == current_id
                 if st.button(
                         ("▶ " if is_cur else "") + s["title"],
-                        key=f"sel_{s['id']}", use_container_width=True,
+                        key=f"sel_{s['id']}", width="stretch",
                         type="primary" if is_cur else "secondary"):
                     st.session_state.current_id = s["id"]
                     _rerun()
