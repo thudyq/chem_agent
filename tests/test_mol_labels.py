@@ -103,3 +103,21 @@ def test_scope_flips_label():
     conf.SetAtomPosition(c.GetIdx(), (-2, 0, 0))
     lines = molecule_scope_lines(mol, (0.0, 0.0))
     assert any("{OH}" in ln for ln in lines), lines
+
+
+def test_is_formula_label():
+    """纯化学式 label 识别（含自由基 ·）：决定是否在分子下方重复显示。"""
+    from renderers.mol_primitives import is_formula_label
+    # 化学式（含自由基符号）→ True（不重复显示）
+    assert is_formula_label("Cl·")
+    assert is_formula_label("·CH3")
+    assert is_formula_label("CH3·")
+    assert is_formula_label("CH3Cl")
+    assert is_formula_label("OH-")
+    assert is_formula_label("ClH")
+    # 中文/角色标注/含结构括号 → False（显示在下方）
+    assert not is_formula_label("底物")
+    assert not is_formula_label("产物")
+    assert not is_formula_label("质子化乙醇")
+    assert not is_formula_label("(R)-乳酸")
+    assert not is_formula_label("过渡态(示意)")

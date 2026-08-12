@@ -71,6 +71,19 @@ def test_cjk_label_caption_shown():
     assert out.count("\\node[below]") == 2
 
 
+def test_radical_label_not_duplicated():
+    """自由基 label（Cl·、·CH3）不重复显示在分子下方——含 · 的化学式
+    不是角色标注（分子本身已画 Cl/CH3 + 单电子点）。"""
+    out = _render(
+        "[COMPOSITE:reaction_mech]"
+        "[STRUCT:[Cl],id=cl,label=Cl·][RXNARROW][STRUCT:[CH3],id=me,label=·CH3]"
+        "[MECHARROW:cl:0>>me:0]"
+        "[/COMPOSITE]"
+    )
+    assert out.count("\\node[below]") == 0          # 无重复 label
+    assert "Cl·" not in out or "Cl·" not in [ln for ln in out.splitlines() if "below" in ln]
+
+
 def test_long_label_wraps_multiline():
     """C2 标签自动换行：长中文标签在渲染输出中分多行 + align=center。"""
     out = _render(

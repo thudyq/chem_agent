@@ -73,6 +73,7 @@ if __name__ == "__main__":
         label_edge_point, prepare_mol, scale_mol_coords, symbol_center,
         atom_pos, place_donor_h, place_explicit_hs, adjust_hbond_conformation,
         partial_charge_pos, split_arrow_condition, split_species_coeff, wrap_format_text,
+        is_formula_label,
     )
     from renderers.layout import (
         energy_annotation_placement, energy_point_coords, energy_point_roles,
@@ -89,6 +90,7 @@ else:
         label_edge_point, prepare_mol, scale_mol_coords, symbol_center,
         atom_pos, place_donor_h, place_explicit_hs, adjust_hbond_conformation,
         partial_charge_pos, split_arrow_condition, split_species_coeff, wrap_format_text,
+        is_formula_label,
     )
     from .layout import (
         energy_annotation_placement, energy_point_coords, energy_point_roles,
@@ -646,7 +648,9 @@ def render_composite(layout: str, children: list) -> str:
     for comp in structs:
         info = mols[comp["id"]]
         label = info["label"]
-        if label and not label.isascii():
+        # 纯化学式 label（CH3Cl、Cl·、·CH3、OH-）分子本身已展示，不重复；
+        # 中文/角色标注（底物、质子化乙醇）显示在分子下方
+        if label and not is_formula_label(label):
             min_x, min_y, max_x, _ = info["bbox"]
             shift = info["shift"]
             cx = (min_x + max_x) / 2.0 + shift[0]

@@ -82,6 +82,30 @@ def label_plain_len(label: str) -> int:
     return len(re.sub(r"[$_{}^\\]", "", label))
 
 
+# 纯化学式 label 识别用元素表（有机/常见无机，与 core.tag_validator 的
+# _REAL_ELEMENTS 一致）。刻意不含 Ar/Ac（prompt 允许的通用基团缩写）。
+_FORMULA_LABEL_ELEMENTS = {
+    "H", "B", "C", "N", "O", "F", "Si", "P", "S", "Cl", "Br", "I",
+    "Li", "Na", "K", "Mg", "Ca", "Al", "Fe", "Cu", "Zn", "Ag", "Au",
+    "Hg", "Pb", "Sn", "Se", "Te",
+}
+_FORMULA_LABEL_RE = re.compile(r"^([A-Z][a-z]?\d*)+([+-]\d*)?$")
+
+
+def is_formula_label(label: str) -> bool:
+    """label 是否为纯化学式（含自由基符号 · 的也算，如 Cl·、·CH3）。
+
+    用于决定 label 是否在分子下方重复显示：纯化学式（CH3Cl、OH-、Cl·）
+    分子本身已展示，不重复；中文/角色标注（底物、质子化乙醇）需显示。
+    去 · 后需全由可识别元素 + 数字组成（首字符大写）。
+    """
+    s = (label or "").strip().replace("·", "")
+    if not s or not _FORMULA_LABEL_RE.match(s):
+        return False
+    return all(sym in _FORMULA_LABEL_ELEMENTS
+               for sym in re.findall(r"([A-Z][a-z]?)", s))
+
+
 def _is_wide_char(ch: str) -> bool:
     """是否全角/宽字符（CJK 汉字与全角标点，宽度约为西文的 2 倍）。"""
     o = ord(ch)
