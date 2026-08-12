@@ -267,6 +267,17 @@ def test_format_chem_text():
     assert format_chem_text("CuO, △") == "CuO, $\\triangle$"
     assert format_chem_text("CuO, Δ") == "CuO, $\\Delta$"
     assert format_chem_text("△") == "$\\triangle$"
+    # 希腊字母统一转数学模式（lmroman 文本字体缺字形）：hν 光照、α/β/γ、
+    # π/σ/ω 及有大写命令的大写；无命令大写（Α Ε）保持原样
+    assert format_chem_text("hν") == "h$\\nu$"
+    assert format_chem_text("α-碳") == "$\\alpha$-碳"
+    assert format_chem_text("β-消除") == "$\\beta$-消除"
+    assert format_chem_text("δ") == "$\\delta$"
+    assert format_chem_text("π 键") == "$\\pi$ 键"
+    assert format_chem_text("σ 键") == "$\\sigma$ 键"
+    assert format_chem_text("ω-3") == "$\\omega$-3"
+    assert format_chem_text("ΔH") == "$\\Delta$H"
+    assert format_chem_text("AΑB") == "AΑB"      # 无命令大写不转换
 
 
 def test_row_layout_multi_step():

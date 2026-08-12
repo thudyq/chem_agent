@@ -1247,22 +1247,40 @@ def _convert_unicode_scripts(text: str) -> str:
     return "".join(out)
 
 
+# 希腊字母 → LaTeX 数学命令。lmroman 文本字体缺希腊字形（渲染空白），
+# 数学模式两引擎（xelatex/pdflatex）均可靠——与 △/Δ 同机制统一转换。
+# 覆盖全部 24 小写 + 12 有大写命令的大写（Α Ε Ζ Η Ι Κ Μ Ν Ο Ρ Τ Χ 无
+# \uppercase 命令，文本模式字体可用，不转换）。
+_GREEK_TO_MATH = {
+    "α": r"\alpha", "β": r"\beta", "γ": r"\gamma", "δ": r"\delta",
+    "ε": r"\varepsilon", "ζ": r"\zeta", "η": r"\eta", "θ": r"\theta",
+    "ι": r"\iota", "κ": r"\kappa", "λ": r"\lambda", "μ": r"\mu",
+    "ν": r"\nu", "ξ": r"\xi", "ο": r"\omicron", "π": r"\pi",
+    "ρ": r"\rho", "σ": r"\sigma", "τ": r"\tau", "υ": r"\upsilon",
+    "φ": r"\varphi", "χ": r"\chi", "ψ": r"\psi", "ω": r"\omega",
+    "Γ": r"\Gamma", "Δ": r"\Delta", "Θ": r"\Theta", "Λ": r"\Lambda",
+    "Ξ": r"\Xi", "Π": r"\Pi", "Σ": r"\Sigma", "Υ": r"\Upsilon",
+    "Φ": r"\Phi", "Ψ": r"\Psi", "Ω": r"\Omega",
+}
+_GREEK_RE = re.compile("|".join(map(re.escape, _GREEK_TO_MATH)))
+
+
 def format_chem_text(text: str) -> str:
     """化学文本自动排版：字母/括号后的数字转下标，尾部电荷转上标。
 
     先剥离尾部电荷（含电荷数），再对余下文本转下标，保证「SO42-」
     中 4 为下标、2- 为上标。已含 $（已手工排版）或为空时原样返回。
      Unicode 上下标（H₂SO₄、H⁺、SO₄²⁻、Ca²⁺ 等）先转 LaTeX 命令。
-     加热/希腊符号转数学模式：△（U+25B3）/ Δ（U+0394）→ $\\triangle$ /
-     $\\Delta$，ν（U+03BD，光照 hν）→ $\\nu$——△/ν 在 lmroman 文本
-     字体中缺失（渲染为空白），Δ 在 pdflatex 回退路径下不可靠；
-     数学模式两引擎均可靠（与 energy.py 的 Ea/ΔH 标注约定一致）。
+     加热/希腊符号转数学模式：△（U+25B3）→ $\\triangle$；全部小写
+     希腊字母与有大写命令的大写（α β γ δ ε ν π σ ω Γ Δ Θ Λ Ξ Π Σ Υ Φ
+     Ψ Ω 等）→ $\\alpha$ / $\\Delta$ 等——lmroman 文本字体缺希腊字形
+     （渲染为空白），数学模式两引擎（xelatex/pdflatex）均可靠（与
+     energy.py 的 Ea/ΔH 标注约定一致）。
 
     示例：H2SO4 → H$_2$SO$_4$；CH3Cl → CH$_3$Cl；OH- → OH$^{-}$；
     NH4+ → NH$_4$$^{+}$；SO42- → SO$_4$$^{2-}$；
     H₂SO₄ → H$_{2}$SO$_{4}$；H⁺ → H$^{+}$；Ca²⁺ → Ca$^{2+}$；
-    CuO, △ → CuO, $\\triangle$；CuO, Δ → CuO, $\\Delta$；
-    hν → h$\\nu$。
+    CuO, △ → CuO, $\\triangle$；hν → h$\\nu$；α-碳 → $\\alpha$-碳。
     """
     if not text or "$" in text:
         return text
@@ -1274,8 +1292,8 @@ def format_chem_text(text: str) -> str:
         text = text[: m.start()]
     out = _SUBSCRIPT_RE.sub(r"\1$_\2$", text) + charge
     # 必须最后替换：提前插入 $ 会使尾部电荷正则 _CHARGE_TAIL_RE 失效
-    return (out.replace("△", r"$\triangle$").replace("Δ", r"$\Delta$")
-            .replace("ν", r"$\nu$"))
+    out = out.replace("△", r"$\triangle$").replace("Δ", r"$\Delta$")
+    return _GREEK_RE.sub(lambda m: f"${_GREEK_TO_MATH[m.group(0)]}$", out)
 
 
 # ---------------------------------------------------------------------------
