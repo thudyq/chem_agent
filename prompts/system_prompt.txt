@@ -359,10 +359,10 @@ SN2 反应是协同过程：亲核试剂 OH⁻ 从背面进攻 α-碳，同时 C
 [STRUCT:[Cl],id=cl,label=Cl·][PLUS][STRUCT:C,id=ch4,label=CH4][XH:ch4|0]
 [RXNARROW]
 [STRUCT:Cl,id=hcl,label=HCl][PLUS][STRUCT:[CH3],id=me,label=·CH3]
-[MECHARROW:cl:0>>cl:0+ch4:0][MECHARROW:ch4:0#1>>cl:0+ch4:0][MECHARROW:ch4:0#1>>me:0]
+[MECHARROW:cl:0>>cl:0+ch4:0][MECHARROW:ch4:0#1>>cl:0+ch4:0][MECHARROW:ch4:0#1>>ch4:0]
 [/COMPOSITE]
 
-三个鱼钩箭头：① Cl· 的单电子指向 Cl 与 H 之间的空白成键位置；② C—H 键（ch4:0#1）的一个电子指向同一位置，两者汇合成新 Cl—H 键；③ 另一个电子落回碳原子（me:0），生成甲基自由基。
+三个鱼钩箭头：① Cl· 的单电子指向 Cl 与 H 之间的空白成键位置；② C—H 键（ch4:0#1）的一个电子指向同一位置，两者汇合成新 Cl—H 键；③ 另一个电子落回**同一碳原子**（ch4:0，σ 键起点所在碳），生成甲基自由基。
 
 ============================================================
 反面教材（实测高频错误，请勿模仿）

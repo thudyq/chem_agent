@@ -19,6 +19,21 @@ def _only_h_neighbors(atom) -> bool:
     return all(nbr.GetAtomicNum() == 1 for nbr in atom.GetNeighbors())
 
 
+def _covalent_bond_len(atom) -> float:
+    """孤立原子 H 键长基准：2×共价半径（RDKit PeriodicTable）。
+
+    与 RDKit 2D 坐标生成器键长一致（未缩放 C-C=1.5≈2×Rc(C)=1.52）。
+    孤立原子（无键）的显式 H 键用此基准，使与骨架键等长；
+    调用方按自身 scale 缩放——composite 传 h_len×_MOL_SCALE。
+    """
+    try:
+        from rdkit import Chem
+        pt = Chem.GetPeriodicTable()
+        return 2.0 * pt.GetRcovalent(atom.GetAtomicNum())
+    except Exception:
+        return 1.0
+
+
 def atom_label(atom, explicit_hs: int = 0, flip: bool = False) -> str | None:
     """生成非隐式碳原子的标签（如 OH、NH₂、Cl）。
 
@@ -41,8 +56,12 @@ def atom_label(atom, explicit_hs: int = 0, flip: bool = False) -> str | None:
     sym = atom.GetSymbol()
     sym = sym[0].upper() + sym[1:]
     h = max(0, atom.GetTotalNumHs() - explicit_hs)
-    if sym == "O" and h == 2 and _only_h_neighbors(atom):
-        parts = f"H$_{{{h}}}$O" if h > 1 else "HO"
+    if (h >= 1 and z != 6 and atom.GetFormalCharge() == 0
+            and _only_h_neighbors(atom)):
+        # 孤立中性非碳原子（只连 H，如 HCl、HBr、H₂O、H₂S）：H 前置（氢化物
+        # 惯例）；带电离子保持 XH（如 OH⁻ 写 OH，不写 HO）；碳始终 CHn
+        # （C 在前，自由基 ·CH3 也写作 CH3）（问题 4）
+        parts = (f"H$_{{{h}}}$" if h > 1 else "H") + sym
     elif flip:
         parts = (f"H$_{{{h}}}$" if h > 1 else ("H" if h == 1 else "")) + sym
     else:
@@ -287,7 +306,17 @@ def place_explicit_hs(mol, idx: int, count: int = 1,
         for b in mol.GetAtomWithIdx(idx).GetBonds():
             nx, ny = atom_pos(mol, b.GetOtherAtomIdx(idx))
             lens.append(math.hypot(nx - x, ny - y))
-        h_len = sum(lens) / len(lens) if lens else 0.75
+        if not lens:
+            # 孤立原子（无键，如 CH4 的 C）：先取分子内其他键的平均长度；
+            # 分子也无键时用共价半径和 Rc(X)+Rc(H)（未缩放基准，问题 2）。
+            all_lens = []
+            for b in mol.GetBonds():
+                i, j = b.GetBeginAtomIdx(), b.GetEndAtomIdx()
+                xi, yi = atom_pos(mol, i)
+                xj, yj = atom_pos(mol, j)
+                all_lens.append(math.hypot(xj - xi, yj - yi))
+            lens = all_lens or [_covalent_bond_len(mol.GetAtomWithIdx(idx))]
+        h_len = sum(lens) / len(lens)
     blocked = sorted(a % 360.0 for a in _bond_angles(mol, idx))
     gaps = []
     if not blocked:
@@ -456,13 +485,21 @@ def _ang_diff(a: float, b: float) -> float:
 
 
 def _bond_blocks(mol, idx: int) -> list:
-    """规范定义的 block：直接相连的化学键和原子方向 + 标签氢方向（右侧）。
+    """规范定义的 block：直接相连的化学键和原子方向 + 标签氢方向。
 
-    电荷不是 block（规范仅要求电荷与孤对电子不重叠），单独作为避让约束。
+    标签氢方向：孤立中性非碳原子（如 HCl/HBr）的 H 前置（H 在左侧，
+    180°）；其余（CH₃ 等 H 后置）H 在右侧（0°）——问题 7：原固定 0°
+    使 HCl 的孤对电子误占左侧与 H 标签重叠。电荷不是 block（规范仅要求
+    电荷与孤对电子不重叠），单独作为避让约束。
     """
+    atom = mol.GetAtomWithIdx(idx)
     blocked = _bond_angles(mol, idx)
-    if _implicit_shown_hs(mol.GetAtomWithIdx(idx)) > 0:
-        blocked.append(0.0)
+    if _implicit_shown_hs(atom) > 0:
+        # H 前置（标签以 H 开头）→ H 在左侧 180°；否则 H 在右侧 0°
+        z = atom.GetAtomicNum()
+        h_prefixed = (z != 6 and atom.GetFormalCharge() == 0
+                      and _only_h_neighbors(atom))
+        blocked.append(180.0 if h_prefixed else 0.0)
     return blocked
 
 
@@ -501,10 +538,17 @@ def _min_ang_diff(ang: float, blocked: list) -> float:
     return min((_ang_diff(ang, b) for b in blocked), default=180.0)
 
 
-def _separate_cardinals(count: int, blocked: list, taken: list) -> list:
-    """核心原则兜底：正交四向优先、斜向补充，避开阻挡与已占槽位（>30°）。"""
+def _separate_cardinals(count: int, blocked: list, taken: list,
+                        cardinals: tuple | None = None) -> list:
+    """核心原则兜底：正交四向优先、斜向补充，避开阻挡与已占槽位（>30°）。
+
+    cardinals: 候选序（默认上→左→下→右→斜向）。单电子（自由基）传
+    水平优先序（左→右→上→下），使 ·CH₃ 的电子点画在碳左侧更美观
+    （问题 5：默认序优先上方，自由基单电子在水平方向更自然）。
+    """
     result = list(taken)
-    for cand in (90.0, 180.0, 270.0, 0.0, 45.0, 135.0, 225.0, 315.0):
+    for cand in cardinals or (90.0, 180.0, 270.0, 0.0,
+                              45.0, 135.0, 225.0, 315.0):
         if len(result) >= count + len(taken):
             break
         if (_min_ang_diff(cand, blocked) > 30
@@ -578,13 +622,21 @@ def lone_pair_angles(mol, idx: int) -> list:
 
 
 def single_electron_angles(mol, idx: int) -> list:
-    """单电子（自由基）的放置角度，规则同孤对电子并避开已占电子点。"""
+    """单电子（自由基）的放置角度，规则同孤对电子并避开已占电子点。
+
+    候选序水平优先（左 180 → 右 0 → 上 90 → 下 270）——自由基单电子
+    画在原子水平方向更自然（如 ·CH3 的电子点在碳左侧，问题 5）；
+    默认 `_separate_cardinals` 优先上方是孤对电子惯例，自由基不适用。
+    """
     _, singles = lone_pair_count(mol.GetAtomWithIdx(idx))
     if singles == 0:
         return []
     taken = lone_pair_angles(mol, idx)
     blocked = _blocked_angles(mol, idx) + list(taken)
-    return _separate_cardinals(singles, blocked, taken)[:singles]
+    return _separate_cardinals(
+        singles, blocked, taken,
+        cardinals=(180.0, 0.0, 90.0, 270.0, 135.0, 225.0, 45.0, 315.0),
+    )[:singles]
 
 
 def _weighted_plain_len(lab: str) -> float:
@@ -654,9 +706,11 @@ def atom_main_label(atom, explicit_hs: int = 0, flip: bool = False) -> str | Non
         sym = atom.GetSymbol()
         sym = sym[0].upper() + sym[1:]
     h = max(0, atom.GetTotalNumHs() - explicit_hs)
-    # 水分子特例：O 只连 H 时写 H₂O（H 在前），否则 OH 是羟基写法
-    if sym == "O" and h == 2 and _only_h_neighbors(atom):
-        parts = f"H$_{{{h}}}$O" if h > 1 else "HO"
+    # 孤立中性非碳原子（只连 H，如 HCl、HBr、H₂O、H₂S）：H 前置（氢化物
+    # 惯例）；带电离子保持 XH（如 OH⁻ 写 OH，不写 HO）；碳始终 CHn
+    if (h >= 1 and atom.GetAtomicNum() != 6 and atom.GetFormalCharge() == 0
+            and _only_h_neighbors(atom)):
+        parts = (f"H$_{{{h}}}$" if h > 1 else "H") + sym
     elif flip:
         parts = (f"H$_{{{h}}}$" if h > 1 else ("H" if h == 1 else "")) + sym
     else:
@@ -805,6 +859,35 @@ def mol_visual_bbox(mol, labeler=condensed_atom_label,
                 xs.append(x1)
                 ys.append(y1)
     return min(xs), min(ys), max(xs), max(ys)
+
+
+def mol_visual_bbox_xh(mol, xh_counts: dict, h_len_scale: float = 1.0,
+                       include_lone_pairs: bool = True):
+    """含 [XH] 显式 H 外延的分子视觉包围盒（问题 6）。
+
+    在 mol_visual_bbox 基础上，把 XH 画出的 H 节点坐标计入外延——
+    H 在 X—H 键端点，可能远超原子标签 bbox（孤立碳 CH4 的 H 在
+    C—H 键长 2×Rc×scale 处）。h_len_scale 为调用方分子缩放因子
+    （composite 用 _MOL_SCALE；h_len 逻辑与渲染端 place_explicit_hs
+    一致，保证布局感知与画面一致）。
+    """
+    min_x, min_y, max_x, max_y = mol_visual_bbox(
+        mol, include_lone_pairs=include_lone_pairs)
+    if not xh_counts:
+        return (min_x, min_y, max_x, max_y)
+    mol_has_bond = mol.GetNumBonds() > 0
+    for a, count in xh_counts.items():
+        if a >= mol.GetNumAtoms():
+            continue
+        h_len = None
+        if not mol_has_bond:
+            h_len = _covalent_bond_len(mol.GetAtomWithIdx(a)) * h_len_scale
+        for hx, hy in place_explicit_hs(mol, a, count, h_len=h_len):
+            min_x = min(min_x, hx)
+            max_x = max(max_x, hx)
+            min_y = min(min_y, hy)
+            max_y = max(max_y, hy)
+    return (min_x, min_y, max_x, max_y)
 
 
 def _regularize_kekule(mol) -> None:
@@ -1349,7 +1432,10 @@ def mech_arrow_origin(mol, spec: str, shift=(0.0, 0.0),
     """
     spec = spec.strip()
     if "#" in spec:
-        # 显式 H 端点："a#k" = 原子 a 的第 k 个显式 H（k 从 1 起）
+        # 显式 H 端点："a#k" = 原子 a 的第 k 个显式 H（k 从 1 起）。
+        # 该 H 是 X—H σ 键的一端，箭头从**键线中点**出发（断键语义，向下弯）。
+        # 键线 = 标签边缘（label_edge_point）→ H 节点：与 a-b 键中点用修剪后
+        # 键线段一致（问题 8：起点应落在 C—H 可视键中点，而非原子坐标中点）
         a, _, k = spec.partition("#")
         try:
             ia, ik = int(a), int(k)
@@ -1361,7 +1447,11 @@ def mech_arrow_origin(mol, spec: str, shift=(0.0, 0.0),
         if not pts or not 1 <= ik <= len(pts):
             return None
         hx, hy = pts[ik - 1]
-        return (hx + shift[0], hy + shift[1], False, False, False)
+        sx, sy = label_edge_point(mol, ia, (hx, hy),
+                                  labeler=labeler or atom_main_label)
+        mx = (sx + hx) / 2.0      # 键线中点（标签边缘 → H，局部坐标）
+        my = (sy + hy) / 2.0
+        return (mx + shift[0], my + shift[1], True, False, False)
     if "-" in spec:
         a, _, b = spec.partition("-")
         try:

@@ -68,10 +68,11 @@ if __name__ == "__main__":
         bond_order_of, format_chem_text,
         format_partial_charge,
         hbond_dots_tikz, mech_arrow_between, mech_arrow_origin,
-        mol_visual_bbox, parse_charge_pairs, parse_hbond_pairs, atom_label,
+        mol_visual_bbox, mol_visual_bbox_xh, parse_charge_pairs, parse_hbond_pairs, atom_label,
         atom_main_label, bond_segments_for, label_bond_margin,
         label_edge_point, prepare_mol, scale_mol_coords, symbol_center,
         atom_pos, place_donor_h, place_explicit_hs, adjust_hbond_conformation,
+        _covalent_bond_len,
         partial_charge_pos, split_arrow_condition, split_species_coeff, wrap_format_text,
         is_formula_label,
     )
@@ -85,10 +86,11 @@ else:
         bond_order_of, format_chem_text,
         format_partial_charge,
         hbond_dots_tikz, mech_arrow_between, mech_arrow_origin,
-        mol_visual_bbox, parse_charge_pairs, parse_hbond_pairs, atom_label,
+        mol_visual_bbox, mol_visual_bbox_xh, parse_charge_pairs, parse_hbond_pairs, atom_label,
         atom_main_label, bond_segments_for, label_bond_margin,
         label_edge_point, prepare_mol, scale_mol_coords, symbol_center,
         atom_pos, place_donor_h, place_explicit_hs, adjust_hbond_conformation,
+        _covalent_bond_len,
         partial_charge_pos, split_arrow_condition, split_species_coeff, wrap_format_text,
         is_formula_label,
     )
@@ -150,11 +152,14 @@ def _mech_labeler(info):
 
 
 def _bond_form_midpoint(mols: dict, id_a: str, pt_a: str,
-                        id_b: str, pt_b: str):
+                        id_b: str, pt_b: str,
+                        avoid: list | None = None) -> tuple | None:
     """成键空白位终点：两原子（可跨组件）原子位置的中点。
 
     自由基机理中新键形成于此前不相连的两原子之间，两个成键鱼钩汇聚于该
     空白位置而非任何原子标签（钩尖由 inset_end 留出小间隙）。
+    avoid: [(x, y), ...] 需避让的点（如 "+" 号位置）——中点与某点过近
+    （水平距离 < 0.35）时沿垂直方向偏移 ±0.3 避开（"+ 号在 y=0"）。
     返回 (x, y, False, False, False)；原子越界返回 None。
     """
     ma, mb = mols[id_a]["mol"], mols[id_b]["mol"]
@@ -165,19 +170,26 @@ def _bond_form_midpoint(mols: dict, id_a: str, pt_a: str,
     xb, yb = atom_pos(mb, ib)
     sa, sb = mols[id_a]["shift"], mols[id_b]["shift"]
     t = 0.5
-    return (((1 - t) * (xa + sa[0]) + t * (xb + sb[0])),
-            ((1 - t) * (ya + sa[1]) + t * (yb + sb[1])),
-            False, False, False)
+    mx = (1 - t) * (xa + sa[0]) + t * (xb + sb[0])
+    my = (1 - t) * (ya + sa[1]) + t * (yb + sb[1])
+    for ax_, ay_ in avoid or []:
+        if abs(mx - ax_) < 0.35 and abs(my - ay_) < 0.35:
+            my += 0.3 if my >= ay_ else -0.3  # 垂直偏移，避开 y=0 的 +
+            break
+    return (mx, my, False, False, False)
 
 
-def draw_mech_arrows(mols: dict, arrows: list) -> list:
+def draw_mech_arrows(mols: dict, arrows: list,
+                     plus_positions: list | None = None) -> list:
     """绘制机理弯箭头（p0/p1 定位、端点吸附避让），返回 TikZ 行列表。
 
     mols: {组件 id: {"mol": RDKit Mol, "shift": (x, y), ...}} 组件表。
     arrows: [(src_id, src_pt, dst_id, dst_pt, kind, dst2_id, dst2_pt), ...]
-        ——_parse_mech_arrows 输出；src_pt/dst_pt 为原子序号或 "a-b" 键中点；
-        dst2_id/dst2_pt 非 None 时目标端为 "dst_id:dst_pt+dst2_id:dst2_pt"
-        的成键空白位（两原子位置中点，可跨组件）。
+        ——_parse_mech_arrows 输出；src_pt/dst_pt 为原子序号、"a-b" 键中点
+        或 "a#k" 显式 H（断键语义）；dst2_id/dst2_pt 非 None 时目标端为
+        "dst_id:dst_pt+dst2_id:dst2_pt" 的成键空白位（两原子位置中点，
+        可跨组件，避开 "+" 号位置）。
+    plus_positions: [(x, y), ...] 加号位置——成键空白位与其重叠时偏移。
     未知组件 id / 无效端点的箭头跳过，不影响整体渲染。
 
     逻辑：目标端先按原子中心定位（供源端选孤对槽位）；源端确定后，
@@ -198,7 +210,8 @@ def draw_mech_arrows(mols: dict, arrows: list) -> list:
                                    lone_pair_offset=False,
                                    xh_points=dm.get("xh_points"))
         else:
-            p1 = _bond_form_midpoint(mols, dst_id, dst_pt, dst2_id, dst2_pt)
+            p1 = _bond_form_midpoint(mols, dst_id, dst_pt, dst2_id, dst2_pt,
+                                     avoid=plus_positions)
         if p1 is None:
             continue
         p0 = mech_arrow_origin(sm["mol"], src_pt, sm["shift"],
@@ -217,8 +230,9 @@ def draw_mech_arrows(mols: dict, arrows: list) -> list:
                                    xh_points=dm.get("xh_points"))
             if p1 is None:
                 continue
-        bond_break = ("-" in src_pt
-                      and bond_order_of(sm["mol"], src_pt) == 1)
+        # 断键起点：σ 键中点（a-b）或显式 H（a#k，X—H 键端点）——都从键出发
+        bond_break = (("-" in src_pt and bond_order_of(sm["mol"], src_pt) == 1)
+                      or "#" in src_pt)
         inset_start = (_ARROW_POINT_GAP if bond_break
                        else (0.0 if (p0[2] or p0[3] or p0[4]) else 0.15))
         aim_end = ("-" not in dst_pt and p1[4])
@@ -369,10 +383,16 @@ def _molecule_with_annotations_lines(info: dict, *, show_numbers: bool,
     for a in info["xh"]:
         xh_counts[a] = xh_counts.get(a, 0) + 1
     xh_points = {}   # {原子序号: [(hx, hy), ...]} 供 MECHARROW "a#k" 端点引用
+    mol_has_bond = mol.GetNumBonds() > 0
     for a, count in xh_counts.items():
         if a >= mol.GetNumAtoms():
             continue
-        for hx, hy in place_explicit_hs(mol, a, count):
+        # 孤立原子（分子无键）：h_len 用 2×共价半径并按 _MOL_SCALE 缩放，
+        # 使显式 H 键与骨架键等长（问题 2：原 0.75 未缩放，键明显偏短）
+        h_len = None
+        if not mol_has_bond:
+            h_len = _covalent_bond_len(mol.GetAtomWithIdx(a)) * _MOL_SCALE
+        for hx, hy in place_explicit_hs(mol, a, count, h_len=h_len):
             sx, sy = label_edge_point(mol, a, (hx, hy), labeler=labeler)
             hx += info["shift"][0]
             hy += info["shift"][1]
@@ -382,7 +402,10 @@ def _molecule_with_annotations_lines(info: dict, *, show_numbers: bool,
             lines.append(
                 f"  \\node[fill=white, inner sep=1pt] at ({hx:.2f},{hy:.2f}) {{H}};"
             )
-            xh_points.setdefault(a, []).append((hx, hy))
+            # 存局部坐标（未加 shift）：mech_arrow_origin 的 a#k 分支会加 shift，
+            # 否则双重平移导致 b/c 箭头起点偏移（问题 8）
+            xh_points.setdefault(a, []).append((hx - info["shift"][0],
+                                                hy - info["shift"][1]))
     info["xh_points"] = xh_points
     # [BOND] 反应位点键突出：复用骨架修剪段，红色粗线与原键完全对齐
     for spec in info["bonds"]:
@@ -609,8 +632,26 @@ def render_composite(layout: str, children: list) -> str:
             items.append((el[0],))
         elif el[0] == "arrow":
             items.append(("arrow", el[1]))
+    # 布局感知 XH 外延：id(mol) → {原子: 显式 H 数}，供 bbox_fn 计入
+    # H 节点位置（问题 6：否则孤立碳 CH4 的 H 超出 bbox，与主箭头重叠）
+    xh_by_mol = {}
+    for cid, info in mols.items():
+        if info.get("xh"):
+            cnt = {}
+            for a in info["xh"]:
+                cnt[a] = cnt.get(a, 0) + 1
+            xh_by_mol[id(info["mol"])] = cnt
+
+    def _bbox_with_xh(mol):
+        cnt = xh_by_mol.get(id(mol))
+        if not cnt:
+            return mol_visual_bbox(mol, include_lone_pairs=False)
+        return mol_visual_bbox_xh(mol, cnt, h_len_scale=_MOL_SCALE,
+                                  include_lone_pairs=False)
+
     rows, y_offsets = layout_rows(items, mol_gap=_MOL_GAP, plus_w=_PLUS_W,
-                                  arrow_w=_ARR_W, arrow_pad=_ARR_PAD)
+                                  arrow_w=_ARR_W, arrow_pad=_ARR_PAD,
+                                  bbox_fn=_bbox_with_xh)
     plus_positions = []      # (x, yoff)
     res_positions = []       # (x, yoff)
     main_arrows = []         # [x1, x2, cond, yoff]
@@ -683,7 +724,10 @@ def render_composite(layout: str, children: list) -> str:
         else:
             lines.append(arrow_node + ";")
 
-    lines.extend(draw_mech_arrows(mols, _parse_mech_arrows(mech_specs)))
+    # 加号实际坐标（y 取负：布局 yoff 向下为正，渲染取反）——供成键空位避让
+    plus_xy = [(px, -yoff) for px, yoff in plus_positions]
+    lines.extend(draw_mech_arrows(mols, _parse_mech_arrows(mech_specs),
+                                  plus_positions=plus_xy))
 
     lines.append(r"\end{tikzpicture}")
     return "\n".join(lines)
