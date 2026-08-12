@@ -232,12 +232,15 @@ if __name__ == "__main__":
     if not questions:
         print("用法: python -m core.metrics \"问题1\" \"问题2\" ...")
         print("      python -m core.metrics --questions-file questions.txt")
-        print("      --detail-file FILE 把每条 LLM 完整输出写入文件")
+        print("      --detail-file FILE 把每条 LLM 完整输出写入文件（终端仍打印摘要）")
+        print("      --report-only 终端只打印统计报告，不打印逐问题详情")
         sys.exit(1)
     stats = evaluate_compliance(questions)
     print(format_report(stats))
-    print()
-    print(format_detail(stats))
+    report_only = "--report-only" in sys.argv
+    if not report_only:
+        print()
+        print(format_detail(stats))
     if "--detail-file" in sys.argv:
         i = sys.argv.index("--detail-file")
         with open(sys.argv[i + 1], "w", encoding="utf-8") as f:
