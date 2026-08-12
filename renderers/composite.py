@@ -109,9 +109,11 @@ def _fmt_coeff(c: float) -> str:
         return str(int(c))
     return f"{int(c * 2)}/2"
 
+# 端点支持三种：原子序号（0）、键中点（0-1）、显式 H（0#1 = 原子 0 的第 1 个 XH）
+_MECH_PT_RE = r"\d+(?:-\d+)?(?:#\d+)?"
 _MECH_ARROW_RE = re.compile(
-    r"^\s*([A-Za-z0-9_]+)\s*:\s*(\d+(?:-\d+)?)\s*(>>|>)\s*"
-    r"([A-Za-z0-9_]+)\s*:\s*(\d+(?:-\d+)?)"
+    rf"^\s*([A-Za-z0-9_]+)\s*:\s*({_MECH_PT_RE})\s*(>>|>)\s*"
+    rf"([A-Za-z0-9_]+)\s*:\s*({_MECH_PT_RE})"
     r"(?:\s*\+\s*([A-Za-z0-9_]+)\s*:\s*(\d+))?\s*$"
 )
 
@@ -191,7 +193,8 @@ def draw_mech_arrows(mols: dict, arrows: list) -> list:
         dlab = _mech_labeler(dm)
         if dst2_id is None:
             p1 = mech_arrow_origin(dm["mol"], dst_pt, dm["shift"],
-                                   lone_pair_offset=False)
+                                   lone_pair_offset=False,
+                                   xh_points=dm.get("xh_points"))
         else:
             p1 = _bond_form_midpoint(mols, dst_id, dst_pt, dst2_id, dst2_pt)
         if p1 is None:
@@ -200,14 +203,16 @@ def draw_mech_arrows(mols: dict, arrows: list) -> list:
                                toward=(p1[0], p1[1]),
                                prefer_single=(kind == "fishhook"),
                                labeler=slab,
-                               bend_side=-1.0 if "-" in src_pt else 1.0)
+                               bend_side=-1.0 if "-" in src_pt else 1.0,
+                               xh_points=sm.get("xh_points"))
         if p0 is None:
             continue
         if dst2_id is None:
             p1 = mech_arrow_origin(dm["mol"], dst_pt, dm["shift"],
                                    lone_pair_offset=False,
                                    toward=(p0[0], p0[1]), labeler=dlab,
-                                   bend_side=-1.0 if p0[2] else 1.0)
+                                   bend_side=-1.0 if p0[2] else 1.0,
+                                   xh_points=dm.get("xh_points"))
             if p1 is None:
                 continue
         bond_break = ("-" in src_pt
@@ -361,6 +366,7 @@ def _molecule_with_annotations_lines(info: dict, *, show_numbers: bool,
     xh_counts = {}
     for a in info["xh"]:
         xh_counts[a] = xh_counts.get(a, 0) + 1
+    xh_points = {}   # {原子序号: [(hx, hy), ...]} 供 MECHARROW "a#k" 端点引用
     for a, count in xh_counts.items():
         if a >= mol.GetNumAtoms():
             continue
@@ -374,6 +380,8 @@ def _molecule_with_annotations_lines(info: dict, *, show_numbers: bool,
             lines.append(
                 f"  \\node[fill=white, inner sep=1pt] at ({hx:.2f},{hy:.2f}) {{H}};"
             )
+            xh_points.setdefault(a, []).append((hx, hy))
+    info["xh_points"] = xh_points
     # [BOND] 反应位点键突出：复用骨架修剪段，红色粗线与原键完全对齐
     for spec in info["bonds"]:
         if "-" not in spec:

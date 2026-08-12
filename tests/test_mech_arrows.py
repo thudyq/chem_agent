@@ -70,6 +70,40 @@ def test_draw_mech_arrows_skip_invalid_point():
     assert lines == []
 
 
+def test_draw_mech_arrows_explicit_h_point():
+    """B1（20260812）：a#k 端点定位到 [XH] 显式 H 节点坐标。
+
+    C（单碳，仅 0 号原子）加 [XH] 画出 1 个 H，MECHARROW 用 ch4:0#1 引用它。
+    """
+    mols = _mols("C")
+    mols["r0"]["xh"] = [0]
+    mols["r0"]["explicit_hs"] = {0: 1}
+    # 模拟 XH 渲染收集的坐标（局部，未加 shift）——与实际 place_explicit_hs 一致
+    from renderers.mol_primitives import place_explicit_hs
+    pts = place_explicit_hs(mols["r0"]["mol"], 0, 1)
+    mols["r0"]["xh_points"] = {0: pts}
+    lines = draw_mech_arrows(mols, _parse_mech_arrows(["r0:0#1>r0:0"]))
+    assert lines, "a#k 端点应能定位到显式 H 并绘制箭头"
+
+
+def test_draw_mech_arrows_explicit_h_missing_skips():
+    """a#k 但组件无对应显式 H（未声明 XH）→ 跳过，不崩溃。"""
+    mols = _mols("C")
+    mols["r0"]["xh_points"] = {}
+    lines = draw_mech_arrows(mols, _parse_mech_arrows(["r0:0#1>r0:0"]))
+    assert lines == []
+
+
+def test_draw_mech_arrows_explicit_h_out_of_range_skips():
+    """a#k 的 k 超出显式 H 数 → 跳过。"""
+    mols = _mols("C")
+    from renderers.mol_primitives import place_explicit_hs
+    mols["r0"]["xh"] = [0]
+    mols["r0"]["xh_points"] = {0: place_explicit_hs(mols["r0"]["mol"], 0, 1)}
+    lines = draw_mech_arrows(mols, _parse_mech_arrows(["r0:0#2>r0:0"]))
+    assert lines == []
+
+
 def test_draw_mech_arrows_bond_form_midpoint():
     """成键空白位终点（id:a+id:b，跨组件两原子中点）：正常绘制。"""
     mols = _mols("[Br]", "C=C")

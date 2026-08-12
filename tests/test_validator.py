@@ -466,6 +466,68 @@ def test_composite_mecharrow_midpoint_bond_mixed_rejected(fake_rdkit):
     assert "成键空白位端点格式错误" in invalid[0].reason
 
 
+class TestMechArrowExplicitH:
+    """B1（20260812）：MECHARROW 端点 a#k（显式 H 引用）校验。
+
+    自由基夺氢机理：单碳组分 C（CH4）加 [XH] 显式画 H，用 ch4:0#1 引用。
+    真实 RDKit（fake_rdkit 白名单不含 C/[Cl]/[CH3]）。
+    """
+
+    def test_explicit_h_endpoint_passes(self):
+        """[XH:ch4|0] + ch4:0#1 引用 → 放行。"""
+        pytest.importorskip("rdkit")
+        text = ("[COMPOSITE:reaction_mech]"
+                "[STRUCT:[Cl],id=cl,label=Cl·][PLUS][STRUCT:C,id=ch4,label=CH4][XH:ch4|0]"
+                "[RXNARROW]"
+                "[STRUCT:Cl,id=hcl,label=HCl][PLUS][STRUCT:[CH3],id=me,label=·CH3]"
+                "[MECHARROW:cl:0>>cl:0+ch4:0]"
+                "[MECHARROW:ch4:0#1>>cl:0+ch4:0]"
+                "[MECHARROW:ch4:0#1>>me:0]"
+                "[/COMPOSITE]")
+        _, invalid = _validate(text)
+        assert len(invalid) == 0
+
+    def test_explicit_h_without_xh_rejected(self):
+        """a#k 但组件未声明 [XH] → 拦截（提示需先画显式 H）。"""
+        pytest.importorskip("rdkit")
+        text = ("[COMPOSITE:reaction_mech]"
+                "[STRUCT:[Cl],id=cl,label=Cl·][PLUS][STRUCT:C,id=ch4,label=CH4]"
+                "[RXNARROW]"
+                "[STRUCT:Cl,id=hcl,label=HCl][PLUS][STRUCT:[CH3],id=me,label=·CH3]"
+                "[MECHARROW:cl:0>>cl:0+ch4:0]"
+                "[MECHARROW:ch4:0#1>>me:0]"
+                "[/COMPOSITE]")
+        _, invalid = _validate(text)
+        assert len(invalid) == 1
+        assert "超出原子范围" in invalid[0].reason
+
+    def test_explicit_h_index_out_of_range_rejected(self):
+        """k 超出该原子显式 H 数（[XH:ch4|0] 只画 1 个，写 0#2）→ 拦截。"""
+        pytest.importorskip("rdkit")
+        text = ("[COMPOSITE:reaction_mech]"
+                "[STRUCT:[Cl],id=cl,label=Cl·][PLUS][STRUCT:C,id=ch4,label=CH4][XH:ch4|0]"
+                "[RXNARROW]"
+                "[STRUCT:Cl,id=hcl,label=HCl][PLUS][STRUCT:[CH3],id=me,label=·CH3]"
+                "[MECHARROW:ch4:0#2>>me:0]"
+                "[/COMPOSITE]")
+        _, invalid = _validate(text)
+        assert len(invalid) == 1
+        assert "超出原子范围" in invalid[0].reason
+
+    def test_legacy_implicit_h_bond_rejected(self):
+        """旧写法 ch4:0-1（隐含 H 键）仍拦截——提示改用 a#k（B1 回归）。"""
+        pytest.importorskip("rdkit")
+        text = ("[COMPOSITE:reaction_mech]"
+                "[STRUCT:[Cl],id=cl,label=Cl·][PLUS][STRUCT:C,id=ch4,label=CH4][XH:ch4|0]"
+                "[RXNARROW]"
+                "[STRUCT:Cl,id=hcl,label=HCl][PLUS][STRUCT:[CH3],id=me,label=·CH3]"
+                "[MECHARROW:ch4:0-1>>me:0]"
+                "[/COMPOSITE]")
+        _, invalid = _validate(text)
+        assert len(invalid) == 1
+        assert "超出原子范围" in invalid[0].reason
+
+
 def test_xh_toplevel_valid(fake_rdkit):
     _, invalid = _validate("[XH:CC=O|1]")
     assert len(invalid) == 0

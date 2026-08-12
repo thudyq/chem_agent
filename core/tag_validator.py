@@ -50,10 +50,12 @@ LABEL_MAX_LEN = 24
 COMPOSITE_LAYOUTS = ("reaction_mech", "row", "energy", "resonance")
 
 # 与 renderers/composite.py 相同的引用/端点提取正则
-# （目标端可选 "+id:原子" 后缀：成键空白位，两原子间中点）
+# 端点支持三种：原子序号（0）、键中点（0-1）、显式 H（0#1 = 原子 0 的第 1 个 XH）。
+# 与 renderers/composite.py 的 _MECH_PT_RE 保持一致。
+_MECH_PT_RE = r"\d+(?:-\d+)?(?:#\d+)?"
 _MECH_ARROW_RE = re.compile(
-    r"^\s*([A-Za-z0-9_]+)\s*:\s*(\d+(?:-\d+)?)\s*(>>|>)\s*"
-    r"([A-Za-z0-9_]+)\s*:\s*(\d+(?:-\d+)?)"
+    rf"^\s*([A-Za-z0-9_]+)\s*:\s*({_MECH_PT_RE})\s*(>>|>)\s*"
+    rf"([A-Za-z0-9_]+)\s*:\s*({_MECH_PT_RE})"
     r"(?:\s*\+\s*([A-Za-z0-9_]+)\s*:\s*(\d+))?\s*$"
 )
 
@@ -573,8 +575,22 @@ def _validate_energy(args: list) -> Tuple[bool, str]:
     return True, ""
 
 
-def _validate_mech_arrow_pt(pt: str, n_atoms: int) -> bool:
-    """端点（原子序号或 a-b 键）是否在原子数范围内。"""
+def _validate_mech_arrow_pt(pt: str, n_atoms: int,
+                            xh_count: dict | None = None) -> bool:
+    """端点（原子序号 / a-b 键 / a#k 显式 H）是否合法。
+
+    "a#k"：原子 a 的第 k 个显式 H（k 从 1 起），需 xh_count 提供
+    {原子号: 显式 H 数}；未提供或 k 超限视为非法。
+    """
+    if "#" in pt:
+        a, _, k = pt.partition("#")
+        try:
+            ia, ik = int(a), int(k)
+        except ValueError:
+            return False
+        if not 0 <= ia < n_atoms or ik < 1:
+            return False
+        return bool(xh_count) and xh_count.get(ia, 0) >= ik
     if "-" in pt:
         a, b = pt.split("-")
         try:
@@ -652,6 +668,19 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
                 atom_counts[cid] = mol.GetNumAtoms() if mol else 0
                 comp_mols[cid] = mol
 
+    # XH pre-scan：先收集各组件原子上的显式 H 计数，供 MECHARROW "a#k"
+    # 端点校验（XH 子标记在容器内任意位置，可能在 MECHARROW 之后）
+    xh_count = {}
+    for child in children:
+        if child.type == "XH" and len(child.args) >= 2:
+            ref = child.args[0].strip()
+            try:
+                i = int(child.args[1])
+            except ValueError:
+                continue
+            slot = xh_count.setdefault(ref, {})
+            slot[i] = slot.get(i, 0) + 1
+
     xh_usage = {}
     for child in children:
         ctype = child.type
@@ -671,12 +700,17 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
                     if "-" in dst_pt:
                         return False, f"MECHARROW 成键空白位端点格式错误「{spec}」"
                 if _RDKIT_OK:
-                    if not _validate_mech_arrow_pt(src_pt, atom_counts.get(src_id, 0)):
+                    if not _validate_mech_arrow_pt(
+                            src_pt, atom_counts.get(src_id, 0),
+                            xh_count.get(src_id)):
                         return False, f"MECHARROW 源端点「{src_id}:{src_pt}」超出原子范围"
-                    if not _validate_mech_arrow_pt(dst_pt, atom_counts.get(dst_id, 0)):
+                    if not _validate_mech_arrow_pt(
+                            dst_pt, atom_counts.get(dst_id, 0),
+                            xh_count.get(dst_id)):
                         return False, f"MECHARROW 目标端点「{dst_id}:{dst_pt}」超出原子范围"
                     if dst2_id is not None and not _validate_mech_arrow_pt(
-                            dst2_pt, atom_counts.get(dst2_id, 0)):
+                            dst2_pt, atom_counts.get(dst2_id, 0),
+                            xh_count.get(dst2_id)):
                         return False, f"MECHARROW 目标端点「{dst2_id}:{dst2_pt}」超出原子范围"
         elif ctype in ("CHARGE", "HBOND") and len(child.args) >= 2:
             ref = child.args[0].strip()

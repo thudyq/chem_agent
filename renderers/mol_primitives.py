@@ -32,8 +32,11 @@ def atom_label(atom, explicit_hs: int = 0, flip: bool = False) -> str | None:
     （Instruction-for-Electrons §三；此前与圆圈并存导致双重显示）。
     """
     z = atom.GetAtomicNum()
-    if z == 6 and atom.GetFormalCharge() == 0:
+    if z == 6 and atom.GetFormalCharge() == 0 and not _only_h_neighbors(atom):
+        # 键线式：有重原子邻居的碳不标（CHn 由骨架线隐含）
         return None
+    # 孤立碳（仅连 H，如 CH4 的 C）无键线式可言——必须显示 C/CH4
+    # （B1 20260812：自由基夺氢机理的单碳组分，否则图上是空位）
 
     sym = atom.GetSymbol()
     sym = sym[0].upper() + sym[1:]
@@ -1290,12 +1293,14 @@ def bond_order_of(mol, spec: str) -> int:
 def mech_arrow_origin(mol, spec: str, shift=(0.0, 0.0),
                       lone_pair_offset: bool = True, toward=None,
                       prefer_single: bool = False, labeler=None,
-                      label_gap: float = _MECH_LABEL_GAP, bend_side: float = 1.0):
+                      label_gap: float = _MECH_LABEL_GAP, bend_side: float = 1.0,
+                      xh_points: dict | None = None):
     """解析机理箭头端点引用为画布坐标。
 
     参数:
         mol: RDKit Mol（需已有 2D 坐标）。
-        spec: "a"（原子 a）或 "a-b"（原子 a 与 b 之间的键中点）。
+        spec: "a"（原子 a）、"a-b"（原子 a 与 b 之间的键中点）或
+            "a#k"（原子 a 的第 k 个显式 H，k 从 1 起；需 xh_points 提供坐标）。
         shift: 分子在画布上的平移量。
         lone_pair_offset: 为 True 且端点是有孤对电子的杂原子时，坐标落在
             孤对电子点上（教科书风格）；箭头终点应为 False。
@@ -1310,6 +1315,8 @@ def mech_arrow_origin(mol, spec: str, shift=(0.0, 0.0),
         label_gap: aim_end 末端到标签正方形边缘的间距（_MECH_LABEL_GAP）。
         bend_side: 弯向（-1 向下 / +1 向上），多键端点按弯向取"靠外杠"：
             <0 取 y 最小杠（下）、>0 取 y 最大杠（上），再沿弯向外移 0.05。
+        xh_points: {原子序号: [(hx, hy), ...]} 显式 H 画布坐标（局部，未加 shift）；
+            spec 为 "a#k" 时必需——定位到第 k 个显式 H 节点。
 
     返回:
         (x, y, from_bond, on_electron, on_label)；spec 无效或原子越界返回 None。
@@ -1317,6 +1324,20 @@ def mech_arrow_origin(mol, spec: str, shift=(0.0, 0.0),
         on_label 为 True 时端点已吸附到标签边缘（调用方不应再内缩）。
     """
     spec = spec.strip()
+    if "#" in spec:
+        # 显式 H 端点："a#k" = 原子 a 的第 k 个显式 H（k 从 1 起）
+        a, _, k = spec.partition("#")
+        try:
+            ia, ik = int(a), int(k)
+        except ValueError:
+            return None
+        if ia >= mol.GetNumAtoms():
+            return None
+        pts = (xh_points or {}).get(ia)
+        if not pts or not 1 <= ik <= len(pts):
+            return None
+        hx, hy = pts[ik - 1]
+        return (hx + shift[0], hy + shift[1], False, False, False)
     if "-" in spec:
         a, _, b = spec.partition("-")
         try:

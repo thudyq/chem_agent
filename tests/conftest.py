@@ -29,6 +29,9 @@ KNOWN_SMILES = {
     "OCCO": _FakeMol(4), "C=C": _FakeMol(2), "CC=O": _FakeMol(3),
     "[H]O[H]": _FakeMol(3), "[H]": _FakeMol(1), "[H+]": _FakeMol(1),
     "C[C@@H](O)C(=O)O": _FakeMol(6),
+    # B1（20260812）自由基机理：单原子/小分子组分
+    "C": _FakeMol(1), "Cl": _FakeMol(1), "ClCl": _FakeMol(2),
+    "[Cl]": _FakeMol(1), "[CH3]": _FakeMol(1),
 }
 
 
