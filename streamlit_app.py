@@ -32,6 +32,7 @@ st.code(language="latex")。
 
 import inspect
 import json
+import os
 import re
 import tempfile
 import time
@@ -458,24 +459,40 @@ def _attachment_popover() -> None:
         st.button("＋", key="attach")
 
 
-def _ocr_and_ask(name: str, data: bytes) -> None:
-    """图片字节 → 临时文件 → 视觉识别 SMILES → 自动提问。"""
+def _describe_and_ask(name: str, data: bytes, question: str = "") -> None:
+    """图片字节 → 视觉理解 → 与用户文字合并提问（question 为空时按图片内容自问）。
+
+    多模态两段式（B 方案）：图片描述与用户文字合并为同一条问题传给主模型，
+    覆盖"解答截图 + 针对其中内容提问"场景。
+    """
     suffix = "." + name.rsplit(".", 1)[-1].lower()
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp.write(data)
         tmp_path = tmp.name
-    with st.spinner("识别结构式（视觉模型）..."):
-        from utils.ocr_utils import image_to_smiles
-        smiles = image_to_smiles(tmp_path)
-    if smiles:
-        st.success(f"识别到 SMILES：`{smiles}`")
-        cur = next((s for s in st.session_state.sessions
-                    if s["id"] == st.session_state.current_id), None)
-        if cur:
-            _ask(st.session_state.sessions, cur["id"],
-                 f"这个化合物的 SMILES 是 {smiles}，请分析其结构特征、官能团和基本化学性质。")
+    with st.spinner("理解图片内容（视觉模型）..."):
+        from utils.ocr_utils import describe_image
+        desc = describe_image(tmp_path)
+    try:
+        os.unlink(tmp_path)
+    except OSError:
+        pass
+    if not desc or not desc.get("content"):
+        st.error("图片理解失败。请在 .env 中配置 VISION_MODEL 为支持视觉的模型（如 GLM-4.6V）。")
+        return
+    if question:
+        merged = f"{question}\n（附图内容（{desc['type']}）：{desc['content']}）"
     else:
-        st.error("识别失败。请在 .env 中配置 VISION_MODEL 为支持视觉的模型（如 GLM-4V / Qwen2-VL）。")
+        merged = (f"用户上传了一张图片，图片内容（{desc['type']}）如下：\n"
+                  f"{desc['content']}\n请解答或分析其中的化学内容。")
+    cur = next((s for s in st.session_state.sessions
+                if s["id"] == st.session_state.current_id), None)
+    if cur:
+        _ask(st.session_state.sessions, cur["id"], merged)
+
+
+def _ocr_and_ask(name: str, data: bytes) -> None:
+    """仅图片（无附带文字）：视觉理解后按图片内容组织提问。"""
+    _describe_and_ask(name, data)
 
 
 def _handle_pending_upload() -> None:
@@ -616,14 +633,18 @@ if cur is not None:
     if _CHAT_FILE_OK:
         _handle_pending_upload()
         if _submitted:
-            if _submitted.files:
+            text = (_submitted.text or "").strip()
+            if _submitted.files and text:
+                # 图文同传：先理解图片，再与文字合并为同一条问题
+                f = _submitted.files[0]
+                _describe_and_ask(f.name, f.getvalue(), text)
+            elif _submitted.files:
+                # 仅附件无文字：暂存并展示预览（识别并分析/移除）
                 f = _submitted.files[0]
                 st.session_state.pending_upload = (f.name, f.getvalue())
-            text = (_submitted.text or "").strip()
-            if text:
+                _rerun()
+            elif text:
                 _ask(sessions, cur["id"], text)
-            elif _submitted.files:
-                _rerun()  # 仅附件无文字：重跑以展示附件预览
     elif _CHAT_INPUT_OK:
         # chat_input 无附件能力（<1.46）：保留 ＋ 弹层上传
         _attachment_popover()

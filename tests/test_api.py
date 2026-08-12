@@ -141,11 +141,12 @@ def test_chat_stream_error_fallback(client, monkeypatch):
 
 
 def test_chat_multimodal_image(client, monkeypatch, tmp_path):
-    """content 数组中的 image_url 经识别后并入问题。"""
+    """content 数组中的 image_url 经视觉理解后并入问题（与文字合并）。"""
     captured = {}
     monkeypatch.setattr(api, "_fetch_image_to_temp", lambda url, tmp: "x.png")
     import utils.ocr_utils as ocr
-    monkeypatch.setattr(ocr, "image_to_smiles", lambda p: "c1ccccc1")
+    monkeypatch.setattr(ocr, "describe_image",
+                        lambda p: {"type": "结构式", "content": "苯环，SMILES: c1ccccc1"})
     monkeypatch.setattr(api, "process_question",
                         lambda *a, **k: captured.setdefault("q", a[0] if a else None) or FAKE_ANSWER)
     payload = {"messages": [{"role": "user", "content": [

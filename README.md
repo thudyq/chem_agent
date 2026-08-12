@@ -104,7 +104,7 @@ graph LR
 │   ├── rdkit_utils.py         # RDKit 验证工具
 │   ├── tikz_utils.py          # TikZ 代码美化
 │   ├── latex_compile.py       # TikZ 代码编译为 PNG
-│   └── ocr_utils.py           # 图片转 SMLES
+│   └── ocr_utils.py           # 图片多模态理解（视觉模型描述图片内容）
 ├── prompts/
 │   └── system_prompt.txt      # 核心 System Prompt
 ├── tests/                     # 单元测试

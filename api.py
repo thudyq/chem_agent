@@ -286,7 +286,8 @@ def _build_question(text: str, images: list, audios: list, files: list,
                     tmp_dir: str) -> str:
     """文本 + 各模态附件处理结果拼成最终问题。
 
-    图片经视觉模型识别为 SMILES；音频暂不支持（显式提示）；
+    图片经视觉模型理解为结构化描述（文字转录/结构 SMILES/机理描述），
+    与用户文字合并为同一问题；音频暂不支持（显式提示）；
     文本类文件（txt/md/csv）下载后内联，其余文件类型显式提示不支持。
     所有失败都给出明确原因并打日志，不静默丢弃。
     """
@@ -299,19 +300,23 @@ def _build_question(text: str, images: list, audios: list, files: list,
                 "无法识别图片内容，请提示用户先描述结构或联系管理员配置视觉模型）"
             )
         else:
-            from utils.ocr_utils import image_to_smiles
-            for url in images:
+            from utils.ocr_utils import describe_image
+            for i, url in enumerate(images, 1):
                 path = _fetch_image_to_temp(url, tmp_dir)
                 if not path:
                     print(f"[api] 图片下载/解码失败: {url[:80]}")
                     parts.append("（一张图片下载失败，已忽略）")
                     continue
-                smiles = image_to_smiles(path)
-                if smiles:
-                    parts.append(f"（上传的结构式图片识别为 SMILES：{smiles}）")
+                desc = describe_image(path)
+                if desc and desc.get("content"):
+                    # 图片描述与用户文字合并为同一问题（多模态两段式，B 方案）
+                    parts.append(
+                        f"（用户上传的图片 {i} 的内容（{desc['type']}）："
+                        f"{desc['content']}）"
+                    )
                 else:
-                    print(f"[api] 视觉模型未能识别图片: {url[:80]}")
-                    parts.append("（一张结构式图片识别失败，已忽略）")
+                    print(f"[api] 视觉模型未能理解图片: {url[:80]}")
+                    parts.append("（一张图片理解失败，已忽略）")
     for url, fmt in audios:
         print(f"[api] 收到音频输入（{fmt or '未知格式'}），暂不支持: {url[:80]}")
         parts.append("（用户上传了一段音频，本服务暂不支持音频输入，请改用文字描述）")
