@@ -33,6 +33,7 @@ _ROOT = Path(__file__).resolve().parent.parent
 # fast_test/ 为本地临时诊断区，可能含 LLM 真实错误输出，不纳入审计）
 _TEXT_FILES = [
     "prompts/system_prompt.txt",
+    "prompts/Instruction-for-SMILES.md",
     "README.md",
     "instructions/Test-Method.md",
     "instructions/Chemical-Notation.md",

@@ -13,6 +13,9 @@ _STRUCTURE_INSTRUCTION_PATH = (
 _HBOND_INSTRUCTION_PATH = (
     Path(__file__).resolve().parent.parent / "prompts" / "Instruction-for-Hbonds.md"
 )
+_SMILES_INSTRUCTION_PATH = (
+    Path(__file__).resolve().parent.parent / "prompts" / "Instruction-for-SMILES.md"
+)
 
 
 def _load_instruction(path: Path) -> str:
@@ -30,6 +33,11 @@ def load_arrow_instructions() -> str:
 def load_structure_instructions() -> str:
     """加载结构式使用规范。"""
     return _load_instruction(_STRUCTURE_INSTRUCTION_PATH)
+
+
+def load_smiles_instructions() -> str:
+    """加载 SMILES 书写规范。"""
+    return _load_instruction(_SMILES_INSTRUCTION_PATH)
 
 
 def load_hbond_instructions() -> str:
@@ -78,6 +86,17 @@ def load_system_prompt() -> str:
             + "氢键绘制规范（来自 prompts/Instruction-for-Hbonds.md）\n"
             + "============================================================\n\n"
             + hbond_instructions
+        )
+
+    smiles_instructions = load_smiles_instructions()
+    if smiles_instructions:
+        system_prompt = (
+            system_prompt
+            + "\n\n"
+            + "============================================================\n"
+            + "SMILES 书写规范（来自 prompts/Instruction-for-SMILES.md，权威参考）\n"
+            + "============================================================\n\n"
+            + smiles_instructions
         )
 
     return system_prompt
