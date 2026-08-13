@@ -97,6 +97,29 @@ def test_composite_mecharrow_atom_out_of_range(fake_rdkit):
     assert "超出范围" in invalid[0].reason
 
 
+def test_composite_mecharrow_nonexistent_bond_rejected():
+    """MECHARROW 的 a-b 端点必须真实成键——引用不存在的键（乙醛 0-2）拦截。
+
+    回归锚点：LLM 在羟醛缩合中写 `ald:0-2`（乙醛 CC=O 的 0 与 2 无键），
+    旧校验只查序号范围不查键存在性，漏洞放行导致渲染到错误位置。
+    """
+    pytest.importorskip("rdkit")
+    text = ("[COMPOSITE:reaction_mech][STRUCT:CC=O,id=ald][RXNARROW]"
+            "[STRUCT:CCO,id=p0][MECHARROW:ald:0>ald:0-2][/COMPOSITE]")
+    _, invalid = _validate(text)
+    assert len(invalid) == 1
+    assert "没有成键" in invalid[0].reason
+
+
+def test_composite_mecharrow_existing_bond_passes():
+    """a-b 端点引用真实存在的键（乙醛 0-1）放行。"""
+    pytest.importorskip("rdkit")
+    text = ("[COMPOSITE:reaction_mech][STRUCT:CC=O,id=ald][RXNARROW]"
+            "[STRUCT:CCO,id=p0][MECHARROW:ald:0>ald:0-1][/COMPOSITE]")
+    _, invalid = _validate(text)
+    assert len(invalid) == 0
+
+
 class TestChemicalChecks:
     """化学校验（T2-2 label 一致性 / T2-3 原子守恒）：需要真实 RDKit，
     不使用 fake_rdkit（元素计数依赖真实 Mol）。"""

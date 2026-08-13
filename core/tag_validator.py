@@ -603,11 +603,14 @@ def _validate_energy(args: list) -> Tuple[bool, str]:
 
 
 def _validate_mech_arrow_pt(pt: str, n_atoms: int,
-                            xh_count: dict | None = None) -> str:
+                            xh_count: dict | None = None,
+                            mol=None) -> str:
     """端点（原子序号 / a-b 键 / a#k 显式 H）合法性，返回原因串（""=合法）。
 
     "a#k"：原子 a 的第 k 个显式 H（k 从 1 起），需 xh_count 提供
     {原子号: 显式 H 数}。缺 XH 与序号越界分开报告，便于修正环节引导。
+    mol：RDKit Mol（可选）——"a-b" 键端点用它验证两原子间确实存在化学键，
+    防止引用不存在的键（如乙醛 CC=O 的 0-2 无键）；mol 缺失时只查序号范围。
     """
     if "#" in pt:
         a, _, k = pt.partition("#")
@@ -634,6 +637,12 @@ def _validate_mech_arrow_pt(pt: str, n_atoms: int,
             return f"键端点格式错误「{pt}」（应为 原子a-原子b）"
         if not (0 <= ia < n_atoms and 0 <= ib < n_atoms):
             return f"键端点「{pt}」越界（该分子只有 {n_atoms} 个重原子，0 起）"
+        gba = getattr(mol, "GetBondBetweenAtoms", None) if mol is not None else None
+        if gba is not None:
+            bond = gba(ia, ib)
+            if bond is None:
+                return (f"键端点「{pt}」引用原子 {ia} 与 {ib} 之间的键，"
+                        f"但该分子中这两原子没有成键（先确认键的真实连接）")
         return ""
     try:
         ia = int(pt)
@@ -743,18 +752,18 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
                 if _RDKIT_OK:
                     src_reason = _validate_mech_arrow_pt(
                         src_pt, atom_counts.get(src_id, 0),
-                        xh_count.get(src_id))
+                        xh_count.get(src_id), comp_mols.get(src_id))
                     if src_reason:
                         return False, f"MECHARROW 源端点「{src_id}:{src_pt}」{src_reason}"
                     dst_reason = _validate_mech_arrow_pt(
                         dst_pt, atom_counts.get(dst_id, 0),
-                        xh_count.get(dst_id))
+                        xh_count.get(dst_id), comp_mols.get(dst_id))
                     if dst_reason:
                         return False, f"MECHARROW 目标端点「{dst_id}:{dst_pt}」{dst_reason}"
                     if dst2_id is not None:
                         dst2_reason = _validate_mech_arrow_pt(
                             dst2_pt, atom_counts.get(dst2_id, 0),
-                            xh_count.get(dst2_id))
+                            xh_count.get(dst2_id), comp_mols.get(dst2_id))
                         if dst2_reason:
                             return False, (f"MECHARROW 目标端点「{dst2_id}:{dst2_pt}」"
                                            f"{dst2_reason}")
