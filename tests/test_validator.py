@@ -323,6 +323,19 @@ class TestCoeffAndBalanceRules:
         assert len(invalid) == 1
         assert "碳原子数不守恒" in invalid[0].reason
 
+    def test_arrow_fractional_coeff_oh_allowed(self):
+        """ARROW 分数系数：O/H 分数原子放行（只比 C，1/2CCOCC 的 0.5O 忽略）。"""
+        pytest.importorskip("rdkit")
+        _, invalid = _validate("[ARROW:CCO,1/2CCOCC,浓H2SO4,140℃]")  # C2=C2
+        assert len(invalid) == 0
+
+    def test_arrow_fractional_c_rejected(self):
+        """ARROW 分数系数：C 为分数（1/2×奇数 C）拦截。"""
+        pytest.importorskip("rdkit")
+        _, invalid = _validate("[ARROW:1/2CCC,CCO,Cu]")         # 1.5C≠2C 分数 C
+        assert len(invalid) == 1
+        assert "物种无法计数" in invalid[0].reason
+
     def test_arrow_formula_species(self):
         """ARROW 物种可为化学式（O2/H2O）而非 SMILES（公式回退计数）。"""
         pytest.importorskip("rdkit")

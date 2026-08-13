@@ -323,6 +323,25 @@ def _sum_species(species: list):
     return total_c, total_q
 
 
+def _sum_c_counts(species: list):
+    """ARROW 专用 C-only 计数：Σcoeff×C（只比 C，O/H 增减允许）。
+
+    ARROW 为单→单骨架展示，O/H 的分数原子（如 1/2CCOCC 的 0.5 个 O）是
+    氧化/脱氢的常态，不参与守恒判定；但 C 的分数（1/2×奇数 C）仍拒绝。
+    任一物种无法解析返回 None。
+    """
+    total = 0
+    for coeff, smi in species:
+        mc = _formula_or_smiles_counts(smi)
+        if mc is None:
+            return None
+        c = mc[0].get("C", 0) * coeff
+        if c != int(c):
+            return None  # 分数 C（n/2 但 C 计数为奇数）
+        total += int(c)
+    return total
+
+
 def _balance_reason(left, right, strict_h: bool, step: str,
                     check_charge: bool = True) -> str:
     """两侧元素计数比对：非 H 元素必须相等；strict_h 时 H 也必须相等。
@@ -558,14 +577,14 @@ def _validate_arrow(args: list) -> Tuple[bool, str]:
     for _, bare in sides:
         if _formula_or_smiles_counts(bare) is None:
             return False, f"无效 SMILES「{bare}」"
-    left = _sum_species(sides[:1])
-    right = _sum_species(sides[1:])
+    # ARROW 当量检验只比 C 原子数（O/H 增减是氧化/脱氢常态，分数 O/H 允许）
+    left = _sum_c_counts(sides[:1])
+    right = _sum_c_counts(sides[1:])
     if left is None or right is None:
         return False, "ARROW 当量检验失败（物种无法计数）"
-    lc, rc = left[0].get("C", 0), right[0].get("C", 0)
-    if lc != rc:
+    if left != right:
         return False, (f"化学校验：反应箭头两侧碳原子数不守恒"
-                       f"（左 {lc} vs 右 {rc}，系数参与计算）")
+                       f"（左 {left} vs 右 {right}，系数参与计算）")
     return True, ""
 
 
