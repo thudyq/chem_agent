@@ -221,14 +221,32 @@ if __name__ == "__main__":
     # Windows GBK 控制台打印含 ₆/CJK 的 LLM 输出会 UnicodeEncodeError，
     # 与 composite.py 同款处理：强制 UTF-8、不可编码字符替换
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    # 解析选项：--questions-file / --detail-file 各带 1 个文件参数，
+    # --report-only 为标志；其余位置参数才是问题（避免选项被当作问题）
+    args = sys.argv[1:]
     questions = []
-    if "--questions-file" in sys.argv:
-        i = sys.argv.index("--questions-file")
-        with open(sys.argv[i + 1], encoding="utf-8") as f:
-            questions = [ln.strip() for ln in f
-                         if ln.strip() and not ln.strip().startswith("#")]
-    else:
-        questions = sys.argv[1:]
+    detail_file = None
+    report_only = False
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--questions-file" and i + 1 < len(args):
+            with open(args[i + 1], encoding="utf-8") as f:
+                questions = [ln.strip() for ln in f
+                             if ln.strip() and not ln.strip().startswith("#")]
+            i += 2
+        elif a == "--detail-file" and i + 1 < len(args):
+            detail_file = args[i + 1]
+            i += 2
+        elif a == "--report-only":
+            report_only = True
+            i += 1
+        elif a.startswith("--"):
+            print(f"未知选项: {a}")
+            i += 1
+        else:
+            questions.append(a)
+            i += 1
     if not questions:
         print("用法: python -m core.metrics \"问题1\" \"问题2\" ...")
         print("      python -m core.metrics --questions-file questions.txt")
@@ -237,11 +255,9 @@ if __name__ == "__main__":
         sys.exit(1)
     stats = evaluate_compliance(questions)
     print(format_report(stats))
-    report_only = "--report-only" in sys.argv
     if not report_only:
         print()
         print(format_detail(stats))
-    if "--detail-file" in sys.argv:
-        i = sys.argv.index("--detail-file")
-        with open(sys.argv[i + 1], "w", encoding="utf-8") as f:
+    if detail_file:
+        with open(detail_file, "w", encoding="utf-8") as f:
             f.write(format_detail(stats, output_limit=1 << 30))  # 完整输出
