@@ -10,9 +10,6 @@ _ARROW_INSTRUCTION_PATH = (
 _STRUCTURE_INSTRUCTION_PATH = (
     Path(__file__).resolve().parent.parent / "prompts" / "Instruction-for-Structure.md"
 )
-_ELECTRONS_INSTRUCTION_PATH = (
-    Path(__file__).resolve().parent.parent / "prompts" / "Instruction-for-Electrons.md"
-)
 _HBOND_INSTRUCTION_PATH = (
     Path(__file__).resolve().parent.parent / "prompts" / "Instruction-for-Hbonds.md"
 )
@@ -33,11 +30,6 @@ def load_arrow_instructions() -> str:
 def load_structure_instructions() -> str:
     """加载结构式使用规范。"""
     return _load_instruction(_STRUCTURE_INSTRUCTION_PATH)
-
-
-def load_electrons_instructions() -> str:
-    """加载孤对电子与电荷标注规范。"""
-    return _load_instruction(_ELECTRONS_INSTRUCTION_PATH)
 
 
 def load_hbond_instructions() -> str:
@@ -75,17 +67,6 @@ def load_system_prompt() -> str:
             + "结构式使用规范（来自 prompts/Instruction-for-Structure.md）\n"
             + "============================================================\n\n"
             + structure_instructions
-        )
-
-    electrons_instructions = load_electrons_instructions()
-    if electrons_instructions:
-        system_prompt = (
-            system_prompt
-            + "\n\n"
-            + "============================================================\n"
-            + "孤对电子与电荷标注规范（来自 prompts/Instruction-for-Electrons.md）\n"
-            + "============================================================\n\n"
-            + electrons_instructions
         )
 
     hbond_instructions = load_hbond_instructions()
