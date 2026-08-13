@@ -142,10 +142,6 @@
    `[MECHARROW:br:0>>br:0+cc:0,cc:0-1>>br:0+cc:0,cc:0-1>>cc:1]` 依次表示
    Br• 单电子→Br 与近端碳 C(0) 之间的空白中点、π 键一个电子→同一位置
    （共同形成 C—Br 键）、π 键另一个电子→远端碳 C(1) 原子（生成新自由基）。
-4. **原子序号默认隐藏**：键线式/简式中不再默认标注 0,1,2… 的灰色序号。仅当碳原子较多、
-   需要在文字中指明哪个原子参与反应时，才通过 numbering 标志打开：
-   - COMPOSITE：`[COMPOSITE:reaction_mech,numbering]`
-   序号规则不变：按各 SMILES 中原子出现顺序从 0 开始。
-5. **COMPOSITE 中用 id 引用组件**：给参与电子转移的 STRUCT 起有意义的 id
+4. **COMPOSITE 中用 id 引用组件**：给参与电子转移的 STRUCT 起有意义的 id
    （如 `id=nu` 亲核试剂、`id=lg` 离去基团），MECHARROW 引用更清晰；
    未命名的组件按出现顺序自动编号 r0/r1/...。
