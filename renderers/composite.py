@@ -208,7 +208,8 @@ def draw_mech_arrows(mols: dict, arrows: list,
         if dst2_id is None:
             p1 = mech_arrow_origin(dm["mol"], dst_pt, dm["shift"],
                                    lone_pair_offset=False,
-                                   xh_points=dm.get("xh_points"))
+                                   xh_points=dm.get("xh_points"),
+                                   as_target=True)
         else:
             p1 = _bond_form_midpoint(mols, dst_id, dst_pt, dst2_id, dst2_pt,
                                      avoid=plus_positions)
@@ -227,7 +228,8 @@ def draw_mech_arrows(mols: dict, arrows: list,
                                    lone_pair_offset=False,
                                    toward=(p0[0], p0[1]), labeler=dlab,
                                    bend_side=-1.0 if p0[2] else 1.0,
-                                   xh_points=dm.get("xh_points"))
+                                   xh_points=dm.get("xh_points"),
+                                   as_target=True)
             if p1 is None:
                 continue
         # 断键起点：σ 键中点（a-b）或显式 H（a#k，X—H 键端点）——都从键出发
@@ -235,7 +237,9 @@ def draw_mech_arrows(mols: dict, arrows: list,
                       or "#" in src_pt)
         inset_start = (_ARROW_POINT_GAP if bond_break
                        else (0.0 if (p0[2] or p0[3] or p0[4]) else 0.15))
-        aim_end = ("-" not in dst_pt and p1[4])
+        # aim_end 只对纯原子终点生效：吸附到元素标签边缘并退让。
+        # "a#k" 终点是 H 节点本身（不是元素标签），不触发标签退让。
+        aim_end = ("-" not in dst_pt and "#" not in dst_pt and p1[4])
         # p1[4]（on_label）：目标端已吸附到标签（碳与杂原子统一）。
         # aim_end 让 mech_arrow_tikz 沿末端切线退让到标签外、切线指向元素符号。
         tb = None

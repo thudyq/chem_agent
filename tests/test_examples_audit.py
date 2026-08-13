@@ -29,14 +29,14 @@ from core.tag_validator import validate_tags
 
 _ROOT = Path(__file__).resolve().parent.parent
 
-# 审计的文本文件（不存在时自动跳过——instructions/ 与 fast_test/ 不入库）
+# 审计的文本文件（不存在时自动跳过——instructions/ 与 fast_test/ 不入库；
+# fast_test/ 为本地临时诊断区，可能含 LLM 真实错误输出，不纳入审计）
 _TEXT_FILES = [
     "prompts/system_prompt.txt",
     "README.md",
     "instructions/Test-Method.md",
     "instructions/Chemical-Notation.md",
     "instructions/AGENT.md",
-    "fast_test/llm_output.md",
 ]
 # 审计的源码目录（docstring 与 __main__ demo 中的字面标记）
 _SRC_DIRS = ["renderers", "core", "utils"]

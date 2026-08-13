@@ -104,6 +104,30 @@ def test_draw_mech_arrows_explicit_h_out_of_range_skips():
     assert lines == []
 
 
+def test_draw_mech_arrows_explicit_h_as_target():
+    """a#k 作终点（如碱夺 H）：箭头尖指向 H 节点本身，而非 X—H 键中点。
+
+    C（单碳）加 [XH] 画 H，MECHARROW 终点用 r0:0#1——应定位到 H 节点坐标
+    （hx,hy），而不是断键语义的键线中点（as_target 区分起点/终点）。
+    """
+    mols = _mols("C", "C")
+    from renderers.mol_primitives import place_explicit_hs
+    pts = place_explicit_hs(mols["r0"]["mol"], 0, 1)
+    mols["r0"]["xh"] = [0]
+    mols["r0"]["explicit_hs"] = {0: 1}
+    mols["r0"]["xh_points"] = {0: pts}
+    lines = draw_mech_arrows(mols, _parse_mech_arrows(["r1:0>r0:0#1"]))
+    assert lines, "a#k 作终点应能定位到显式 H 节点并绘制箭头"
+    # 终点坐标 = H 节点坐标（加 shift 后），而非键线中点
+    import re
+    m = re.search(r"\.\.\s*\(([-\d.]+),([-\d.]+)\)", lines[0])
+    assert m, "箭头应有终点坐标"
+    tx, ty = float(m.group(1)), float(m.group(2))
+    hx, hy = pts[0][0] + mols["r0"]["shift"][0], pts[0][1] + mols["r0"]["shift"][1]
+    assert abs(tx - hx) < 0.05 and abs(ty - hy) < 0.05, \
+        f"终点 ({tx},{ty}) 应为 H 节点 ({hx:.3f},{hy:.3f})"
+
+
 def test_draw_mech_arrows_bond_form_midpoint():
     """成键空白位终点（id:a+id:b，跨组件两原子中点）：正常绘制。"""
     mols = _mols("[Br]", "C=C")

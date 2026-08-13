@@ -1427,7 +1427,8 @@ def mech_arrow_origin(mol, spec: str, shift=(0.0, 0.0),
                       lone_pair_offset: bool = True, toward=None,
                       prefer_single: bool = False, labeler=None,
                       label_gap: float = _MECH_LABEL_GAP, bend_side: float = 1.0,
-                      xh_points: dict | None = None):
+                      xh_points: dict | None = None,
+                      as_target: bool = False):
     """解析机理箭头端点引用为画布坐标。
 
     参数:
@@ -1450,6 +1451,9 @@ def mech_arrow_origin(mol, spec: str, shift=(0.0, 0.0),
             <0 取 y 最小杠（下）、>0 取 y 最大杠（上），再沿弯向外移 0.05。
         xh_points: {原子序号: [(hx, hy), ...]} 显式 H 画布坐标（局部，未加 shift）；
             spec 为 "a#k" 时必需——定位到第 k 个显式 H 节点。
+        as_target: True 时本端为箭头**终点**——"a#k" 定位到 H 节点本身
+            （箭头尖指向 H，而非 X—H 键中点）；False（起点）时保持断键语义
+            （从 X—H 键线中点出发）。
 
     返回:
         (x, y, from_bond, on_electron, on_label)；spec 无效或原子越界返回 None。
@@ -1459,9 +1463,11 @@ def mech_arrow_origin(mol, spec: str, shift=(0.0, 0.0),
     spec = spec.strip()
     if "#" in spec:
         # 显式 H 端点："a#k" = 原子 a 的第 k 个显式 H（k 从 1 起）。
-        # 该 H 是 X—H σ 键的一端，箭头从**键线中点**出发（断键语义，向下弯）。
-        # 键线 = 标签边缘（label_edge_point）→ H 节点：与 a-b 键中点用修剪后
-        # 键线段一致（问题 8：起点应落在 C—H 可视键中点，而非原子坐标中点）
+        # 作起点（as_target=False）：该 H 是 X—H σ 键的一端，箭头从**键线中点**
+        # 出发（断键语义，向下弯）。键线 = 标签边缘（label_edge_point）→ H 节点：
+        # 与 a-b 键中点用修剪后键线段一致（问题 8：起点应落在 C—H 可视键中点）。
+        # 作终点（as_target=True）：箭头尖直接指向 H 节点本身（如碱夺 H 的
+        # 去质子箭头，靶点是 H 而非键）。
         a, _, k = spec.partition("#")
         try:
             ia, ik = int(a), int(k)
@@ -1473,6 +1479,8 @@ def mech_arrow_origin(mol, spec: str, shift=(0.0, 0.0),
         if not pts or not 1 <= ik <= len(pts):
             return None
         hx, hy = pts[ik - 1]
+        if as_target:
+            return (hx + shift[0], hy + shift[1], False, False, True)
         sx, sy = label_edge_point(mol, ia, (hx, hy),
                                   labeler=labeler or atom_main_label)
         mx = (sx + hx) / 2.0      # 键线中点（标签边缘 → H，局部坐标）
