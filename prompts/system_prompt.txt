@@ -295,9 +295,10 @@ SN2 反应是协同过程：以 CH₃Cl 与 OH⁻ 的反应为例，亲核试剂
 链引发——Cl₂ 均裂成两个 Cl·：
 
 [COMPOSITE:reaction_mech]
-[STRUCT:ClCl,id=cl2,label=Cl2][RXNARROW:hν]
+[STRUCT:ClCl,id=cl2,label=Cl2]
+[MECHARROW:cl2:0-1>>cl2:0][MECHARROW:cl2:0-1>>cl2:1]
+[RXNARROW:hν]
 [STRUCT:[Cl],id=clA,label=Cl·][PLUS][STRUCT:[Cl],id=clB,label=Cl·]
-[MECHARROW:cl2:0-1>>clA:0][MECHARROW:cl2:0-1>>clB:0]
 [/COMPOSITE]
 
 夺氢——Cl· 夺取甲烷的一个 H：
