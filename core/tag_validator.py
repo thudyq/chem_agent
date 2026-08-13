@@ -603,31 +603,45 @@ def _validate_energy(args: list) -> Tuple[bool, str]:
 
 
 def _validate_mech_arrow_pt(pt: str, n_atoms: int,
-                            xh_count: dict | None = None) -> bool:
-    """端点（原子序号 / a-b 键 / a#k 显式 H）是否合法。
+                            xh_count: dict | None = None) -> str:
+    """端点（原子序号 / a-b 键 / a#k 显式 H）合法性，返回原因串（""=合法）。
 
     "a#k"：原子 a 的第 k 个显式 H（k 从 1 起），需 xh_count 提供
-    {原子号: 显式 H 数}；未提供或 k 超限视为非法。
+    {原子号: 显式 H 数}。缺 XH 与序号越界分开报告，便于修正环节引导。
     """
     if "#" in pt:
         a, _, k = pt.partition("#")
         try:
             ia, ik = int(a), int(k)
         except ValueError:
-            return False
-        if not 0 <= ia < n_atoms or ik < 1:
-            return False
-        return bool(xh_count) and xh_count.get(ia, 0) >= ik
+            return f"显式 H 端点格式错误「{pt}」（应为 原子号#第k个，如 0#1）"
+        if not 0 <= ia < n_atoms:
+            return f"原子 {ia} 超出范围（该分子只有 {n_atoms} 个重原子，0 起）"
+        if ik < 1:
+            return f"第 {ik} 个显式 H 序号非法（k 从 1 起）"
+        n_h = (xh_count or {}).get(ia, 0)
+        if n_h == 0:
+            return (f"引用原子 {ia} 的显式 H，但未先写 [XH:...|{ia}] 画出该 H"
+                    f"（a#k 必须与 [XH] 成对，H 不是重原子无法凭空定位）")
+        if ik > n_h:
+            return f"原子 {ia} 只画了 {n_h} 个显式 H，引用第 {ik} 个超限"
+        return ""
     if "-" in pt:
         a, b = pt.split("-")
         try:
-            return 0 <= int(a) < n_atoms and 0 <= int(b) < n_atoms
+            ia, ib = int(a), int(b)
         except ValueError:
-            return False
+            return f"键端点格式错误「{pt}」（应为 原子a-原子b）"
+        if not (0 <= ia < n_atoms and 0 <= ib < n_atoms):
+            return f"键端点「{pt}」越界（该分子只有 {n_atoms} 个重原子，0 起）"
+        return ""
     try:
-        return 0 <= int(pt) < n_atoms
+        ia = int(pt)
     except ValueError:
-        return False
+        return f"端点格式错误「{pt}」"
+    if not 0 <= ia < n_atoms:
+        return f"原子 {ia} 超出范围（该分子只有 {n_atoms} 个重原子，0 起）"
+    return ""
 
 
 def _check_xh_h_usage(mol, idxs: list, what: str) -> str:
@@ -727,18 +741,23 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
                     if "-" in dst_pt:
                         return False, f"MECHARROW 成键空白位端点格式错误「{spec}」"
                 if _RDKIT_OK:
-                    if not _validate_mech_arrow_pt(
-                            src_pt, atom_counts.get(src_id, 0),
-                            xh_count.get(src_id)):
-                        return False, f"MECHARROW 源端点「{src_id}:{src_pt}」超出原子范围"
-                    if not _validate_mech_arrow_pt(
-                            dst_pt, atom_counts.get(dst_id, 0),
-                            xh_count.get(dst_id)):
-                        return False, f"MECHARROW 目标端点「{dst_id}:{dst_pt}」超出原子范围"
-                    if dst2_id is not None and not _validate_mech_arrow_pt(
+                    src_reason = _validate_mech_arrow_pt(
+                        src_pt, atom_counts.get(src_id, 0),
+                        xh_count.get(src_id))
+                    if src_reason:
+                        return False, f"MECHARROW 源端点「{src_id}:{src_pt}」{src_reason}"
+                    dst_reason = _validate_mech_arrow_pt(
+                        dst_pt, atom_counts.get(dst_id, 0),
+                        xh_count.get(dst_id))
+                    if dst_reason:
+                        return False, f"MECHARROW 目标端点「{dst_id}:{dst_pt}」{dst_reason}"
+                    if dst2_id is not None:
+                        dst2_reason = _validate_mech_arrow_pt(
                             dst2_pt, atom_counts.get(dst2_id, 0),
-                            xh_count.get(dst2_id)):
-                        return False, f"MECHARROW 目标端点「{dst2_id}:{dst2_pt}」超出原子范围"
+                            xh_count.get(dst2_id))
+                        if dst2_reason:
+                            return False, (f"MECHARROW 目标端点「{dst2_id}:{dst2_pt}」"
+                                           f"{dst2_reason}")
         elif ctype in ("CHARGE", "HBOND") and len(child.args) >= 2:
             ref = child.args[0].strip()
             if ref not in comps:

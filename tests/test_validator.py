@@ -94,7 +94,7 @@ def test_composite_mecharrow_atom_out_of_range(fake_rdkit):
             "[STRUCT:CO,id=p0][MECHARROW:r0:5>p0:0][/COMPOSITE]")
     _, invalid = _validate(text)
     assert len(invalid) == 1
-    assert "超出原子范围" in invalid[0].reason
+    assert "超出范围" in invalid[0].reason
 
 
 class TestChemicalChecks:
@@ -468,7 +468,7 @@ def test_composite_mecharrow_midpoint_atom_out_of_range(fake_rdkit):
             "[STRUCT:CO,id=p0][MECHARROW:r0:0>r0:0+p0:9][/COMPOSITE]")
     _, invalid = _validate(text)
     assert len(invalid) == 1
-    assert "超出原子范围" in invalid[0].reason
+    assert "超出范围" in invalid[0].reason
 
 
 def test_composite_mecharrow_midpoint_bond_mixed_rejected(fake_rdkit):
@@ -512,7 +512,7 @@ class TestMechArrowExplicitH:
                 "[/COMPOSITE]")
         _, invalid = _validate(text)
         assert len(invalid) == 1
-        assert "超出原子范围" in invalid[0].reason
+        assert "未先写 [XH" in invalid[0].reason
 
     def test_explicit_h_index_out_of_range_rejected(self):
         """k 超出该原子显式 H 数（[XH:ch4|0] 只画 1 个，写 0#2）→ 拦截。"""
@@ -525,7 +525,7 @@ class TestMechArrowExplicitH:
                 "[/COMPOSITE]")
         _, invalid = _validate(text)
         assert len(invalid) == 1
-        assert "超出原子范围" in invalid[0].reason
+        assert "只画了" in invalid[0].reason
 
     def test_legacy_implicit_h_bond_rejected(self):
         """旧写法 ch4:0-1（隐含 H 键）仍拦截——提示改用 a#k（B1 回归）。"""
@@ -538,7 +538,7 @@ class TestMechArrowExplicitH:
                 "[/COMPOSITE]")
         _, invalid = _validate(text)
         assert len(invalid) == 1
-        assert "超出原子范围" in invalid[0].reason
+        assert "键端点" in invalid[0].reason
 
 
 def test_xh_toplevel_valid(fake_rdkit):
