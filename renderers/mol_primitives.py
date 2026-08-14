@@ -896,6 +896,41 @@ def mol_visual_bbox_xh(mol, xh_counts: dict, h_len_scale: float = 1.0,
     return (min_x, min_y, max_x, max_y)
 
 
+def aromatic_ring_info(mol) -> list:
+    """全芳香单环的几何信息：[(原子集合, 质心x, 质心y, 半径), ...]。
+
+    仅含"所有原子都是芳香原子"的单环（不碰并环）——用于画圈：
+    bond_segments 跳过这些环的环内键，调用方在质心画圆。
+    非全芳香环（如 σ 络合物的环己二烯、含 sp³ 碳的环）不在此列，保持交替键。
+    """
+    out = []
+    try:
+        from rdkit import Chem
+        ri = mol.GetRingInfo()
+    except Exception:
+        return out
+    for ring in ri.AtomRings():
+        if not all(mol.GetAtomWithIdx(i).GetIsAromatic() for i in ring):
+            continue
+        if any(ri.NumAtomRings(i) != 1 for i in ring):
+            continue
+        xs = [atom_pos(mol, i)[0] for i in ring]
+        ys = [atom_pos(mol, i)[1] for i in ring]
+        cx, cy = sum(xs) / len(xs), sum(ys) / len(ys)
+        # 圈半径取"环键中点到质心"的平均距离（对正六边形 = 0.866×顶点半径），
+        # 再 ×0.85 使圈略小于内切圆、明显位于六边形内部（不碰边、不穿顶点，
+        # 教科书带圈苯风格）
+        radii = []
+        for k in range(len(ring)):
+            aj = ring[(k + 1) % len(ring)]
+            mx = (xs[k] + atom_pos(mol, aj)[0]) / 2.0
+            my = (ys[k] + atom_pos(mol, aj)[1]) / 2.0
+            radii.append(math.hypot(mx - cx, my - cy))
+        radius = 0.85 * sum(radii) / len(radii)
+        out.append((set(ring), cx, cy, radius))
+    return out
+
+
 def _regularize_kekule(mol) -> None:
     """全芳香单环按几何规则重排交替单双键（同类环画法一致）。
 
@@ -936,6 +971,21 @@ def _regularize_kekule(mol) -> None:
             b.SetBondType(Chem.BondType.DOUBLE if k % 2 == 0
                           else Chem.BondType.SINGLE)
             b.SetIsAromatic(False)
+
+
+def has_aromatic_lowercase(smiles: str) -> bool:
+    """SMILES 字符串是否含芳香小写原子符号（c/n/o/s/p 小写）。
+
+    区分两种苯环写法：`c1ccccc1`（芳香小写→画圈）与 `C1=CC=CC=C1`
+    （凯库勒大写→交替键）。RDKit 解析后两者无法区分（芳香信息被归一化），
+    必须从原始字符串判断。环外取代基（如甲苯的甲基 C）不受影响——
+    只要环本身用芳香小写即返回 True。
+    """
+    if not smiles or not isinstance(smiles, str):
+        return False
+    # 芳香小写原子 c/n/o/s/p（小写，独立原子符号）：排除元素名内小写
+    # （Cl 的 l、Br 的 r、Na 的 a）——(?<![a-z]) 允许大写前缀（如 Cc 的 c 是芳香碳）
+    return bool(re.search(r"(?<![a-z])[cnops](?![a-z])", smiles))
 
 
 def prepare_mol(smiles: str, *, add_hs: bool = False, kekulize: bool = False,
@@ -1002,8 +1052,14 @@ def prepare_mol(smiles: str, *, add_hs: bool = False, kekulize: bool = False,
         else:
             AllChem.Compute2DCoords(mol)
 
-    if allow_aromatic:
-        _regularize_kekule(mol)
+    # 不再调用 _regularize_kekule：芳香/凯库勒画法由原始 SMILES 大小写决定
+    # （has_aromatic_lowercase）。把判断结果存到 mol property——
+    # molecule_scope_lines 等调用方可直接读取决定画圈（避免逐层传参）。
+    if mol is not None:
+        try:
+            mol.SetProp("_aromatic_lowercase", "1" if has_aromatic_lowercase(smiles) else "0")
+        except Exception:
+            pass
     return mol
 
 
@@ -1092,7 +1148,8 @@ def _inner_double_segment(xi, yi, xj, yj, cx, cy, gap):
 
 
 def bond_segments(mol, *, label_margin: float = 0.25, bond_gap: float = 0.08,
-                  labeler=atom_label, margin_fn=None):
+                  labeler=atom_label, margin_fn=None,
+                  skip_aromatic_rings: list | None = None):
     """把分子中所有化学键转换为 TikZ 线段坐标列表。
 
     返回:
@@ -1108,10 +1165,18 @@ def bond_segments(mol, *, label_margin: float = 0.25, bond_gap: float = 0.08,
         bond_gap: 双键/三键平行线之间的间距。
         labeler: 原子标签函数（默认 atom_label；机理场景用 condensed_atom_label）。
         margin_fn: 按标签文本计算留白距离的函数；缺省统一用 label_margin。
-
-    环内双键的平行线朝环质心偏移：双键为内缩短线（端点在中心→顶点
-    射线上，内缩量 0.18×键长）；三键保持等长双侧平行线。
+        skip_aromatic_rings: 全芳香单环的原子集合列表——这些环的**环内键
+            全部按单线绘制**（保留完整骨架，双键不画平行线，由调用方补画
+            圆圈），环外键（取代基）正常画。
     """
+    skip_bonds = set()
+    for ring_atoms in (skip_aromatic_rings or []):
+        rset = set(ring_atoms)
+        for b in mol.GetBonds():
+            if b.GetBeginAtomIdx() in rset and b.GetEndAtomIdx() in rset:
+                # 环内键：强制单线（圈替代双键平行线，保留六边形骨架）
+                skip_bonds.add((b.GetBeginAtomIdx(), b.GetEndAtomIdx()))
+
     def _margin(a):
         lab = labeler(a)
         if not lab:
@@ -1135,6 +1200,19 @@ def bond_segments(mol, *, label_margin: float = 0.25, bond_gap: float = 0.08,
     for b in mol.GetBonds():
         i = b.GetBeginAtomIdx()
         j = b.GetEndAtomIdx()
+        in_aromatic = (i, j) in skip_bonds or (j, i) in skip_bonds
+        if in_aromatic:
+            # 芳香环内键：强制单线（圈替代双键平行线）
+            xi, yi = atom_pos(mol, i)
+            xj, yj = atom_pos(mol, j)
+            dx, dy = xj - xi, yj - yi
+            L = math.hypot(dx, dy) or 1.0
+            ux, uy = dx / L, dy / L
+            si = _margin(mol.GetAtomWithIdx(i))
+            sj = _margin(mol.GetAtomWithIdx(j))
+            segments.append([(xi + ux * si, yi + uy * si,
+                              xj - ux * sj, yj - uy * sj)])
+            continue
         xi, yi = atom_pos(mol, i)
         xj, yj = atom_pos(mol, j)
 

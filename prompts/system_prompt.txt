@@ -144,11 +144,21 @@ SN2 是协同过程：OH⁻ 从背面进攻 α-碳，同时 C-Cl 键断裂，电
 回答：
 苯的硝化分三步：先生成 NO₂⁺，再进攻苯环形成 σ 络合物，最后脱质子得硝基苯。
 
-**第一步：NO₂⁺ 的生成**：
+第一步：NO₂⁺ 的生成：
 
-[REACTION:[O-][N+](=O)O;O=S(=O)(O)O|[N+](=O)=O;O=S(=O)(O)[O-];O|浓H2SO4]
+[REACTION:[O-][N+](=O)O;O=S(=O)(O)O|[N+](=O)=O;O=S(=O)(O)[O-];O]
 
-**第二、三步：亲电进攻与脱质子**——苯环 π 电子流向 NO₂⁺，σ 络合物脱 H⁺ 恢复芳香性：
+第二步：亲电进攻：
+
+[COMPOSITE:reaction_mech]
+[STRUCT:c1ccccc1,label=苯,id=ar][PLUS][STRUCT:[N+](=O)=O,label=NO2+,id=nu]
+[RXNARROW]
+[STRUCT:O=[N+]([O-])[CH]1C=CC=CC1,label=σ 络合物]
+
+[MECHARROW:ar:0-1>nu:0]
+[/COMPOSITE]
+
+第三步：脱质子**——苯环 π 电子流向 NO₂⁺，σ 络合物脱 H⁺ 恢复芳香性：
 
 [COMPOSITE:reaction_mech]
 [STRUCT:c1ccccc1,label=苯,id=ar][PLUS][STRUCT:[N+](=O)=O,label=NO2+,id=nu]
@@ -158,11 +168,11 @@ SN2 是协同过程：OH⁻ 从背面进攻 α-碳，同时 C-Cl 键断裂，电
 [/COMPOSITE]
 
 示例 6
-用户：甲烷在光照下与氯气发生自由基取代，画链引发和夺氢步骤。
+用户：画出甲烷自由基氯代的机理。
 回答：
-甲烷氯代是自由基链式机理：链引发 Cl₂ 均裂，链增长是 Cl· 夺 H 与 ·CH₃ 夺 Cl 交替。
+甲烷的自由基氯代是典型的自由基链式反应，分三步：链引发、链增长、链终止。
 
-链引发——Cl₂ 均裂成两个 Cl·：
+第一步：链引发——Cl₂ 在光照或加热下均裂，生成两个氯自由基 Cl·：
 
 [COMPOSITE:reaction_mech]
 [STRUCT:ClCl,id=cl2,label=Cl2]
@@ -171,7 +181,7 @@ SN2 是协同过程：OH⁻ 从背面进攻 α-碳，同时 C-Cl 键断裂，电
 [STRUCT:[Cl],id=clA,label=Cl·][PLUS][STRUCT:[Cl],id=clB,label=Cl·]
 [/COMPOSITE]
 
-夺氢——Cl· 夺取甲烷的一个 H（先 [XH] 把 C-H 键画出，再用 a#k 引用）：
+第二步：链增长（夺氢）——Cl· 夺取甲烷的一个氢，生成 HCl 和甲基自由基 ·CH₃：
 
 [COMPOSITE:reaction_mech]
 [STRUCT:[Cl],id=cl,label=Cl·][PLUS][STRUCT:C,id=ch4,label=CH4][XH:ch4|0]
@@ -179,6 +189,26 @@ SN2 是协同过程：OH⁻ 从背面进攻 α-碳，同时 C-Cl 键断裂，电
 [STRUCT:Cl,id=hcl,label=HCl][PLUS][STRUCT:[CH3],id=me,label=·CH3]
 [MECHARROW:cl:0>>cl:0+ch4:0][MECHARROW:ch4:0#1>>cl:0+ch4:0][MECHARROW:ch4:0#1>>ch4:0]
 [/COMPOSITE]
+
+第三步：链增长（夺氯）——·CH₃ 再与另一分子 Cl₂ 反应，生成 CH₃Cl 和新的 Cl·（继续循环）：
+
+[COMPOSITE:reaction_mech]
+[STRUCT:[CH3],id=me,label=·CH3][PLUS][STRUCT:ClCl,id=cl2,label=Cl2]
+[RXNARROW]
+[STRUCT:CCl,id=ch3cl,label=CH3Cl][PLUS][STRUCT:[Cl],id=cl,label=Cl·]
+[MECHARROW:me:0>>me:0+cl2:0][MECHARROW:cl2:0-1>>me:0+cl2:0][MECHARROW:cl2:0-1>>cl2:1]
+[/COMPOSITE]
+
+第四步：链终止——两个自由基偶联（如 Cl· + Cl· → Cl₂，·CH₃ + ·CH₃ → CH₃CH₃，·CH₃ + Cl· → CH₃Cl），消耗自由基使链反应停止。以 Cl· 偶联为例：
+
+[COMPOSITE:reaction_mech]
+[STRUCT:[Cl],id=cla,label=Cl·][PLUS][STRUCT:[Cl],id=clb,label=Cl·]
+[RXNARROW]
+[STRUCT:ClCl,id=cl2,label=Cl2]
+[MECHARROW:cla:0>>cla:0+clb:0][MECHARROW:clb:0>>cla:0+clb:0]
+[/COMPOSITE]
+
+总反应：CH₄ + Cl₂ →(hν) CH₃Cl + HCl。实际产物是 CH₃Cl、CH₂Cl₂、CHCl₃、CCl₄ 的混合物，因为 ·CH₃ 可被逐步氯代。
 
 示例 7
 用户：画出乙醛发生羟醛缩合反应的机理。
@@ -210,7 +240,7 @@ SN2 是协同过程：OH⁻ 从背面进攻 α-碳，同时 C-Cl 键断裂，电
 [STRUCT:CC([O-])CC=O,label=烷氧负离子,id=alk][PLUS][STRUCT:O,label=H2O,id=w][XH:w|0]
 [RXNARROW]
 [STRUCT:CC(O)CC=O,label=3-羟基丁醛][PLUS][STRUCT:[OH-],label=OH-]
-[MECHARROW:w:0#1>alk:2][MECHARROW:alk:2>w:0]
+[MECHARROW:w:0#1>w:0][MECHARROW:alk:2>w:0#1]
 [/COMPOSITE]
 
 ============================================================

@@ -13,9 +13,9 @@ from dataclasses import dataclass, field
 from typing import Any, Hashable, List, Tuple
 
 from .mol_primitives import (
-    _label_flip_for, atom_label, atom_main_label, atom_pos, bond_segments,
-    charge_tikz, label_bond_margin, label_wrapped_size, lone_pair_tikz,
-    mol_visual_bbox,
+    _label_flip_for, aromatic_ring_info, atom_label, atom_main_label, atom_pos,
+    bond_segments, charge_tikz, label_bond_margin, label_wrapped_size,
+    lone_pair_tikz, mol_visual_bbox,
 )
 
 
@@ -211,7 +211,8 @@ def molecule_scope_lines(mol, shift: Tuple[float, float], *,
                          show_numbers: bool = False,
                          show_lone_pairs: bool = True,
                          explicit_hs: dict | None = None,
-                         bond_line: bool = False) -> List[str]:
+                         bond_line: bool = False,
+                         aromatic_rings: list | None = None) -> List[str]:
     r"""分子组件的 scope 绘制行（内部全部局部坐标，位置由 shift 决定）。
 
     普通方程式（show_lone_pairs=False）不画孤对电子点；
@@ -220,17 +221,35 @@ def molecule_scope_lines(mol, shift: Tuple[float, float], *,
     （[XH] 显式氢 / 氢键给体，保证"标签 H + 画出 H"总数正确）。
     bond_line=True：键线式标签（碳原子不标 CHn，仅杂原子带 H 标签），
     用于带 [XH]/[BOND]/[HBOND] 标注的分子，保证原有键线式逻辑不变。
+    aromatic_rings: aromatic_ring_info() 的输出——全芳香单环跳过环内键、
+        在质心画圆（芳香小写 c1ccccc1 风格）；为 None 时不画圈（凯库勒交替键）。
     """
     hs = explicit_hs or {}
     labeler = (lambda a, flip=False: atom_label(a, hs.get(a.GetIdx(), 0), flip)) \
         if bond_line \
         else (lambda a, flip=False: atom_main_label(a, hs.get(a.GetIdx(), 0), flip))
+    # 芳香画圈：调用方显式传入（structure.py）或从 mol property 自动读取
+    # （prepare_mol 已存 _aromatic_lowercase，ARROW/REACTION/COMPOSITE 共用）
+    if aromatic_rings is None:
+        try:
+            if mol.HasProp("_aromatic_lowercase") \
+                    and mol.GetProp("_aromatic_lowercase") == "1":
+                aromatic_rings = aromatic_ring_info(mol)
+        except Exception:
+            aromatic_rings = None
     lines = [
         f"  \\begin{{scope}}[shift={{({shift[0]:.2f},{shift[1]:.2f})}}]"
     ]
-    for segs in bond_segments(mol, labeler=labeler, margin_fn=label_bond_margin):
+    skip_rings = [aromatic_rings[k][0] for k in range(len(aromatic_rings or []))]
+    for segs in bond_segments(mol, labeler=labeler, margin_fn=label_bond_margin,
+                              skip_aromatic_rings=skip_rings):
         for x1, y1, x2, y2 in segs:
             lines.append(f"    \\draw ({x1:.2f},{y1:.2f}) -- ({x2:.2f},{y2:.2f});")
+    # 芳香环画圈：在质心画圆（半径取环原子平均距离），替代环内键
+    for _, cx, cy, radius in (aromatic_rings or []):
+        lines.append(
+            f"    \\draw ({cx:.2f},{cy:.2f}) circle ({radius:.2f});"
+        )
     for atom in mol.GetAtoms():
         x, y = atom_pos(mol, atom.GetIdx())
         idx = atom.GetIdx()

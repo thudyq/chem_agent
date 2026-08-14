@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
-"""renderers/structure.py — [STRUCT] 标记渲染器：SMILES → chemfig TikZ。
+"""renderers/structure.py — [STRUCT] 标记渲染器：SMILES → TikZ 结构式。
 
-复用旧 smiles_to_tikz 逻辑（mol2chemfigPy3），新增：
-  - RDKit 预验证：无效 SMILES 返回错误提示字符串而非崩溃
-  - label 精确定位：tikzpicture 包裹 + \\node[anchor=north] 置于结构下方
+统一到 TikZ scope 新逻辑（prepare_mol + molecule_scope_lines，与 ARROW/
+REACTION/COMPOSITE/XH/BOND 一致），弃用 mol2chemfigPy3：
+  - 芳香小写（c1ccccc1）→ 全芳香环画圈
+  - 凯库勒大写（C1=CC=CC=C1）→ 交替单双键
+  - label 置于结构下方
+smiles_to_chemfig 保留为兼容函数（测试/外部引用），不再用于 STRUCT。
 """
 
 import contextlib
@@ -12,8 +15,8 @@ import contextlib
 def smiles_to_chemfig(smiles: str, aromatic: bool = True):
     """SMILES → \\chemfig{...} 代码字符串；任何失败返回 None。
 
-    RDKit 预验证（不可用时跳过）+ mol2chemfigPy3 渲染。供 render_structure
-    及其他渲染器（arrow/newman 等）复用。
+    RDKit 预验证（不可用时跳过）+ mol2chemfigPy3 渲染。兼容函数——
+    STRUCT 已迁移到 TikZ 新逻辑，此函数仅供测试/外部引用保留。
     aromatic=True 渲染芳香环为圆圈；False 渲染 Kekulé 交替单双键。
     """
     if not smiles or not isinstance(smiles, str):
@@ -41,37 +44,48 @@ def smiles_to_chemfig(smiles: str, aromatic: bool = True):
 
 
 def render_structure(smiles: str, label: str = None) -> str:
-    """[STRUCT] 渲染：SMILES → chemfig 代码；可选 label 置于结构下方。
+    """[STRUCT] 渲染：SMILES → TikZ 结构式；可选 label 置于结构下方。
 
+    芳香小写（c1ccccc1）画圈，凯库勒大写（C1=CC=CC=C1）交替键。
     失败时返回可读的错误提示字符串（非空、非异常）。
     """
-    chemfig = smiles_to_chemfig(smiles)
-    if chemfig is None:
-        return f"（结构渲染失败：无法为「{smiles}」生成结构式，请检查 SMILES 与 mol2chemfigPy3 安装）"
+    from .mol_primitives import (
+        aromatic_ring_info, has_aromatic_lowercase, prepare_mol, wrap_format_text,
+    )
+    from .layout import molecule_scope_lines
 
-    # label：tikzpicture 包裹结构为命名节点，label 置于其正下方（tikz 核心 anchor/yshift）
+    mol = prepare_mol(smiles)
+    if mol is None:
+        return f"（结构渲染失败：无法为「{smiles}」生成结构式，请检查 SMILES）"
+
+    rings = aromatic_ring_info(mol) if has_aromatic_lowercase(smiles) else None
+    lines = ["\\begin{tikzpicture}"]
+    lines.extend(molecule_scope_lines(mol, (0.0, 0.0), aromatic_rings=rings))
     if label:
-        from .mol_primitives import wrap_format_text
         text = wrap_format_text(label)
         align = "align=center, " if "\\\\" in text else ""
-        return (
-            "\\begin{tikzpicture}\n"
-            f"  \\node (mol) {{{chemfig}}};\n"
-            f"  \\node[{align}anchor=north] at ([yshift=-2mm]mol.south) {{{text}}};\n"
-            "\\end{tikzpicture}"
+        # label 置于结构正下方：用当前 scope 范围下方锚点
+        from .mol_primitives import mol_visual_bbox
+        min_x, min_y, max_x, max_y = mol_visual_bbox(mol, include_lone_pairs=False)
+        cx = (min_x + max_x) / 2.0
+        lines.append(
+            f"  \\node[{align}anchor=north] at ({cx:.2f},{min_y - 0.35:.2f}) {{{text}}};"
         )
-    return chemfig
+    lines.append("\\end{tikzpicture}")
+    return "\n".join(lines)
 
 
 if __name__ == "__main__":
     print("=" * 60)
     print("render_structure 测试")
     print("=" * 60)
-    print("[1] 苯（无 label）:")
+    print("[1] 苯（芳香小写→画圈）:")
     print(render_structure("c1ccccc1"))
-    print("\n[2] 乙酸（带 label）:")
+    print("\n[2] 苯（凯库勒大写→交替键）:")
+    print(render_structure("C1=CC=CC=C1"))
+    print("\n[3] 乙酸（带 label）:")
     print(render_structure("CC(=O)O", label="乙酸"))
-    print("\n[3] 无效 SMILES:")
+    print("\n[4] 无效 SMILES:")
     print(render_structure("XYZ无效"))
-    print("\n[4] 空 SMILES:")
+    print("\n[5] 空 SMILES:")
     print(render_structure(""))
