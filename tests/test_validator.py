@@ -665,3 +665,43 @@ def test_pipeline_degrades_invalid_tags(fake_rdkit, fake_renderers, monkeypatch)
     assert "无效 SMILES「XYZABC」" in result
     assert "label 过长" in result
     assert "[STRUCT:XYZABC]" not in result
+
+
+def test_benzene_style_consistency_warning():
+    """软提示：同一机理内苯环写法不一致（圆圈式/凯库勒A/B）→ 警告。
+
+    不拦截（标记仍通过校验），通过 get_last_warnings() 暴露。
+    """
+    pytest.importorskip("rdkit")
+    from core.tag_validator import get_last_warnings
+
+    # 场景1：苯用凯库勒A，硝基苯用凯库勒B → 警告
+    text = (
+        "[COMPOSITE:reaction_mech][STRUCT:C1C=CC=CC=1,label=苯,id=ar]"
+        "[PLUS][STRUCT:[N+](=O)=O,label=NO2+,id=nu]"
+        "[RXNARROW][STRUCT:O=[N+]([O-])[CH]1C=CC=C[CH+]1,label=σ 络合物,id=sigma]"
+        "[MECHARROW:ar:0-5>nu:0][/COMPOSITE]"
+        "\n"
+        "[COMPOSITE:reaction_mech][STRUCT:O=[N+]([O-])[CH]1C=CC=C[CH+]1,label=σ 络合物,id=sigma]"
+        "[RXNARROW][STRUCT:O=[N+]([O-])C1=CC=CC=C1,label=硝基苯][PLUS][STRUCT:[H+],label=H+]"
+        "[XH:sigma|3][MECHARROW:sigma:3#1>sigma:3-8][/COMPOSITE]"
+    )
+    _, invalid = _validate(text)
+    assert len(invalid) == 0  # 不拦截
+    assert get_last_warnings(), "应产生苯环写法不一致警告"
+
+    # 场景2：都用凯库勒A → 无警告
+    text2 = text.replace("O=[N+]([O-])C1=CC=CC=C1", "O=[N+]([O-])C1C=CC=CC=1")
+    _, invalid2 = _validate(text2)
+    assert len(invalid2) == 0
+    assert not get_last_warnings(), "写法一致不应警告"
+
+    # 场景3：圆圈式 + 凯库勒混用 → 警告
+    text3 = (
+        "[COMPOSITE:row][STRUCT:c1ccccc1,label=苯,id=ar][/COMPOSITE]"
+        "\n"
+        "[COMPOSITE:row][STRUCT:C1=CC=CC=C1,label=苯,id=ar][/COMPOSITE]"
+    )
+    _, invalid3 = _validate(text3)
+    assert len(invalid3) == 0
+    assert get_last_warnings(), "圆圈+凯库勒混用应警告"

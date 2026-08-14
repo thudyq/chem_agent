@@ -155,6 +155,11 @@ class ValidationResult:
     tag: RenderTag
     ok: bool
     reason: str = ""
+    warnings: list = None  # 软提示（非拦截）：通过但附提醒，如苯环写法不一致
+
+    def __post_init__(self):
+        if self.warnings is None:
+            self.warnings = []
 
 
 def tag_name(tag_type: str) -> str:
@@ -931,6 +936,102 @@ def validate_tag(tag: RenderTag) -> ValidationResult:
     return ValidationResult(tag, True)  # 未知类型放行（注入时保留原文）
 
 
+def _ring_double_pairs(smi: str) -> tuple:
+    """苯环写法标识：环内双键的**相对位置**（与取代基无关）。
+
+    圆圈式（含芳香小写）→ ("circle",)；凯库勒大写 → 环内双键在
+    环中的相对索引（0~5，按环原子顺序），如 (1,3,5)。同一种凯库勒
+    写法在不同取代基（苯 vs 硝基苯）下相对位置一致，可正确比对。
+    """
+    import re
+    if not smi or not isinstance(smi, str):
+        return ()
+    if re.search(r"(?<![a-z])[cnops](?![a-z])", smi):
+        return ("circle",)
+    from rdkit import Chem
+    try:
+        m = Chem.MolFromSmiles(smi, sanitize=False)
+        if m is None:
+            return ()
+        m.UpdatePropertyCache(strict=False)
+        Chem.SanitizeMol(m, Chem.SanitizeFlags.SANITIZE_ALL
+                         ^ Chem.SanitizeFlags.SANITIZE_SETAROMATICITY
+                         ^ Chem.SanitizeFlags.SANITIZE_KEKULIZE)
+        ri = m.GetRingInfo()
+        if not ri.AtomRings():
+            return ()
+        ring = sorted(ri.AtomRings()[0])
+        # 环边：ring[k]-ring[(k+1)%6]，索引 k
+        idx = {a: k for k, a in enumerate(ring)}
+        double_idx = []
+        for b in m.GetBonds():
+            if b.GetBondTypeAsDouble() >= 1.5:
+                ia, ib = b.GetBeginAtomIdx(), b.GetEndAtomIdx()
+                if ia in idx and ib in idx:
+                    ka, kb = idx[ia], idx[ib]
+                    # 环边索引 = min 序号（相邻原子）
+                    if abs(ka - kb) == 1 or {ka, kb} == {0, len(ring) - 1}:
+                        double_idx.append(min(ka, kb) if abs(ka-kb) == 1
+                                          else max(ka, kb))
+    except Exception:
+        return ()
+    return tuple(sorted(double_idx)) if len(double_idx) == 3 else ()
+
+
+def _warn_benzene_consistency(tags: List[RenderTag],
+                              results: List[ValidationResult]) -> None:
+    """跨 COMPOSITE 软提示：机理中苯环写法不一致。
+
+    同一机理的多步 COMPOSITE 中，所有含苯环的分子（苯/硝基苯/含苯中间体）
+    应保持同一种苯环写法（圆圈式，或同一种凯库勒双键位置），否则
+    MECHARROW 引用键时 σ/π 判断混淆。按"环内双键对"分组：
+    圆圈式=("circle",)、凯库勒=双键对——组间不同即警告（挂到后出现的
+    result.warnings，不拦截）。
+    """
+    from rdkit import Chem
+
+    style_groups = {}  # style_key -> [result_idx, ...]
+    for ri, tag in enumerate(tags):
+        if tag.type != "COMPOSITE" or not tag.args or len(tag.args) < 2:
+            continue
+        for child in tag.args[1]:
+            if child.type != "STRUCT" or not child.args:
+                continue
+            smi = child.args[0].strip()
+            if not smi:
+                continue
+            try:
+                m = Chem.MolFromSmiles(smi)
+                if m is None:
+                    continue
+            except Exception:
+                continue
+            pairs = _ring_double_pairs(smi)
+            if not pairs:
+                continue  # 非苯环分子（σ 络合物、NO₂⁺ 等）
+            style_groups.setdefault(pairs, []).append(ri)
+
+    if len(style_groups) <= 1:
+        return
+    # 多种苯环写法并存：给最后出现的 result 挂警告
+    last_ri = max(max(idxs) for idxs in style_groups.values())
+    if 0 <= last_ri < len(results) and results[last_ri].ok:
+        desc = [("圆圈式" if k == ("circle",) else f"凯库勒{k}") for k in style_groups]
+        results[last_ri].warnings.append(
+            f"苯环写法不一致：同一机理中用了 {desc} "
+            f"（应统一为一种写法，避免 MECHARROW 引用键时 σ/π 混淆）")
+
+
+# 最近一次 validate_tags 的软提示（跨 COMPOSITE 苯环写法一致性等）。
+# 校验通过但附提醒的警告——调用方（app.py 等）可读取并展示给用户。
+_LAST_WARNINGS: list = []
+
+
+def get_last_warnings() -> list:
+    """最近一次 validate_tags 产生的软提示列表（字符串）。"""
+    return list(_LAST_WARNINGS)
+
+
 def validate_tags(tags: List[RenderTag]) -> Tuple[List[RenderTag], List[ValidationResult]]:
     """校验标记列表。
 
@@ -938,14 +1039,25 @@ def validate_tags(tags: List[RenderTag]) -> Tuple[List[RenderTag], List[Validati
         (valid_tags, invalid_results)：
         valid_tags — 通过校验的标记（顺序保持）；
         invalid_results — 校验失败的 ValidationResult 列表（含失败原因）。
+    软提示（不拦截，如苯环写法不一致）通过 get_last_warnings() 获取。
     """
+    global _LAST_WARNINGS
     valid, invalid = [], []
+    results = []
     for tag in tags:
         result = validate_tag(tag)
+        results.append(result)
         if result.ok:
             valid.append(tag)
         else:
             invalid.append(result)
+
+    # 软提示：跨 COMPOSITE 苯环写法一致性（挂到后出现的 result 上）
+    _LAST_WARNINGS = []
+    if _RDKIT_OK:
+        _warn_benzene_consistency(tags, results)
+        for r in results:
+            _LAST_WARNINGS.extend(r.warnings)
     return valid, invalid
 
 
