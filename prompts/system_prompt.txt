@@ -114,7 +114,7 @@
 回答：
 苯的硝化是典型的亲电芳香取代反应：浓硝酸在浓硫酸催化下生成亲电试剂硝鎓离子 NO₂⁺，进攻苯环生成硝基苯。
 
-[REACTION:c1ccccc1;[O-][N+](=O)O|O=[N+]([O-])c1ccccc1;O|H2SO4, Δ]
+[REACTION:C1=CC=CC=C1;[O-][N+](=O)O|O=[N+]([O-])C1=CC=CC=C1;O|H2SO4, Δ]
 
 产物硝基苯为淡黄色油状液体，硝基为间位定位基。
 
@@ -151,7 +151,7 @@ SN2 是协同过程：OH⁻ 从背面进攻 α-碳，同时 C-Cl 键断裂，电
 第二步：亲电进攻：
 
 [COMPOSITE:reaction_mech]
-[STRUCT:C1=CC=CC=C1,label=苯,id=ar][PLUS][STRUCT:[N+](=O)=O,label=NO2+,id=nu]
+[STRUCT:C1C=CC=CC=1,label=苯,id=ar][PLUS][STRUCT:[N+](=O)=O,label=NO2+,id=nu]
 [RXNARROW]
 [STRUCT:O=[N+]([O-])[CH]1C=CC=C[CH+]1,label=σ 络合物,id=sigma]
 [XH:ar|0][XH:sigma|3]
