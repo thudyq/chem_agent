@@ -89,12 +89,13 @@ def test_retro_error_paths():
 
 
 def test_composite_resonance_forms_differ():
-    """COMPOSITE resonance 布局同样保留显式键级（两式不同）。"""
+    """row + [RESARROW] 共振式保留显式键级（两 Kekulé 式不同）。"""
     from core.tag_parser import parse_tags
     from renderers.composite import render_composite
     out = render_composite(*parse_tags(
-        "[COMPOSITE:resonance]"
+        "[COMPOSITE:row]"
         "[STRUCT:C1=CC=CC=C1]"
+        "[RESARROW]"
         "[STRUCT:C1C=CC=CC=1]"
         "[/COMPOSITE]"
     )[0].args)

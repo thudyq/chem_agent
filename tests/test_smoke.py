@@ -86,8 +86,8 @@ def test_smoke_composite_row():
 
 
 def test_smoke_composite_resonance():
-    text = ("[COMPOSITE:resonance][STRUCT:C1=CC=CC=C1]"
-            "[STRUCT:C1C=CC=CC=1][/COMPOSITE]")
+    text = ("[COMPOSITE:row][STRUCT:C1=CC=CC=C1]"
+            "[RESARROW][STRUCT:C1C=CC=CC=1][/COMPOSITE]")
     outs, bad = _render(text)
     assert len(outs) == 1 and bad == 0
     _assert_ok(outs[0], "\\leftrightarrow")

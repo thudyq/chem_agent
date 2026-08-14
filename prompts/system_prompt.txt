@@ -71,18 +71,23 @@
     [COMPOSITE:布局]
     子标记...
     [/COMPOSITE]
-    布局：reaction_mech（反应式+机理箭头）、row（横向多步）、energy（势能面+驻点结构）、resonance（共振式）。
+    布局：reaction_mech（反应式+机理箭头）、row（横向多步/通用）、energy（势能面+驻点结构）。
     头部可加 ,numbering 显示原子序号。
     容器内子标记：
       [STRUCT:SMILES,label=名称,id=引用名]   结构组件；id 省略时自动编号 r0/r1/...
       [PLUS]                                  加号
       [RXNARROW] 或 [RXNARROW:条件]           主反应箭头（反应物/产物分界）
       [CONDITION:文本]                        填充主箭头条件
+      [RESARROW]                              共振箭头 ↔（共振极限式之间手动插入）
+      [NEWLINE]                               换行（组件多行上下排列）
       [MECHARROW:id:端点>id:端点]             机理弯箭头（>> 为鱼钩）；端点=原子号/键中点 a-b/显式 H a#k
       [XH:id|原子序号]                         显式画出该原子的 H
       [BOND:id|a-b]                            加粗突出键
       [CHARGE:id|原子号:δ±]                    部分电荷
       [HBOND:id|from-to]                       氢键
+    共振式（如苯的两个 Kekulé 式）用 row 布局 + 显式 [RESARROW] 连接：
+      [COMPOSITE:row][STRUCT:C1=CC=CC=C1,label=式 I][RESARROW][STRUCT:C1C=CC=CC=1,label=式 II][/COMPOSITE]
+    含 [RESARROW] 时渲染器自动保留各极限式的显式键级（Kekulé 式不统一芳香化）。
     MECHARROW 要点：
     - 起点=电子供体（孤对电子/π键/σ键/单电子），终点=电子受体（缺电子原子/键位）
     - 断键用键中点 a-b（如 r0:0-1 表示 0-1 键），进攻用原子号（如 nu:0）

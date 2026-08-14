@@ -56,7 +56,7 @@ def _parse_mol(smiles: str):
 LABEL_MAX_LEN = 24
 
 # COMPOSITE 支持的布局（与 renderers/composite.py 保持一致）
-COMPOSITE_LAYOUTS = ("reaction_mech", "row", "energy", "resonance")
+COMPOSITE_LAYOUTS = ("reaction_mech", "row", "energy")
 
 # 与 renderers/composite.py 相同的引用/端点提取正则
 # 端点支持三种：原子序号（0）、键中点（0-1）、显式 H（0#1 = 原子 0 的第 1 个 XH）。
@@ -493,7 +493,7 @@ def _check_reaction_balance(args: list) -> str:
 def _check_composite_balance(children: list, layout_name: str) -> str:
     """T2-3：COMPOSITE 的 reaction_mech 布局按 RXNARROW 分步、逐步比对
     非 H 元素守恒（容忍 H±差，质子转移/去质子副产 H⁺ 惯例不画出）；
-    row（多步合成序列允许省略辅助试剂）、resonance / energy 跳过。
+    row（多步合成序列允许省略辅助试剂）、energy 跳过。
     跨步不求和——每步只查本步差额；每步可用 RXNARROW 条件做 2b 箭头补足
     （非 H 元素差额被条件中具体物质 token 抵消，同 REACTION 2b 规则）。"""
     if layout_name != "reaction_mech":

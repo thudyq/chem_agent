@@ -23,10 +23,9 @@ LLM 在容器内显式列出结构组件、连接符与机理箭头，渲染器�
     row: 纯横向组件排列（共振式、多步序列等），[RXNARROW] 可选。
     energy: 势能面 + 驻点结构（R-3）：容器内需一个 [ENERGY:点序列]，
         每个 STRUCT 用 at=点序号 挂到驻点上（pos=above/below 可选，默认 above）。
-    resonance: 共振式组合（R-6）：连续 STRUCT 之间自动插入共振箭头 ↔，
-        无需手写连接符：[COMPOSITE:resonance][STRUCT:式1][STRUCT:式2][/COMPOSITE]。
-    通用连接符（row / resonance 均可显式使用）：
-        [RESARROW] 共振箭头 ↔；[NEWLINE] 换行（组件在多行中上下排列）。
+    共振式（R-6）：任意布局内用显式连接符组装——
+        [RESARROW] 共振箭头 ↔（手动插入）；[NEWLINE] 换行（组件在多行中上下排列）。
+        含 [RESARROW] 时自动保留各极限式显式键级（Kekulé 式不统一芳香化）。
     头部可追加标志：[COMPOSITE:reaction_mech,numbering] 打开原子序号标注
     （默认不显示；仅在碳原子较多、需要指明参与反应的原子时使用）。
 
@@ -121,7 +120,7 @@ _MECH_ARROW_RE = re.compile(
     r"(?:\s*\+\s*([A-Za-z0-9_]+)\s*:\s*(\d+))?\s*$"
 )
 
-_SUPPORTED_LAYOUTS = ("reaction_mech", "row", "energy", "resonance")
+_SUPPORTED_LAYOUTS = ("reaction_mech", "row", "energy")
 
 
 def _rects_intersect(a: tuple, b: tuple, pad: float = 0.15) -> bool:
@@ -568,14 +567,13 @@ def render_composite(layout: str, children: list) -> str:
     if layout_name == "reaction_mech" and not any(el[0] == "arrow" for el in sequence):
         return "（COMPOSITE 渲染失败：reaction_mech 布局需要 [RXNARROW] 标记主反应箭头位置）"
 
-    # resonance 布局/含共振箭头时，极限式必须保留显式键级（跳过芳香化），
-    # 否则不同 Kekulé 式会被统一芳香化成同一结构。
+    # 含共振箭头时，极限式必须保留显式键级（跳过芳香化），否则不同
+    # Kekulé 式会被统一芳香化成同一结构。
     # 其他布局传 None 让 prepare_mol 自动判定（芳香小写→画圈，
     # 凯库勒大写→保留键级），而非一律芳香化。
     allow_aromatic = (
         False
-        if (layout_name == "resonance"
-            or any(el[0] == "resarrow" for el in sequence))
+        if any(el[0] == "resarrow" for el in sequence)
         else None
     )
 
@@ -619,15 +617,6 @@ def render_composite(layout: str, children: list) -> str:
             return "（COMPOSITE 渲染失败：energy 布局需要 [ENERGY:点序列] 组件）"
         return _render_energy_layout(energy_child.args[0], structs, mols,
                                      show_numbers)
-
-    # resonance 布局：连续 mol 之间自动插入共振箭头 ↔
-    if layout_name == "resonance":
-        new_seq = []
-        for el in sequence:
-            if el[0] == "mol" and new_seq and new_seq[-1][0] == "mol":
-                new_seq.append(("resarrow",))
-            new_seq.append(el)
-        sequence = new_seq
 
     # 统一布局引擎：组件序列 → 位置/加号/共振箭头/反应箭头（视觉包围盒防重叠）
     items = []
@@ -684,7 +673,6 @@ def render_composite(layout: str, children: list) -> str:
     # 共振场景（孤对电子参与共轭）自动画出
     show_lone_pairs = (
         bool(mech_specs)
-        or layout_name == "resonance"
         or any(el[0] == "resarrow" for el in sequence)
     )
 
@@ -822,9 +810,10 @@ if __name__ == "__main__":
             "[/COMPOSITE]",
         ),
         (
-            "resonance 布局：苯的两个 Kekulé 式（自动 ↔）",
-            "[COMPOSITE:resonance]"
+            "共振式：苯的两个 Kekulé 式（row + 显式 [RESARROW]）",
+            "[COMPOSITE:row]"
             "[STRUCT:C1=CC=CC=C1,label=Kekulé 式 I]"
+            "[RESARROW]"
             "[STRUCT:C1C=CC=CC=1,label=Kekulé 式 II]"
             "[/COMPOSITE]",
         ),

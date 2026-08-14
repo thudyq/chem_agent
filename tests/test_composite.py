@@ -880,11 +880,12 @@ def test_energy_layout_errors():
         "[COMPOSITE:energy][ENERGY:0,108,-20][STRUCT:CCl,at=5][/COMPOSITE]")
 
 
-def test_resonance_layout_auto_arrow():
-    """R-6：resonance 布局连续 STRUCT 之间自动插入 ↔（无需手写连接符）。"""
+def test_resonance_arrow_explicit():
+    """共振式（重构后）：row 布局 + 显式 [RESARROW] 手动插 ↔。"""
     out = _render(
-        "[COMPOSITE:resonance]"
+        "[COMPOSITE:row]"
         "[STRUCT:C1=CC=CC=C1,label=式 I]"
+        "[RESARROW]"
         "[STRUCT:C1C=CC=CC=1,label=式 II]"
         "[/COMPOSITE]"
     )
@@ -893,15 +894,32 @@ def test_resonance_layout_auto_arrow():
     assert "式 I" in out and "式 II" in out
 
 
-def test_resonance_layout_three_forms():
-    """R-6：三个共振极限式两个 ↔。"""
+def test_resonance_three_forms_two_arrows():
+    """三个共振极限式两个 ↔（显式 [RESARROW]）。"""
     out = _render(
-        "[COMPOSITE:resonance]"
-        "[STRUCT:C1=CC=CC=C1][STRUCT:C1C=CC=CC=1][STRUCT:c1ccccc1]"
+        "[COMPOSITE:row]"
+        "[STRUCT:C1=CC=CC=C1][RESARROW]"
+        "[STRUCT:C1C=CC=CC=1][RESARROW]"
+        "[STRUCT:c1ccccc1]"
         "[/COMPOSITE]"
     )
     assert out.count("$\\leftrightarrow$") == 2
     assert out.count("\\begin{scope}[shift=") == 3
+
+
+def test_resonance_layout_deprecated_rejected():
+    """旧 resonance 布局已废弃：校验拦截（未知布局），须用 row + 显式 [RESARROW]。"""
+    import core.tag_validator as tv
+    from core.tag_parser import parse_tags
+    tags = parse_tags(
+        "[COMPOSITE:resonance]"
+        "[STRUCT:C1=CC=CC=C1]"
+        "[STRUCT:C1C=CC=CC=1]"
+        "[/COMPOSITE]"
+    )
+    ok, bad = tv.validate_tags(tags)
+    assert len(bad) == 1
+    assert "未知布局" in bad[0].reason
 
 
 def test_newline_vertical_stacking():
