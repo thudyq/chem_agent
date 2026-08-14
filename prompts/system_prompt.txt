@@ -26,6 +26,8 @@
    [REACTION:反应物1;反应物2|产物1;产物2|条件]
    [REACTION:C=C;O|CCO|H2SO4]
    两侧原子数与净电荷必须守恒。可省略副产物（写在条件里，"-"前缀=产物侧补足，如 -H2O）。
+   **物种必须是合法 SMILES，不是化学式**：CH3CH2OH、KMnO4、H2SO4 是化学式（非法）——对应 SMILES：CCO、[K+].[O-][Mn](=O)(=O)=O、OS(=O)(=O)O。含氧酸根/离子的 SMILES 见《SMILES 书写规范》§五速查表。
+   **分隔规则**：`;` 分隔**不同物种**（反应物/产物各自列表）；`.` 只在**同一物种内的多组分离子**用（如 KMnO4 写 [K+].[O-][Mn](=O)(=O)=O 是"一个物种"。两种写法二选一：要么 [K+];[O-][Mn](=O)(=O)=O 当两个物种，要么 [K+].[O-][Mn](=O)(=O)=O 当一个物种，别混）。
 
 4. 势能面 ENERGY —— 反应能量剖面图
    [ENERGY:点序列]
@@ -164,7 +166,7 @@ SN2 是协同过程：OH⁻ 从背面进攻 α-碳，同时 C-Cl 键断裂，电
 [COMPOSITE:reaction_mech]
 [STRUCT:C1C=CC=CC=1,label=苯,id=ar][PLUS][STRUCT:[N+](=O)=O,label=NO2+,id=nu]
 [RXNARROW]
-[STRUCT:O=[N+]([O-])[CH]1C=CC=C[CH+]1,label=σ 络合物,id=sigma]
+[STRUCT:O=[N+]([O-])C1C=CC=C[CH+]1,label=σ 络合物,id=sigma]
 [XH:ar|0][XH:sigma|3]
 [MECHARROW:ar:0-5>nu:0][MECHARROW:nu:0-1>nu:1]
 [/COMPOSITE]
@@ -174,7 +176,7 @@ SN2 是协同过程：OH⁻ 从背面进攻 α-碳，同时 C-Cl 键断裂，电
 第三步：脱质子——苯环 π 电子流向 NO₂⁺，σ 络合物脱 H⁺ 恢复芳香性：
 
 [COMPOSITE:reaction_mech]
-[STRUCT:O=[N+]([O-])[CH]1C=CC=C[CH+]1,label=σ 络合物,id=sigma]
+[STRUCT:O=[N+]([O-])C1C=CC=C[CH+]1,label=σ 络合物,id=sigma]
 [RXNARROW]
 [STRUCT:O=[N+]([O-])C1C=CC=CC=1,label=硝基苯][PLUS][STRUCT:[H+],label=H+]
 [XH:sigma|3]
