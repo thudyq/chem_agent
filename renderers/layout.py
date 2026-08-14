@@ -15,7 +15,8 @@ from typing import Any, Hashable, List, Tuple
 from .collide import DOT_R, Occupancy
 from .mol_primitives import (
     _label_flip_for, aromatic_ring_info, atom_label, atom_main_label, atom_pos,
-    bond_segments, charge_tikz, label_bond_margin, label_visual_width,
+    bond_segments, charge_tikz, heavy_atom_count, label_bond_margin,
+    label_visual_width,
     label_wrapped_size, lone_pair_dot_groups, lone_pair_tikz, mol_visual_bbox,
 )
 
@@ -243,7 +244,6 @@ def molecule_scope_lines(mol, shift: Tuple[float, float], *,
                          show_numbers: bool = False,
                          show_lone_pairs: bool = True,
                          explicit_hs: dict | None = None,
-                         bond_line: bool = False,
                          aromatic_rings: list | None = None,
                          occupancy=None) -> List[str]:
     r"""分子组件的 scope 绘制行（内部全部局部坐标，位置由 shift 决定）。
@@ -252,8 +252,9 @@ def molecule_scope_lines(mol, shift: Tuple[float, float], *,
     机理场景（show_lone_pairs=True）画出电子点；show_numbers 显示原子序号。
     explicit_hs：{原子序号: 已显式画出 H 数}，标签 H 计数自动扣减
     （[XH] 显式氢 / 氢键给体，保证"标签 H + 画出 H"总数正确）。
-    bond_line=True：键线式标签（碳原子不标 CHn，仅杂原子带 H 标签），
-    用于带 [XH]/[BOND]/[HBOND] 标注的分子，保证原有键线式逻辑不变。
+    标签风格统一规则（heavy_atom_count）：重原子数 ≤ 2 的小分子
+    （CH₃Cl/CH₂=CH₂/CH₄…）用结构简式（非环碳写 CHn，教科书式 H₃C—Cl）；
+    其余用键线式（碳原子不标 CHn，仅杂原子带 H 标签）。
     aromatic_rings: aromatic_ring_info() 的输出——全芳香单环跳过环内键、
         在质心画圆（芳香小写 c1ccccc1 风格）；为 None 时不画圈（凯库勒交替键）。
     occupancy: 可选的 collide.Occupancy（局部坐标）——键/环/标签/电子点
@@ -261,9 +262,13 @@ def molecule_scope_lines(mol, shift: Tuple[float, float], *,
         （XH 显式 H 等）继续避让（R-8）。
     """
     hs = explicit_hs or {}
-    labeler = (lambda a, flip=False: atom_label(a, hs.get(a.GetIdx(), 0), flip)) \
-        if bond_line \
-        else (lambda a, flip=False: atom_main_label(a, hs.get(a.GetIdx(), 0), flip))
+    # 统一标签规则：≤2 重原子小分子结构简式，其余键线式
+    if heavy_atom_count(mol) <= 2:
+        labeler = (lambda a, flip=False:
+                   atom_main_label(a, hs.get(a.GetIdx(), 0), flip))
+    else:
+        labeler = (lambda a, flip=False:
+                   atom_label(a, hs.get(a.GetIdx(), 0), flip))
     # 芳香画圈：调用方显式传入（structure.py）或从 mol property 自动读取
     # （prepare_mol 已存 _aromatic_lowercase，ARROW/REACTION/COMPOSITE 共用）
     if aromatic_rings is None:

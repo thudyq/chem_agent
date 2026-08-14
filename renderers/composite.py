@@ -47,9 +47,11 @@ LLM 在容器内显式列出结构组件、连接符与机理箭头，渲染器�
     [CHARGE:ref|idx:δ+,idx:δ-,...]   组件 ref 上的部分电荷（红色）
     [HBOND:ref|from-to,...]          组件 ref 内的氢键虚线（teal dashed）
 
-绘制风格：分子按结构简式绘制（非环碳原子写出 CH₃/CH₂/CH，环上碳保持
-键线式）。label 中的纯化学式（如 CH3Cl）不会重复显示——分子本身已是简式；
-中文名称/角色标注（如 底物、亲核试剂）仍显示在分子下方。
+绘制风格（统一标签规则，heavy_atom_count）：>2 重原子分子按键线式
+（碳原子不标 CHn，骨架线隐含）；≤2 重原子小分子（CH3Cl、CH2=CH2、CH4
+等）用结构简式（非环碳写出 CH₃/CH₂/CH）。label 中的纯化学式（如 CH3Cl）
+不会重复显示——小分子本身已是简式；中文名称/角色标注（如 底物、亲核
+试剂）仍显示在分子下方。
 label 与条件写普通文本即可（CH3Cl、OH-、H2SO4），渲染器自动把数字转为
 下标、尾部电荷转为上标。
 """
@@ -75,7 +77,7 @@ if __name__ == "__main__":
         adjust_hbond_conformation,
         _covalent_bond_len,
         partial_charge_pos, split_arrow_condition, split_species_coeff, wrap_format_text,
-        is_formula_label,
+        is_formula_label, heavy_atom_count,
     )
     from renderers.layout import (
         energy_annotation_placement, energy_point_coords, energy_point_roles,
@@ -95,7 +97,7 @@ else:
         adjust_hbond_conformation,
         _covalent_bond_len,
         partial_charge_pos, split_arrow_condition, split_species_coeff, wrap_format_text,
-        is_formula_label,
+        is_formula_label, heavy_atom_count,
     )
     from .layout import (
         energy_annotation_placement, energy_point_coords, energy_point_roles,
@@ -146,12 +148,13 @@ def _parse_mech_arrows(specs):
 
 
 def _mech_labeler(info):
-    """组件级标签器（与分子绘制同款）：带 XH/BOND/HBOND 标注的分子按键线式
-    （碳原子不标 CHn），其余保持结构简式。供机理箭头端点吸附到标签边缘用。"""
+    """组件级标签器（与分子绘制同款，heavy_atom_count 规则）：
+    ≤2 重原子小分子用结构简式（非环碳写 CHn），其余用键线式（碳不标）。
+    供机理箭头端点吸附到标签边缘用。"""
     hs = info["explicit_hs"]
-    if info["xh"] or info["bonds"] or info["hbonds"]:
-        return lambda a: atom_label(a, hs.get(a.GetIdx(), 0))
-    return lambda a: atom_main_label(a, hs.get(a.GetIdx(), 0))
+    if heavy_atom_count(info["mol"]) <= 2:
+        return lambda a: atom_main_label(a, hs.get(a.GetIdx(), 0))
+    return lambda a: atom_label(a, hs.get(a.GetIdx(), 0))
 
 
 def _bond_form_midpoint(mols: dict, id_a: str, pt_a: str,
@@ -327,9 +330,9 @@ def _molecule_with_annotations_lines(info: dict, *, show_numbers: bool,
     mol = info["mol"]
     hs = info["explicit_hs"]
     lines = []
-    # 带 [XH]/[BOND]/[HBOND] 标注的分子按键线式绘制（碳原子不标 CHn，
-    # 只在反应位点画出显式键），普通分子保持结构简式（原有逻辑不变）
-    bond_line = bool(info["xh"] or info["bonds"] or info["hbonds"])
+    # 标签风格统一规则（heavy_atom_count）：≤2 重原子小分子结构简式，
+    # 其余键线式（带 XH/BOND/HBOND 标注的分子自然落在键线式——标注
+    # 聚焦反应位点，碳不标 CHn）
     labeler = _mech_labeler(info)
     occ = Occupancy()   # R-8 占据注册表（局部坐标）：scope 内元素 + XH 注解共用
     if info.get("coeff", 1.0) != 1.0:
@@ -344,7 +347,6 @@ def _molecule_with_annotations_lines(info: dict, *, show_numbers: bool,
                                       show_numbers=show_numbers,
                                       show_lone_pairs=show_lone_pairs,
                                       explicit_hs=hs,
-                                      bond_line=bond_line,
                                       occupancy=occ))
     for idx, raw_label in info["charges"].items():
         if idx >= mol.GetNumAtoms():

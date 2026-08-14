@@ -719,8 +719,9 @@ def test_bond_highlight():
     assert abs(lx1 - ax) < 0.01 and abs(ly1 - ay) < 0.01
 
 
-def test_annotated_mol_bond_line_plain_condensed():
-    """键线式恢复：带 XH 标注的分子碳原子不标 CHn，无标注分子保持结构简式。"""
+def test_label_rule_heavy_atom_count():
+    """键线式统一规则（heavy_atom_count）：>2 重原子分子无论是否带
+    XH 标注都按键线式（碳不标 CHn）；≤2 重原子小分子用结构简式。"""
     annotated = _render(
         "[COMPOSITE:row]"
         "[STRUCT:CCC=O,id=pr]"
@@ -728,10 +729,12 @@ def test_annotated_mol_bond_line_plain_condensed():
         "[/COMPOSITE]"
     )
     plain = _render("[COMPOSITE:row][STRUCT:CCC=O][/COMPOSITE]")
+    small = _render("[COMPOSITE:row][STRUCT:CCl][/COMPOSITE]")
     assert "CH$_{2}$" not in annotated
     assert "CH$_{3}$" not in annotated
-    assert "CH$_{2}$" in plain
-    assert "CH$_{3}$" in plain
+    assert "CH$_{2}$" not in plain       # 4 重原子 → 键线式（原结构简式行为已取消）
+    assert "CH$_{3}$" not in plain
+    assert "CH$_{3}$" in small           # 2 重原子 → 结构简式 CH3Cl
 
 
 def test_hbond_conformation_folding():

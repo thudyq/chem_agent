@@ -90,12 +90,34 @@ def atom_label(atom, explicit_hs: int = 0, flip: bool = False) -> str | None:
     return parts
 
 
+def heavy_atom_count(mol) -> int:
+    """分子中非氢原子数（重原子数）。"""
+    return sum(1 for a in mol.GetAtoms() if a.GetAtomicNum() != 1)
+
+
+def mol_default_labeler(mol):
+    """按分子大小选择默认原子标签函数（统一规则）：
+
+    - 重原子数 ≤ 2 的小分子（CH₃Cl、CH₂=CH₂、CH₄、H₂O…）→ 结构简式
+      （`atom_main_label`：非环碳写出 CHn，教科书式 H₃C—Cl）；
+    - 其余 → 键线式（`atom_label`：碳原子不标 CHn，骨架线隐含）。
+
+    绘制（molecule_scope_lines）、视觉包围盒（mol_visual_bbox）、
+    符号中心（_dot_center）与机理键中点（mech_arrow_origin）共用，
+    保证布局感知与画面一致。
+    """
+    if heavy_atom_count(mol) <= 2:
+        return atom_main_label
+    return atom_label
+
+
 def condensed_atom_label(atom) -> str | None:
     """结构简式标签：非环碳原子同样写出（CH₃/CH₂/CH/C），环上碳原子
     保持键线式（返回 None）。
 
-    机理场景（COMPOSITE 容器内）使用，使小分子呈现
-    教科书式的 H₃C—Cl 风格而非键线式。
+    **已弃用**：默认选择已由 `mol_default_labeler` 的重原子数规则取代
+    （结构简式只用于 ≤2 重原子小分子，此时不可能出现环内碳），保留仅
+    为兼容外部引用；与 atom_main_label 的带电环内碳差异在新规则下不触发。
     """
     if atom.GetAtomicNum() == 6 and atom.GetFormalCharge() == 0 and atom.IsInRing():
         return None
@@ -707,7 +729,7 @@ def _dot_center(mol, idx: int, explicit_hs: int = 0) -> tuple[float, float]:
     """
     atom = mol.GetAtomWithIdx(idx)
     x, y = atom_pos(mol, idx)
-    lab = atom_main_label(atom, explicit_hs)
+    lab = mol_default_labeler(mol)(atom, explicit_hs)
     if lab:
         sym = atom.GetSymbol()
         sym = sym[0].upper() + sym[1:]
@@ -889,14 +911,17 @@ def lone_pair_tikz(mol, idx: int, shift=(0.0, 0.0), explicit_hs: int = 0) -> lis
     return lines
 
 
-def mol_visual_bbox(mol, labeler=condensed_atom_label,
+def mol_visual_bbox(mol, labeler=None,
                     include_lone_pairs: bool = True):
     """分子视觉包围盒 (min_x, min_y, max_x, max_y)。
 
     在原子坐标基础上计入标签半径与孤对电子点的外延，
     供布局间距计算使用，避免相邻组件重叠。
+    labeler: 原子标签函数；缺省按 mol_default_labeler 的
+    重原子数规则选择（与绘制端一致）。
     """
     xs, ys = [], []
+    labeler = labeler or mol_default_labeler(mol)
     for atom in mol.GetAtoms():
         x, y = atom_pos(mol, atom.GetIdx())
         hw = hh = 0.05
@@ -1226,7 +1251,8 @@ def bond_segments(mol, *, label_margin: float = 0.25, bond_gap: float = 0.08,
     参数:
         label_margin: 标签原子两端留出的空白距离，避免键压住标签。
         bond_gap: 双键/三键平行线之间的间距。
-        labeler: 原子标签函数（默认 atom_label；机理场景用 condensed_atom_label）。
+        labeler: 原子标签函数（默认 atom_label 键线式；调用方可按
+            分子大小传 mol_default_labeler(mol) 以对齐结构简式规则）。
         margin_fn: 按标签文本计算留白距离的函数；缺省统一用 label_margin。
         skip_aromatic_rings: 全芳香单环的原子集合列表——这些环的**环内键
             全部按单线绘制**（保留完整骨架，双键不画平行线，由调用方补画
@@ -1623,7 +1649,7 @@ def mech_arrow_origin(mol, spec: str, shift=(0.0, 0.0),
         if as_target:
             return (hx + shift[0], hy + shift[1], False, False, True)
         sx, sy = label_edge_point(mol, ia, (hx, hy),
-                                  labeler=labeler or atom_main_label)
+                                  labeler=labeler or mol_default_labeler(mol))
         mx = (sx + hx) / 2.0      # 键线中点（标签边缘 → H，局部坐标）
         my = (sy + hy) / 2.0
         return (mx + shift[0], my + shift[1], True, False, False)
@@ -1641,7 +1667,7 @@ def mech_arrow_origin(mol, spec: str, shift=(0.0, 0.0),
         # 键线两端按 label_bond_margin 修剪（如 C–Cl：C 端 CH₃=0.45、
         # Cl 端=0.30），原子坐标中点会相对视觉键偏移 0.075。
         segs = bond_segments_for(mol, ia, ib,
-                                 labeler=labeler or atom_main_label,
+                                 labeler=labeler or mol_default_labeler(mol),
                                  margin_fn=label_bond_margin)
         bond = mol.GetBondBetweenAtoms(ia, ib)
         if segs and bond is not None and bond_type_order(bond) >= 2 \
