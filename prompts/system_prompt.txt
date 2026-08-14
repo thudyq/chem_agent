@@ -151,20 +151,21 @@ SN2 是协同过程：OH⁻ 从背面进攻 α-碳，同时 C-Cl 键断裂，电
 第二步：亲电进攻：
 
 [COMPOSITE:reaction_mech]
-[STRUCT:c1ccccc1,label=苯,id=ar][PLUS][STRUCT:[N+](=O)=O,label=NO2+,id=nu]
+[STRUCT:C1=CC=CC=C1,label=苯,id=ar][PLUS][STRUCT:[N+](=O)=O,label=NO2+,id=nu]
 [RXNARROW]
-[STRUCT:O=[N+]([O-])[CH]1C=CC=CC1,label=σ 络合物]
-
-[MECHARROW:ar:0-1>nu:0]
+[STRUCT:O=[N+]([O-])[CH]1C=CC=C[CH+]1,label=σ 络合物,id=sigma]
+[XH:ar|0][XH:sigma|3]
+[MECHARROW:ar:0-5>nu:0][MECHARROW:nu:0-1>nu:1]
 [/COMPOSITE]
 
-第三步：脱质子**——苯环 π 电子流向 NO₂⁺，σ 络合物脱 H⁺ 恢复芳香性：
+第三步：脱质子——苯环 π 电子流向 NO₂⁺，σ 络合物脱 H⁺ 恢复芳香性：
 
 [COMPOSITE:reaction_mech]
-[STRUCT:c1ccccc1,label=苯,id=ar][PLUS][STRUCT:[N+](=O)=O,label=NO2+,id=nu]
+[STRUCT:O=[N+]([O-])[CH]1C=CC=C[CH+]1,label=σ 络合物,id=sigma]
 [RXNARROW]
-[STRUCT:O=[N+]([O-])c1ccccc1,label=硝基苯]
-[MECHARROW:ar:0-1>nu:0]
+[STRUCT:O=[N+]([O-])C1C=CC=CC=1,label=硝基苯][PLUS][STRUCT:[H+],label=H+]
+[XH:sigma|3]
+[MECHARROW:sigma:3#1>sigma:3-8]
 [/COMPOSITE]
 
 示例 6
@@ -178,7 +179,7 @@ SN2 是协同过程：OH⁻ 从背面进攻 α-碳，同时 C-Cl 键断裂，电
 [STRUCT:ClCl,id=cl2,label=Cl2]
 [MECHARROW:cl2:0-1>>cl2:0][MECHARROW:cl2:0-1>>cl2:1]
 [RXNARROW:hν]
-[STRUCT:[Cl],id=clA,label=Cl·][PLUS][STRUCT:[Cl],id=clB,label=Cl·]
+[STRUCT:[Cl],id=cla,label=Cl·][PLUS][STRUCT:[Cl],id=clb,label=Cl·]
 [/COMPOSITE]
 
 第二步：链增长（夺氢）——Cl· 夺取甲烷的一个氢，生成 HCl 和甲基自由基 ·CH₃：
