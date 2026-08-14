@@ -9,6 +9,14 @@ import contextlib
 import math
 import re
 
+try:
+    from .collide import CHARGE_CIRCLE_R, DOT_R
+except ImportError:  # 直接脚本运行（无包上下文）
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from renderers.collide import CHARGE_CIRCLE_R, DOT_R
+
 
 # 氢化物惯例：H 写在元素前的非金属（电负性 > 2.0，如 HF/HCl/HBr/HI/H2O/H2S）。
 # 其余氢化物元素写在 H 前（NH3/PH3/BH3/CH4/SiH4）——N/P/B/Si/C 排除。
@@ -387,6 +395,24 @@ def place_donor_h(mol, x_idx: int, y_pos: tuple[float, float],
     return place_explicit_hs(mol, x_idx, 1, toward=y_pos, h_len=h_len)[0]
 
 
+def place_h_avoiding(mol, idx: int, pos: tuple[float, float],
+                     occupancy, radius: float = 0.15) -> tuple[float, float]:
+    """显式 H 节点的避障放置（R-8）：规则位置为首选，冲突时绕原子旋转
+    ±15°/±30°/±45° 取第一个零冲突候选。pos 为规则给出的局部坐标；
+    返回避障后的局部坐标。"""
+    ax, ay = atom_pos(mol, idx)
+    base = math.atan2(pos[1] - ay, pos[0] - ax)
+    dist = math.hypot(pos[0] - ax, pos[1] - ay)
+    cands = []
+    for off in (0.0, 15.0, -15.0, 30.0, -30.0, 45.0, -45.0):
+        r = base + math.radians(off)
+        cands.append(("circle", ax + dist * math.cos(r),
+                      ay + dist * math.sin(r), radius))
+    chosen, _ = occupancy.place(
+        cands, warn=f"显式 H（原子 {idx}）候选位全部冲突")
+    return chosen[1], chosen[2]
+
+
 def label_edge_point(mol, idx: int, toward: tuple[float, float], *,
                      labeler=atom_label, margin_fn=label_bond_margin
                      ) -> tuple[float, float]:
@@ -747,8 +773,12 @@ _CHARGE_SCALE = 0.5        # 电荷圈缩放（为默认大小的一半）
 
 
 def _charge_angle(mol, idx: int) -> float:
-    """电荷圈方位角：右侧有标签氢阻碍且左侧无阻碍时在左上（135°），
+    """电荷圈方位角：已被候选位放置选定（mol prop 缓存）时读缓存；
+    否则按规则——右侧有标签氢阻碍且左侧无阻碍时在左上（135°），
     否则在右上（45°）（左右都有阻碍时保持右上）。"""
+    prop = f"_charge_ang_{idx}"
+    if mol.HasProp(prop):
+        return float(mol.GetProp(prop))
     if _implicit_shown_hs(mol.GetAtomWithIdx(idx)) == 0:
         return 45.0
     left_blocked = any(
@@ -757,15 +787,37 @@ def _charge_angle(mol, idx: int) -> float:
     return 45.0 if left_blocked else 135.0
 
 
-def charge_tikz(mol, idx: int, shift=(0.0, 0.0), explicit_hs: int = 0) -> str | None:
-    r"""圆圈电荷节点（右上/左上角，draw circle，半尺寸）；无电荷返回 None。"""
+def charge_tikz(mol, idx: int, shift=(0.0, 0.0), explicit_hs: int = 0,
+                occupancy=None) -> str | None:
+    r"""圆圈电荷节点；无电荷返回 None。
+
+    occupancy 非空时启用候选位放置（R-8）：候选角 = [现有规则首选, 镜像,
+    上, 下, 右, 左] × 距离 0.34/0.44，逐个查占据表取第一个零冲突者
+    （不撞键/标签/其他电荷圈）；首选即现有规则输出，零冲突时图面不变。
+    选定角度写入 mol 属性（_charge_ang_{idx}），孤对电子避让读取同一角度。
+    """
     text = atom_charge_label(mol.GetAtomWithIdx(idx))
     if text is None:
         return None
     cx, cy = _dot_center(mol, idx, explicit_hs)
-    r = math.radians(_charge_angle(mol, idx))
-    x = cx + shift[0] + _CHARGE_POS_DIST * math.cos(r)
-    y = cy + shift[1] + _CHARGE_POS_DIST * math.sin(r)
+    if occupancy is not None:
+        base = _charge_angle(mol, idx)
+        cands = []
+        for dist in (_CHARGE_POS_DIST, _CHARGE_POS_DIST + 0.10):
+            for ang in (base, (180.0 - base) % 360.0, 90.0, 270.0, 0.0, 180.0):
+                r = math.radians(ang)
+                cands.append(("circle",
+                              cx + dist * math.cos(r), cy + dist * math.sin(r),
+                              CHARGE_CIRCLE_R))
+        chosen, _ = occupancy.place(
+            cands, warn=f"电荷圈（原子 {idx}）候选位全部冲突")
+        ang = math.degrees(math.atan2(chosen[2] - cy, chosen[1] - cx)) % 360.0
+        mol.SetProp(f"_charge_ang_{idx}", f"{ang:.1f}")
+        x, y = chosen[1] + shift[0], chosen[2] + shift[1]
+    else:
+        r = math.radians(_charge_angle(mol, idx))
+        x = cx + shift[0] + _CHARGE_POS_DIST * math.cos(r)
+        y = cy + shift[1] + _CHARGE_POS_DIST * math.sin(r)
     return (f"\\node[draw, circle, inner sep=0.6pt, font=\\scriptsize, "
             f"scale={_CHARGE_SCALE}] at ({x:.2f},{y:.2f}) {{{text}}};")
 

@@ -15,9 +15,11 @@
     [BOND:CCC=O|1-2]   （丙醛 α,β-碳碳键突出）
 """
 
+from .collide import Occupancy
 from .mol_primitives import (
     atom_label, atom_pos, bond_segments, bond_segments_for, charge_tikz,
-    label_bond_margin, label_edge_point, place_explicit_hs, prepare_mol,
+    label_bond_margin, label_edge_point, label_visual_width,
+    place_explicit_hs, place_h_avoiding, prepare_mol,
 )
 
 
@@ -45,10 +47,12 @@ def _draw_annotated_mol(smiles: str, spec: str, kind: str) -> str:
             bond_specs.append(tok)
 
     labeler = lambda a: atom_label(a, xh_counts.get(a.GetIdx(), 0))
+    occ = Occupancy()   # R-8 占据注册表：键/标签/电荷圈登记，XH 节点避障
     lines = ["\\begin{tikzpicture}"]
     for segs in bond_segments(mol, labeler=labeler, margin_fn=label_bond_margin):
         for x1, y1, x2, y2 in segs:
             lines.append(f"  \\draw ({x1:.2f},{y1:.2f}) -- ({x2:.2f},{y2:.2f});")
+            occ.add_segment(x1, y1, x2, y2)
     for atom in mol.GetAtoms():
         idx = atom.GetIdx()
         lab = labeler(atom)
@@ -56,13 +60,17 @@ def _draw_annotated_mol(smiles: str, spec: str, kind: str) -> str:
             x, y = atom_pos(mol, idx)
             lines.append(
                 f"  \\node[fill=white, inner sep=1pt] at ({x:.2f},{y:.2f}) {{{lab}}};")
-        charge = charge_tikz(mol, idx, explicit_hs=xh_counts.get(idx, 0))
+            hw = max(0.11, label_visual_width(lab) * 0.3)
+            occ.add_rect(x - hw, y - 0.12, x + hw, y + 0.12)
+        charge = charge_tikz(mol, idx, explicit_hs=xh_counts.get(idx, 0),
+                             occupancy=occ)
         if charge:
             lines.append(f"  {charge}")
 
-    # XH：实线（标签边缘起笔，不压标签）+ H 节点
+    # XH：实线（标签边缘起笔，不压标签）+ H 节点（撞键/标签时旋转避障）
     for a, count in xh_counts.items():
         for hx, hy in place_explicit_hs(mol, a, count):
+            hx, hy = place_h_avoiding(mol, a, (hx, hy), occ)
             sx, sy = label_edge_point(mol, a, (hx, hy), labeler=labeler)
             lines.append(f"  \\draw ({sx:.2f},{sy:.2f}) -- ({hx:.2f},{hy:.2f});")
             lines.append(

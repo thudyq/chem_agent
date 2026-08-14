@@ -482,6 +482,34 @@ def test_unknown_mech_ref_skipped():
     assert "red" not in out
 
 
+def test_charge_circle_avoids_bonds():
+    """R-8 候选位放置：硝基 N⁺ 的圆圈电荷不压 N=O 双键（Drawbacks 一-8 案例）。
+
+    旧行为：固定 45°/0.34，圈与 60° 方向的双键重合（圈心距键线 ≈0.09 < 半径）；
+    新行为：候选位逐个查占据表，落到零冲突角度。
+    """
+    from renderers.collide import CHARGE_CIRCLE_R, _seg_point_dist
+    out = _render("[COMPOSITE:row][STRUCT:O=[N+]([O-])c1ccccc1][/COMPOSITE]")
+    m = re.search(
+        r"\\begin\{scope\}\[shift=\{\(([-\d.]+),([-\d.]+)\)\}\](.*?)\\end\{scope\}",
+        out, re.DOTALL)
+    assert m is not None
+    body = m.group(3)   # scope 内全部为局部坐标（shift 仅平移，距离不变）
+    segs = re.findall(
+        r"\\draw \(([-\d.]+),([-\d.]+)\) -- \(([-\d.]+),([-\d.]+)\);", body)
+    plus = re.search(
+        r"\\node\[draw, circle[^\]]*\] at \(([-\d.]+),([-\d.]+)\) \{\$\+\$\}",
+        body)
+    assert plus is not None, "未找到 + 电荷圈"
+    px, py = float(plus.group(1)), float(plus.group(2))
+    dists = [
+        _seg_point_dist(float(x1), float(y1), float(x2), float(y2), px, py)
+        for x1, y1, x2, y2 in segs
+    ]
+    assert min(dists) > CHARGE_CIRCLE_R - 0.01, \
+        f"+ 圈仍压键：最近键线距离 {min(dists):.3f}"
+
+
 def test_charge_annotation_child():
     """R-2：CHARGE 子标记在对应组件上标注部分电荷（红色 δ，绕元素符号中心，
     方向避让键与标签氢——Drawbacks 手动测试第 7 条）。"""

@@ -62,6 +62,7 @@ if __name__ == "__main__":
     from pathlib import Path
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from renderers.collide import Occupancy
     from renderers.mol_primitives import (
         _ARROW_POINT_GAP, _LABEL_SQUARE_HALF, _MECH_LABEL_GAP,
         bond_order_of, format_chem_text,
@@ -70,7 +71,8 @@ if __name__ == "__main__":
         mol_visual_bbox, mol_visual_bbox_xh, parse_charge_pairs, parse_hbond_pairs, atom_label,
         atom_main_label, bond_segments_for, label_bond_margin,
         label_edge_point, prepare_mol, scale_mol_coords, symbol_center,
-        atom_pos, place_donor_h, place_explicit_hs, adjust_hbond_conformation,
+        atom_pos, place_donor_h, place_explicit_hs, place_h_avoiding,
+        adjust_hbond_conformation,
         _covalent_bond_len,
         partial_charge_pos, split_arrow_condition, split_species_coeff, wrap_format_text,
         is_formula_label,
@@ -80,6 +82,7 @@ if __name__ == "__main__":
         layout_row, layout_rows, molecule_scope_lines, place_bbox,
     )
 else:
+    from .collide import Occupancy
     from .mol_primitives import (
         _ARROW_POINT_GAP, _LABEL_SQUARE_HALF, _MECH_LABEL_GAP,
         bond_order_of, format_chem_text,
@@ -88,7 +91,8 @@ else:
         mol_visual_bbox, mol_visual_bbox_xh, parse_charge_pairs, parse_hbond_pairs, atom_label,
         atom_main_label, bond_segments_for, label_bond_margin,
         label_edge_point, prepare_mol, scale_mol_coords, symbol_center,
-        atom_pos, place_donor_h, place_explicit_hs, adjust_hbond_conformation,
+        atom_pos, place_donor_h, place_explicit_hs, place_h_avoiding,
+        adjust_hbond_conformation,
         _covalent_bond_len,
         partial_charge_pos, split_arrow_condition, split_species_coeff, wrap_format_text,
         is_formula_label,
@@ -327,6 +331,7 @@ def _molecule_with_annotations_lines(info: dict, *, show_numbers: bool,
     # 只在反应位点画出显式键），普通分子保持结构简式（原有逻辑不变）
     bond_line = bool(info["xh"] or info["bonds"] or info["hbonds"])
     labeler = _mech_labeler(info)
+    occ = Occupancy()   # R-8 占据注册表（局部坐标）：scope 内元素 + XH 注解共用
     if info.get("coeff", 1.0) != 1.0:
         bbox = info.get("bbox")
         if bbox:
@@ -339,7 +344,8 @@ def _molecule_with_annotations_lines(info: dict, *, show_numbers: bool,
                                       show_numbers=show_numbers,
                                       show_lone_pairs=show_lone_pairs,
                                       explicit_hs=hs,
-                                      bond_line=bond_line))
+                                      bond_line=bond_line,
+                                      occupancy=occ))
     for idx, raw_label in info["charges"].items():
         if idx >= mol.GetNumAtoms():
             continue
@@ -396,6 +402,8 @@ def _molecule_with_annotations_lines(info: dict, *, show_numbers: bool,
         if not mol_has_bond:
             h_len = _covalent_bond_len(mol.GetAtomWithIdx(a)) * _MOL_SCALE
         for hx, hy in place_explicit_hs(mol, a, count, h_len=h_len):
+            # R-8 避障：规则位置撞键/标签/电荷圈/电子点时绕原子旋转取候选
+            hx, hy = place_h_avoiding(mol, a, (hx, hy), occ)
             sx, sy = label_edge_point(mol, a, (hx, hy), labeler=labeler)
             hx += info["shift"][0]
             hy += info["shift"][1]

@@ -12,10 +12,11 @@ composite / reaction_mech 及后续组合式渲染器（多步序列、共振组
 from dataclasses import dataclass, field
 from typing import Any, Hashable, List, Tuple
 
+from .collide import DOT_R, Occupancy
 from .mol_primitives import (
     _label_flip_for, aromatic_ring_info, atom_label, atom_main_label, atom_pos,
-    bond_segments, charge_tikz, label_bond_margin, label_wrapped_size,
-    lone_pair_tikz, mol_visual_bbox,
+    bond_segments, charge_tikz, label_bond_margin, label_visual_width,
+    label_wrapped_size, lone_pair_dot_groups, lone_pair_tikz, mol_visual_bbox,
 )
 
 
@@ -212,7 +213,8 @@ def molecule_scope_lines(mol, shift: Tuple[float, float], *,
                          show_lone_pairs: bool = True,
                          explicit_hs: dict | None = None,
                          bond_line: bool = False,
-                         aromatic_rings: list | None = None) -> List[str]:
+                         aromatic_rings: list | None = None,
+                         occupancy=None) -> List[str]:
     r"""分子组件的 scope 绘制行（内部全部局部坐标，位置由 shift 决定）。
 
     普通方程式（show_lone_pairs=False）不画孤对电子点；
@@ -223,6 +225,9 @@ def molecule_scope_lines(mol, shift: Tuple[float, float], *,
     用于带 [XH]/[BOND]/[HBOND] 标注的分子，保证原有键线式逻辑不变。
     aromatic_rings: aromatic_ring_info() 的输出——全芳香单环跳过环内键、
         在质心画圆（芳香小写 c1ccccc1 风格）；为 None 时不画圈（凯库勒交替键）。
+    occupancy: 可选的 collide.Occupancy（局部坐标）——键/环/标签/电子点
+        逐笔登记，电荷圈据此选零冲突候选位；传入时供调用方后续注解
+        （XH 显式 H 等）继续避让（R-8）。
     """
     hs = explicit_hs or {}
     labeler = (lambda a, flip=False: atom_label(a, hs.get(a.GetIdx(), 0), flip)) \
@@ -240,16 +245,21 @@ def molecule_scope_lines(mol, shift: Tuple[float, float], *,
     lines = [
         f"  \\begin{{scope}}[shift={{({shift[0]:.2f},{shift[1]:.2f})}}]"
     ]
+    # 占据注册表（R-8，局部坐标）：键线段/芳香环圆/标签矩形逐笔登记，
+    # 电荷圈等注解元素据此选零冲突候选位（不撞键/标签/彼此）
+    occ = occupancy if occupancy is not None else Occupancy()
     skip_rings = [aromatic_rings[k][0] for k in range(len(aromatic_rings or []))]
     for segs in bond_segments(mol, labeler=labeler, margin_fn=label_bond_margin,
                               skip_aromatic_rings=skip_rings):
         for x1, y1, x2, y2 in segs:
             lines.append(f"    \\draw ({x1:.2f},{y1:.2f}) -- ({x2:.2f},{y2:.2f});")
+            occ.add_segment(x1, y1, x2, y2)
     # 芳香环画圈：在质心画圆（半径取环原子平均距离），替代环内键
     for _, cx, cy, radius in (aromatic_rings or []):
         lines.append(
             f"    \\draw ({cx:.2f},{cy:.2f}) circle ({radius:.2f});"
         )
+        occ.add_circle(cx, cy, radius)
     for atom in mol.GetAtoms():
         x, y = atom_pos(mol, atom.GetIdx())
         idx = atom.GetIdx()
@@ -259,7 +269,12 @@ def molecule_scope_lines(mol, shift: Tuple[float, float], *,
             lines.append(
                 f"    \\node[fill=white, inner sep=1pt] at ({x:.2f},{y:.2f}) {{{lab}}};"
             )
-        charge = charge_tikz(mol, idx, explicit_hs=hs.get(idx, 0))
+            # 标签占据按字形估算（label_visual_width 的 0.6 折减——该宽度
+            # 是为组件间距设计的保守上限，字形实际约占六成）
+            hw = max(0.11, label_visual_width(lab) * 0.3)
+            occ.add_rect(x - hw, y - 0.12, x + hw, y + 0.12)
+        charge = charge_tikz(mol, idx, explicit_hs=hs.get(idx, 0),
+                             occupancy=occ)
         if charge:
             lines.append(f"    {charge}")
         if show_numbers:
@@ -270,8 +285,16 @@ def molecule_scope_lines(mol, shift: Tuple[float, float], *,
     if show_lone_pairs:
         for atom in mol.GetAtoms():
             idx = atom.GetIdx()
-            for dot_line in lone_pair_tikz(mol, idx, explicit_hs=hs.get(idx, 0)):
-                lines.append(f"    {dot_line}")
+            # 与 lone_pair_tikz 同格式输出，同时把电子点登记进占据表
+            groups, singles = lone_pair_dot_groups(
+                mol, idx, explicit_hs=hs.get(idx, 0))
+            for (x1, y1), (x2, y2) in groups:
+                for dx, dy in ((x1, y1), (x2, y2)):
+                    lines.append(f"    \\fill ({dx:.2f},{dy:.2f}) circle (0.028);")
+                    occ.add_circle(dx, dy, DOT_R)
+            for dx, dy in singles:
+                lines.append(f"    \\fill ({dx:.2f},{dy:.2f}) circle (0.028);")
+                occ.add_circle(dx, dy, DOT_R)
     lines.append("  \\end{scope}")
     return lines
 
