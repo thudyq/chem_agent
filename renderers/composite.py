@@ -569,10 +569,14 @@ def render_composite(layout: str, children: list) -> str:
         return "（COMPOSITE 渲染失败：reaction_mech 布局需要 [RXNARROW] 标记主反应箭头位置）"
 
     # resonance 布局/含共振箭头时，极限式必须保留显式键级（跳过芳香化），
-    # 否则不同 Kekulé 式会被统一芳香化成同一结构
-    allow_aromatic = not (
-        layout_name == "resonance"
-        or any(el[0] == "resarrow" for el in sequence)
+    # 否则不同 Kekulé 式会被统一芳香化成同一结构。
+    # 其他布局传 None 让 prepare_mol 自动判定（芳香小写→画圈，
+    # 凯库勒大写→保留键级），而非一律芳香化。
+    allow_aromatic = (
+        False
+        if (layout_name == "resonance"
+            or any(el[0] == "resarrow" for el in sequence))
+        else None
     )
 
     mols = {}

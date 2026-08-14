@@ -46,7 +46,8 @@ def smiles_to_chemfig(smiles: str, aromatic: bool = True):
 def render_structure(smiles: str, label: str = None) -> str:
     """[STRUCT] 渲染：SMILES → TikZ 结构式；可选 label 置于结构下方。
 
-    芳香小写（c1ccccc1）画圈，凯库勒大写（C1=CC=CC=C1）交替键。
+    芳香小写（c1ccccc1）画圈；凯库勒大写保留输入单双键位置（不同 Kekulé
+    式渲染不同——如硝基苯 C1C=CC=CC=1 vs C1=CC=CC=C1 双键错开）。
     失败时返回可读的错误提示字符串（非空、非异常）。
     """
     from .mol_primitives import (
@@ -54,11 +55,14 @@ def render_structure(smiles: str, label: str = None) -> str:
     )
     from .layout import molecule_scope_lines
 
-    mol = prepare_mol(smiles)
+    is_aromatic = has_aromatic_lowercase(smiles)
+    # 凯库勒大写（无芳香小写）：allow_aromatic=False 保留输入键级——
+    # RDKit 默认会把任意交替式归一化为芳香环，丢失用户指定的单双键位置
+    mol = prepare_mol(smiles, allow_aromatic=is_aromatic)
     if mol is None:
         return f"（结构渲染失败：无法为「{smiles}」生成结构式，请检查 SMILES）"
 
-    rings = aromatic_ring_info(mol) if has_aromatic_lowercase(smiles) else None
+    rings = aromatic_ring_info(mol) if is_aromatic else None
     lines = ["\\begin{tikzpicture}"]
     lines.extend(molecule_scope_lines(mol, (0.0, 0.0), aromatic_rings=rings))
     if label:

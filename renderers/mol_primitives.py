@@ -993,7 +993,7 @@ def has_aromatic_lowercase(smiles: str) -> bool:
 
 
 def prepare_mol(smiles: str, *, add_hs: bool = False, kekulize: bool = False,
-                use_prepare: bool = True, allow_aromatic: bool = True):
+                use_prepare: bool = True, allow_aromatic: bool | None = None):
     """SMILES → RDKit Mol：解析、可选加氢/Kekulize、计算 2D 坐标。
 
     参数:
@@ -1002,9 +1002,10 @@ def prepare_mol(smiles: str, *, add_hs: bool = False, kekulize: bool = False,
         kekulize: 是否 Kekulize（Lewis 需要明确单双键）。
         use_prepare: 是否优先用 rdMolDraw2D.PrepareMolForDrawing；
                      为 False 时直接用 AllChem.Compute2DCoords。
-        allow_aromatic: 为 False 时跳过芳香化判定与再 Kekulé 化，
-                     保留输入的显式键级——共振极限式（如两个 Kekulé 苯）
-                     必须如此，否则会被统一芳香化成同一结构。
+        allow_aromatic: 芳香化判定开关。None（默认）= 按原始 SMILES 自动：
+            芳香小写（c1ccccc1）→ True（画圈模式）；凯库勒大写
+            （C1=CC=CC=C1）→ False（保留输入单双键，不同 Kekulé 式
+            渲染不同）。显式传 True/False 时尊重调用方。
 
     返回:
         RDKit Mol 对象；解析失败返回 None。
@@ -1020,6 +1021,9 @@ def prepare_mol(smiles: str, *, add_hs: bool = False, kekulize: bool = False,
     # 游离氢组分（[H+]/[H]/[H-] 孤立 H：质子/氢自由基/氢负离子）是合法
     # 组分，保留并正常绘制（电荷圈/单电子点/孤对电子）；解析与坐标计算
     # 对孤立 H 的警告（无害，C4）在调用点局部屏蔽。
+    if allow_aromatic is None:
+        # 自动：芳香小写→True（画圈），凯库勒大写→False（保留键级）
+        allow_aromatic = has_aromatic_lowercase(smiles)
     with (mute_rdkit_warnings() if FREE_H_COMPONENT_RE.search(smiles or "")
           else contextlib.nullcontext()):
         if allow_aromatic:
