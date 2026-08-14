@@ -16,6 +16,7 @@
 宽松阈值避免误杀合法标记；渲染器内部的二次校验保留为兜底防线。
 """
 
+import contextlib
 import re
 from collections import Counter
 from dataclasses import dataclass, field
@@ -1001,7 +1002,12 @@ def _warn_benzene_consistency(tags: List[RenderTag],
             if not smi:
                 continue
             try:
-                m = Chem.MolFromSmiles(smi)
+                # 游离氢组分（[H+]/[H]/[H-]）解析触发 RemoveHs 无害警告，静默
+                cm = (mute_rdkit_warnings() if FREE_H_COMPONENT_RE
+                      and FREE_H_COMPONENT_RE.search(smi)
+                      else contextlib.nullcontext())
+                with cm:
+                    m = Chem.MolFromSmiles(smi)
                 if m is None:
                     continue
             except Exception:
