@@ -52,8 +52,12 @@ def atom_label(atom, explicit_hs: int = 0, flip: bool = False) -> str | None:
     （Instruction-for-Electrons §三；此前与圆圈并存导致双重显示）。
     """
     z = atom.GetAtomicNum()
+    if z == 6 and atom.IsInRing():
+        # 键线式：环内碳一律不标（含带电荷的，如 σ 络合物的 [CH+]——
+        # 正电荷用圆圈电荷显示，不标 CH，与 atom_main_label 一致）
+        return None
     if z == 6 and atom.GetFormalCharge() == 0 and not _only_h_neighbors(atom):
-        # 键线式：有重原子邻居的碳不标（CHn 由骨架线隐含）
+        # 键线式：有重原子邻居的链上碳不标（CHn 由骨架线隐含）
         return None
     # 孤立碳（仅连 H，如 CH4 的 C）无键线式可言——必须显示 C/CH4
     # （B1 20260812：自由基夺氢机理的单碳组分，否则图上是空位）
