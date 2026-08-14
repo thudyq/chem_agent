@@ -10,7 +10,6 @@ from core.tag_parser import parse_tags
 from core.tag_injector import inject_tags_into_text
 from core.tag_validator import degrade_text, validate_tags
 from renderers.registry import RENDERER_REGISTRY
-
 # 渲染器失败串的统一前缀（各渲染器内部约定："（XX渲染失败：原因）"）
 _RENDER_ERROR_PREFIX = "（"
 
@@ -91,7 +90,37 @@ def process_question(user_question: str, max_corrections: int = 1,
         思考链收益小、延迟高）。
     """
     # 1. 调用 LLM（自动加载 system prompt，含标记协议）
-    full_response = ask_llm(user_question, history=history,
+    #    可选增强：用户问题含明确化学名称（"画 X 的结构/分子式"）时，
+    #    PubChem 反查 SMILES 作为参考上下文注入，帮助 LLM 输出正确结构
+    llm_input = user_question
+    try:
+        from utils.name_resolver import name_to_smiles
+        import re as _re
+        # 提取化学名称（中文/英文/混合），排除"反应/机理/方程"类问题
+        m = _re.search(
+            r"(?:画出|画|绘制)?\s*"
+            r"([\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-z0-9\- ]{0,29}?)\s*(?:的)?"
+            r"(?:结构(?:式)?|分子式|怎么写|是什么结构)", user_question)
+        if m:
+            chem_name = m.group(1).strip()
+            for _p in ("画出", "画 ", "绘制", "画"):
+                if chem_name.startswith(_p):
+                    chem_name = chem_name[len(_p):].strip()
+                    break
+            if chem_name and not _re.search(r"反应|机理|方程", user_question):
+                pub_smiles = name_to_smiles(chem_name)
+                if pub_smiles:
+                    llm_input = (
+                        f"[参考] 化合物「{chem_name}」的 PubChem 标准 SMILES 为"
+                        f" `{pub_smiles}`（仅作结构参考，请用 [STRUCT:...] 输出）。\n"
+                        f"用户问题：{user_question}"
+                    )
+                    print(f"[process_question] PubChem 名称→SMILES: "
+                          f"{chem_name} -> {pub_smiles}")
+    except Exception as e:
+        print(f"[process_question] PubChem 增强跳过: {e}")
+
+    full_response = ask_llm(llm_input, history=history,
                             on_piece=progress_callback)
     if not full_response:
         return "（LLM 调用失败，请检查 .env 配置与网络）"
