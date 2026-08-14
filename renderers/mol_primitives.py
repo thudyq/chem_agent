@@ -918,7 +918,7 @@ def aromatic_ring_info(mol) -> list:
         ys = [atom_pos(mol, i)[1] for i in ring]
         cx, cy = sum(xs) / len(xs), sum(ys) / len(ys)
         # 圈半径取"环键中点到质心"的平均距离（对正六边形 = 0.866×顶点半径），
-        # 再 ×0.85 使圈略小于内切圆、明显位于六边形内部（不碰边、不穿顶点，
+        # 再 ×0.70 使圈明显小于内切圆、位于六边形内部（不碰边、不穿顶点，
         # 教科书带圈苯风格）
         radii = []
         for k in range(len(ring)):
@@ -926,7 +926,7 @@ def aromatic_ring_info(mol) -> list:
             mx = (xs[k] + atom_pos(mol, aj)[0]) / 2.0
             my = (ys[k] + atom_pos(mol, aj)[1]) / 2.0
             radii.append(math.hypot(mx - cx, my - cy))
-        radius = 0.85 * sum(radii) / len(radii)
+        radius = 0.70 * sum(radii) / len(radii)
         out.append((set(ring), cx, cy, radius))
     return out
 
