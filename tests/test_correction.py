@@ -34,7 +34,7 @@ def test_no_failure_no_retry(fake_rdkit, fake_renderers, monkeypatch):
     calls = []
     monkeypatch.setattr(
         "app.ask_llm", lambda *a, **k: calls.append(a[0] if a else None) or "苯是 [STRUCT:c1ccccc1]。")
-    result = process_question("画苯")
+    result = process_question("画苯", max_corrections=1)
     assert len(calls) == 1, "无失败不应触发修正重试"
     assert "RENDERED:c1ccccc1" in result
 
@@ -46,9 +46,11 @@ def test_correction_after_validation_failure(fake_rdkit, fake_renderers,
         "苯是 [STRUCT:XYZABC]。",      # 非法 SMILES → 校验拦截 → 触发修正
         "苯是 [STRUCT:c1ccccc1]。",     # 修正版
     ]
+    # 禁用 PubChem 翻译（避免消耗 ask_llm 调用序列）
+    monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
     monkeypatch.setattr(
         "app.ask_llm", lambda *a, **k: calls.append(a[0] if a else None) or answers.pop(0))
-    result = process_question("画苯")
+    result = process_question("画苯", max_corrections=1)
     assert len(calls) == 2, "应触发一次修正重试"
     assert "RENDERED:c1ccccc1" in result
     assert "无效 SMILES" not in result
@@ -62,9 +64,10 @@ def test_correction_after_render_failure(fake_rdkit, flawed_renderers,
         "看 [STRUCT:CCl]。",            # CCl 合法但渲染器失败 → 触发修正
         "看 [STRUCT:c1ccccc1]。",       # 修正版
     ]
+    monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
     monkeypatch.setattr(
         "app.ask_llm", lambda *a, **k: calls.append(a[0] if a else None) or answers.pop(0))
-    result = process_question("画苯")
+    result = process_question("画苯", max_corrections=1)
     assert len(calls) == 2
     assert "RENDERED:c1ccccc1" in result
     assert "结构渲染失败" not in result
@@ -73,9 +76,10 @@ def test_correction_after_render_failure(fake_rdkit, flawed_renderers,
 def test_correction_exhausted_degrades(fake_rdkit, fake_renderers,
                                        monkeypatch):
     calls = []
+    monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
     monkeypatch.setattr(
         "app.ask_llm", lambda *a, **k: calls.append(a[0] if a else None) or "苯是 [STRUCT:XYZABC]。")
-    result = process_question("画苯")
+    result = process_question("画苯", max_corrections=1)
     assert len(calls) == 2, "最多修正一次，不应无限重试"
     assert "图示无法渲染" in result
 
@@ -154,9 +158,10 @@ def test_retry_succeeds_after_smiles_fix(fake_rdkit, fake_renderers,
         # 修正版：简单结构渲染成功
         "乙醛氧化：[STRUCT:CCO]",
     ]
+    monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
     monkeypatch.setattr(
         "app.ask_llm", lambda *a, **k: calls.append(a[0] if a else None) or answers.pop(0))
-    result = process_question("写出乙醛发生银镜反应的化学方程式。")
+    result = process_question("写出乙醛发生银镜反应的化学方程式。", max_corrections=1)
     assert len(calls) == 2, "首次失败应触发一次修正重试"
     assert "RENDERED:CCO" in result                # 修正版已渲染
     assert "无法渲染" not in result                # 无降级提示

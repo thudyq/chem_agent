@@ -13,6 +13,127 @@ from renderers.registry import RENDERER_REGISTRY
 # 渲染器失败串的统一前缀（各渲染器内部约定："（XX渲染失败：原因）"）
 _RENDER_ERROR_PREFIX = "（"
 
+# 非化合物名的角色/流程 label（过滤：不作为 PubChem 查询依据）
+_ROLE_LABELS = {
+    "反应物", "产物", "中间体", "底物", "亲核试剂", "亲电试剂",
+    "过渡态", "离去基团", "溶剂", "催化剂", "加成产物", "σ络合物",
+    "σ 络合物", "氧负离子", "碳正离子", "自由基",
+}
+
+# SMILES 相关失败原因关键词（值得 PubChem 兜底的类型）
+_SMILES_FAILURE_KEYWORDS = (
+    "无效 SMILES", "价态", "化学校验", "显式 H", "XH",
+    "超出", "越界", "不存在", "不成键",
+)
+
+# 中文化学名 → 英文翻译提示（轻量，不加载完整化学 prompt）
+_TRANSLATE_SYSTEM = (
+    "你是化学名称翻译器。把用户输入的中文化学名称翻译成标准的英文名"
+    "（IUPAC 或常用俗名）。只输出英文名称本身，不要解释、不要加引号。"
+    "如果输入已是英文，原样输出。"
+)
+
+
+def _extract_chem_labels(failures: list) -> list:
+    """从失败标记提取化合物 label（过滤角色/流程词）。
+
+    failures: [(RenderTag, 原因字符串), ...]。
+    返回 [(label, 原因), ...]——label 为疑似化合物名（args[1]）。
+    """
+    labels = []
+    for tag, err in failures:
+        if not err or not any(k in err for k in _SMILES_FAILURE_KEYWORDS):
+            continue
+        if tag.type != "STRUCT" or len(tag.args) < 2:
+            continue
+        label = str(tag.args[1]).strip() if tag.args[1] else ""
+        if not label or label in _ROLE_LABELS:
+            continue
+        labels.append((label, err))
+    return labels
+
+
+def _extract_names_from_question(question: str) -> list:
+    """从用户问题提取化合物名（REACTION/无 label 标记的兜底来源）。
+
+    匹配 "乙醇被高锰酸钾氧化" 中的物质名——按常见分隔词切分，
+    取中文/英文词片段（排除反应/机理/方程等流程词）。
+    """
+    import re
+    if not question or not isinstance(question, str):
+        return []
+    # 按"被/与/和/加/氧化/还原/生成/得/反应"等切分，取名词片段
+    tokens = re.split(r"被|与|和|加|氧化|还原|生成|反应|方程式|的|，|。| ", question)
+    names = []
+    for tok in tokens:
+        tok = tok.strip()
+        # 中文名（≥2 字）或英文名（含字母）
+        if (re.fullmatch(r"[\u4e00-\u9fff]{2,10}", tok)
+                or re.fullmatch(r"[A-Za-z][A-Za-z0-9\- ]{1,20}", tok)):
+            if tok not in _ROLE_LABELS and not any(
+                    k in tok for k in ("反应", "机理", "方程", "氧化数")):
+                names.append(tok)
+    return names[:3]
+
+
+def _translate_name_zh2en(name: str) -> str | None:
+    """中文化学名 → 英文（LLM 翻译）；已是英文或翻译失败返回原样/None。"""
+    if not name or not isinstance(name, str):
+        return None
+    import re
+    if re.fullmatch(r"[A-Za-z0-9\- ]+", name):
+        return name  # 已是英文，无需翻译
+    try:
+        translated = ask_llm(name, system_prompt=_TRANSLATE_SYSTEM,
+                             max_tokens=64, thinking="disabled")
+        if translated:
+            t = translated.strip().strip('"\'。.')
+            if t and len(t) < 60:
+                return t
+    except Exception:
+        pass
+    return None
+
+
+def _fetch_pubchem_references(failures: list, user_question: str = "",
+                              limit: int = 2) -> str:
+    """校验失败 → PubChem 兜底：提取 label/问题名 → 翻译 → 查 SMILES → 参考。
+
+    名称来源优先级：① 失败标记的 label（STRUCT）；② 用户问题中的化合物名
+    （REACTION 等无 label 标记）。任一步失败静默跳过。限流：最多 limit 个。
+    """
+    from utils.name_resolver import name_to_smiles
+
+    # 候选名称：label + 问题提取
+    candidates = []
+    for label, _ in _extract_chem_labels(failures):
+        candidates.append(label)
+    if user_question:
+        for name in _extract_names_from_question(user_question):
+            candidates.append(name)
+
+    refs = []
+    seen = set()
+    for label in candidates:
+        if label in seen:
+            continue
+        seen.add(label)
+        if len(refs) >= limit:
+            break
+        en = _translate_name_zh2en(label)
+        if not en:
+            continue
+        try:
+            smi = name_to_smiles(en)
+        except Exception:
+            continue
+        if smi:
+            refs.append(f"「{label}」的 PubChem 标准 SMILES：`{smi}`")
+    if not refs:
+        return ""
+    return ("\nPubChem 参考（权威 SMILES，可对照修正你的标记）：\n"
+            + "\n".join(f"- {r}" for r in refs))
+
 
 def _build_correction_prompt(user_question: str, original: str,
                              failures: list) -> str:
@@ -33,6 +154,13 @@ def _build_correction_prompt(user_question: str, original: str,
     ]
     for tag, err in failures[:10]:
         lines.append(f"- {tag.raw}：{err}")
+
+    # PubChem 兜底：失败标记的 label 是化合物名时，反查权威 SMILES 作为修正参考
+    pubchem_ref = _fetch_pubchem_references(failures, user_question)
+    if pubchem_ref:
+        lines.append("")
+        lines.append(pubchem_ref)
+
     lines += [
         "",
         "修正要求：",
@@ -74,7 +202,7 @@ def _build_correction_prompt(user_question: str, original: str,
     return "\n".join(lines)
 
 
-def process_question(user_question: str, max_corrections: int = 1,
+def process_question(user_question: str, max_corrections: int = 2,
                      history: list = None, progress_callback=None,
                      correction_callback=None) -> str:
     """端到端处理用户问题，返回含渲染后图示代码的文本。
