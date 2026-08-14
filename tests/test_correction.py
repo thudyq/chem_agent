@@ -14,6 +14,16 @@ from app import _build_correction_prompt, process_question
 from renderers import registry
 
 
+@pytest.fixture(autouse=True)
+def no_synrbl(monkeypatch):
+    """本文件测试聚焦 P2 修正闭环，不涉 SynRBL——屏蔽真实导入（~23s）。
+
+    SynRBL 配平兜底的行为由 tests/test_rxn_balancer.py 单独覆盖。
+    """
+    monkeypatch.setattr(
+        "utils.rxn_balancer._load_synrbl", lambda: False)
+
+
 @pytest.fixture
 def flawed_renderers(monkeypatch):
     """STRUCT 渲染器：c1ccccc1 成功，其余（合法但模拟内部失败）返回失败串。"""
