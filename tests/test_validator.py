@@ -705,3 +705,72 @@ def test_benzene_style_consistency_warning():
     _, invalid3 = _validate(text3)
     assert len(invalid3) == 0
     assert get_last_warnings(), "圆圈+凯库勒混用应警告"
+
+
+# ---------------------------------------------------------------------------
+# 双轨制（20260814）：REACTION 物种 = 合法 SMILES 或教科书化学式（KMnO4 等）。
+# 这些测试用真实 RDKit（不用 fake_rdkit fixture），保证守恒校验真实生效。
+# ---------------------------------------------------------------------------
+
+
+def test_reaction_kmno4_oxidation_balances():
+    """双轨制核心场景：乙醇被 KMnO4 氧化（酸性）完整方程式通过守恒校验。
+
+    5CCO + 4KMnO4 + 6H2SO4 → 5CH3COOH + 4MnSO4 + 2K2SO4 + 11H2O
+    有机物（CCO）走 SMILES 轨、无机物（KMnO4/H2SO4/MnSO4/K2SO4/H2O）与
+    CH3COOH 走化学式轨——两侧原子与电荷守恒应通过。
+    """
+    pytest.importorskip("rdkit")
+    text = ("[REACTION:5CCO;4KMnO4;6H2SO4"
+            "|5CH3COOH;4MnSO4;2K2SO4;11H2O|Δ]")
+    _, invalid = _validate(text)
+    assert len(invalid) == 0, f"KMnO4 氧化乙醇应通过守恒校验: {invalid}"
+
+
+def test_reaction_formula_species_only():
+    """纯化学式轨：所有物种都用教科书化学式（无 SMILES）也应通过。"""
+    pytest.importorskip("rdkit")
+    text = ("[REACTION:5CH3CH2OH;4KMnO4;6H2SO4"
+            "|5CH3COOH;4MnSO4;2K2SO4;11H2O|Δ]")
+    _, invalid = _validate(text)
+    assert len(invalid) == 0, f"纯化学式轨应通过: {invalid}"
+
+
+def test_reaction_mixed_tracks():
+    """混合轨：同一方程式中 SMILES 与化学式物种共存（乙醇氧化成乙醛）。"""
+    pytest.importorskip("rdkit")
+    text = ("[REACTION:CCO;[O-][Mn](=O)(=O)=O|CC=O|]")
+    _, invalid = _validate(text)
+    # 物种均可解析（SMILES + 化学式），但反应式不守恒（KMnO4 还原产物缺失）
+    assert len(invalid) == 1
+    assert "化学校验" in invalid[0].reason
+
+
+def test_reaction_formula_inorganic_salt():
+    """化学式轨无机盐可解析（非 SMILES 但化学式合法）：高锰酸钾单物种。"""
+    pytest.importorskip("rdkit")
+    from core.tag_validator import _parse_plain_formula
+    cands = _parse_plain_formula("KMnO4")
+    assert cands and cands[0][0] == {"K": 1, "Mn": 1, "O": 4}
+    cands2 = _parse_plain_formula("K2Cr2O7")
+    assert cands2 and cands2[0][0] == {"K": 2, "Cr": 2, "O": 7}
+    cands3 = _parse_plain_formula("CH3COOH")
+    assert cands3 and cands3[0][0] == {"C": 2, "H": 4, "O": 2}
+
+
+def test_reaction_unresolvable_species_rejected():
+    """既非 SMILES 也非化学式（占位符/乱码）仍被拦截，且保留「无效 SMILES」关键词。"""
+    pytest.importorskip("rdkit")
+    _, invalid = _validate("[REACTION:CCO;XYZABC|CC=O|]")
+    assert len(invalid) == 1
+    assert "无效 SMILES" in invalid[0].reason
+
+
+def test_reaction_formula_unbalanced_rejected():
+    """化学式轨同样受守恒约束：乙醇+氧气不守恒（缺产物水）被拦截。"""
+    pytest.importorskip("rdkit")
+    text = "[REACTION:CCO;O2|CH3COOH|]"
+    _, invalid = _validate(text)
+    assert len(invalid) == 1
+    assert "化学校验" in invalid[0].reason
+

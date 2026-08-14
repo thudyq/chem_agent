@@ -197,13 +197,19 @@ _CHEM_PREFIX = "化学校验："
 
 _FORMULA_TOKEN_RE = re.compile(r"([A-Z][a-z]?)(\d*)")
 
-# 可识别的真实元素（有机/常见无机）。刻意不含 Ar（氩）、Ac（锕）等——
-# 它们是 prompt 允许的通用基团缩写（Ar=芳基、Ac=乙酰基，见
-# Instruction-for-Structure.md），误判为化学式会把缩写 label 打回。
+# 可识别的真实元素（有机/常见无机，及常见无机/氧化还原元素 Mn、Cr、
+# Ba 等——KMnO4、H2SO4、MnSO4、K2SO4、CrCl3 等教科书化学式由此可解析）。
+# 刻意不含 Ar（氩）、Ac（锕）等——它们是 prompt 允许的通用基团缩写
+# （Ar=芳基、Ac=乙酰基，见 Instruction-for-Structure.md），
+# 误判为化学式会把缩写 label 打回。
 _REAL_ELEMENTS = {
     "H", "B", "C", "N", "O", "F", "Si", "P", "S", "Cl", "Br", "I",
     "Li", "Na", "K", "Mg", "Ca", "Al", "Fe", "Cu", "Zn", "Ag", "Au",
     "Hg", "Pb", "Sn", "Se", "Te",
+    "Be", "Sc", "Ti", "V", "Cr", "Mn", "Co", "Ni", "Ga", "Ge", "As",
+    "Rb", "Sr", "Y", "Zr", "Nb", "Mo", "Ru", "Rh", "Pd", "Cd", "In",
+    "Sb", "Cs", "Ba", "La", "Ce", "Hf", "Ta", "W", "Re", "Os", "Ir",
+    "Pt", "Tl", "Bi",
 }
 
 
@@ -861,8 +867,13 @@ def validate_tag(tag: RenderTag) -> ValidationResult:
         for smi in smi_list:
             if not smi:
                 return ValidationResult(tag, False, "SMILES 为空")
-            if not _smiles_ok(smi):
-                return ValidationResult(tag, False, f"无效 SMILES「{smi}」")
+            # 双轨制：物种可以是合法 SMILES，也可以是教科书化学式
+            # （KMnO4 / H2SO4 / MnSO4 / K2SO4 / H2O / O2 / CH3COOH 等）。
+            # 失败原因保留「无效 SMILES」前缀——修正流程（app.py
+            # _SMILES_FAILURE_KEYWORDS / 修正 prompt 测试）按该关键词路由。
+            if not _smiles_ok(smi) and not _parse_plain_formula(smi):
+                return ValidationResult(
+                    tag, False, f"无效 SMILES 且非化学式「{smi}」")
         if _RDKIT_OK:
             reason = _check_reaction_balance(args)
             if reason:

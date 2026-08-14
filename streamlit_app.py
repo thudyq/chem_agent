@@ -158,16 +158,23 @@ def _convert_ce_math(body: str) -> str:
     \\ce{C6H6 + HNO3 ->[H2SO4, \\triangle] C6H5NO2 + H2O} →
     C_6H_6 + HNO_3 \\xrightarrow{H_2SO_4, \\triangle} C_6H_5NO_2 + H_2O
     转换规则（按序）：箭头（->[条件]→\\xrightarrow、->→\\rightarrow、<=>→
-    \\rightleftharpoons）；电荷（元素/括号后的 数字?+/- → 上标，Fe2+→Fe^{2+}）；
-    数字下标（元素/括号后的数字 → 下标，C6→C_6）。
+    \\rightleftharpoons）；电荷（元素/括号/方括号后的 数字?+/- → 上标，
+    Fe2+→Fe^{2+}、[Ag(NH3)2]+→[Ag(NH_3)_2]^{+}）；数字下标（元素/括号后的
+    数字 → 下标，C6→C_6）；沉淀符号（mhchem 的孤立 v 与 ↓ → \\downarrow）。
     """
     def _ce(m):
         inner = m.group(1)
         inner = re.sub(r"->\[([^\]]*)\]", r"\\xrightarrow{\1}", inner)
         inner = inner.replace("<=>", r"\rightleftharpoons")
         inner = inner.replace("->", r"\rightarrow")
-        inner = re.sub(r"([A-Za-z\)])(\d*)([+-])", r"\1^{\2\3}", inner)
-        inner = re.sub(r"([A-Za-z\)])(\d+)", r"\1_\2", inner)
+        # 电荷上标：元素/圆括号/方括号后的 数字?+/-（2OH- → 2OH^{-}、
+        # [Ag(NH3)2]+ → ]^{+}）；数字前导也转（Fe2+ → Fe^{2+}）
+        inner = re.sub(r"([A-Za-z\)\]])(\d*)([+-])", r"\1^{\2\3}", inner)
+        inner = re.sub(r"([A-Za-z\)\]])(\d+)", r"\1_\2", inner)
+        # mhchem 沉淀/析出符号：孤立的 v（\ce{2Ag v} → 2Ag↓）与 ↓ 统一转
+        # \downarrow（KaTeX 支持；mhchem v4 中孤立 v 即沉淀下箭头）
+        inner = re.sub(r"(?<![A-Za-z])v(?![A-Za-z])", r"\\downarrow", inner)
+        inner = inner.replace("↓", r"\downarrow")
         return inner
 
     return _CE_RE.sub(_ce, body)

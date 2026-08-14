@@ -41,6 +41,17 @@ class PlacedArrow:
 
 
 @dataclass
+class PlacedText:
+    """已定位的纯文本组件（化学式文本节点，如 KMnO4，无分子结构）。"""
+    key: Hashable                                 # 调用方标识（如组件 id / 序号）
+    text: str                                     # 原始文本（渲染端 wrap_format_text 排版）
+    shift: Tuple[float, float]                    # 节点平移量（全局 = 局部 + shift）
+    bbox: Tuple[float, float, float, float]       # 局部包围盒（中心在 y=0）
+    coeff: float = 1.0                            # 化学计量系数（渲染系数节点）
+    spacing_bbox: Tuple[float, float, float, float] = None  # 间距包围盒（同 bbox）
+
+
+@dataclass
 class RowLayout:
     """一行组件的布局结果。"""
     mols: List[PlacedMol]
@@ -48,6 +59,7 @@ class RowLayout:
     arrows: List[PlacedArrow]
     width: float                 # 总宽（右端游标）
     resarrows: List[float] = field(default_factory=list)   # ↔ 中心 x 坐标
+    texts: List[PlacedText] = field(default_factory=list)  # 纯文本组件（化学式）
 
     def mol_map(self) -> dict:
         """key → PlacedMol 映射，便于按组件 id 取位置。"""
@@ -69,6 +81,8 @@ def layout_row(items: list, *, mol_gap: float = 1.6, plus_w: float = 1.1,
             ("mol", key, mol, coeff)      同上，附化学计量系数（数字，如 2 或
                                           0.5；渲染端负责画系数节点，布局仅预留
                                           左侧宽度）；
+            ("text", key, text, coeff)    纯文本组件（化学式如 KMnO4，无分子结构，
+                                          渲染端画文本节点；coeff 语义同上）；
             ("plus",)          加号连接符；
             ("arrow", cond)    主反应箭头（cond 为条件文本，可空）；
             ("resarrow",)      共振箭头 ↔ 连接符。
@@ -88,6 +102,7 @@ def layout_row(items: list, *, mol_gap: float = 1.6, plus_w: float = 1.1,
     """
     cursor = 0.0
     mols: List[PlacedMol] = []
+    texts: List[PlacedText] = []
     pluses: List[float] = []
     arrows: List[PlacedArrow] = []
     resarrows: List[float] = []
@@ -126,6 +141,21 @@ def layout_row(items: list, *, mol_gap: float = 1.6, plus_w: float = 1.1,
                                   label=label, coeff=coeff or 1.0,
                                   spacing_bbox=spacing))
             cursor += w
+        elif kind == "text":
+            if prev_kind in ("mol", "text"):
+                cursor += mol_gap
+            _, key, text = item[:3]
+            coeff = item[3] if len(item) > 3 else 0.0
+            w_t, h_t = label_wrapped_size(text)
+            bbox = (-w_t / 2.0, -h_t / 2.0, w_t / 2.0, h_t / 2.0)
+            # 系数节点左侧留白（与 mol 分支一致）
+            coeff_pad = 0.6 if coeff and coeff != 1 else 0.0
+            w = w_t + coeff_pad
+            local_cx = coeff_pad / 2.0
+            shift = (cursor + w / 2.0 - local_cx, 0.0)
+            texts.append(PlacedText(key=key, text=text, shift=shift, bbox=bbox,
+                                    coeff=coeff or 1.0, spacing_bbox=bbox))
+            cursor += w
         elif kind == "plus":
             pluses.append(cursor + plus_w / 2.0)
             cursor += plus_w
@@ -140,7 +170,7 @@ def layout_row(items: list, *, mol_gap: float = 1.6, plus_w: float = 1.1,
             cursor += arrow_w
         prev_kind = kind
     return RowLayout(mols=mols, pluses=pluses, arrows=arrows, width=cursor,
-                     resarrows=resarrows)
+                     resarrows=resarrows, texts=texts)
 
 
 def _resolve_row_overlaps(layout: RowLayout, pad: float = 0.05) -> float:
@@ -152,7 +182,8 @@ def _resolve_row_overlaps(layout: RowLayout, pad: float = 0.05) -> float:
     """
     for _ in range(5):
         moved = False
-        placed = sorted(layout.mols, key=lambda p: p.shift[0])
+        placed = sorted(list(layout.mols) + list(layout.texts),
+                        key=lambda p: p.shift[0])
         for i in range(1, len(placed)):
             a, b = placed[i - 1], placed[i]
             sba = a.spacing_bbox or a.bbox
@@ -166,7 +197,7 @@ def _resolve_row_overlaps(layout: RowLayout, pad: float = 0.05) -> float:
         if not moved:
             break
     right = 0.0
-    for p in layout.mols:
+    for p in list(layout.mols) + list(layout.texts):
         sbb = p.spacing_bbox or p.bbox
         right = max(right, sbb[2] + p.shift[0])
     return right
@@ -201,7 +232,7 @@ def layout_rows(items: list, *, row_gap: float = 1.2, **kwargs):
         y_offsets.append(y)
         height = max(
             ((p.spacing_bbox or p.bbox)[3] - (p.spacing_bbox or p.bbox)[1]
-             for p in layout.mols),
+             for p in list(layout.mols) + list(layout.texts)),
             default=1.0,
         )
         y += height + row_gap

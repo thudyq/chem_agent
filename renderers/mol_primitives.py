@@ -5,7 +5,6 @@
 2D 坐标计算、键线绘制逻辑抽取到这里，避免复制粘贴。
 """
 
-import contextlib
 import math
 import re
 
@@ -124,6 +123,10 @@ _FORMULA_LABEL_ELEMENTS = {
     "H", "B", "C", "N", "O", "F", "Si", "P", "S", "Cl", "Br", "I",
     "Li", "Na", "K", "Mg", "Ca", "Al", "Fe", "Cu", "Zn", "Ag", "Au",
     "Hg", "Pb", "Sn", "Se", "Te",
+    "Be", "Sc", "Ti", "V", "Cr", "Mn", "Co", "Ni", "Ga", "Ge", "As",
+    "Rb", "Sr", "Y", "Zr", "Nb", "Mo", "Ru", "Rh", "Pd", "Cd", "In",
+    "Sb", "Cs", "Ba", "La", "Ce", "Hf", "Ta", "W", "Re", "Os", "Ir",
+    "Pt", "Tl", "Bi",
 }
 _FORMULA_LABEL_RE = re.compile(r"^([A-Z][a-z]?\d*)+([+-]\d*)?$")
 
@@ -1066,18 +1069,18 @@ def prepare_mol(smiles: str, *, add_hs: bool = False, kekulize: bool = False,
         from rdkit import Chem
         from rdkit.Chem import AllChem
         from rdkit.Chem.Draw import rdMolDraw2D
-        from utils.rdkit_utils import FREE_H_COMPONENT_RE, mute_rdkit_warnings
+        from utils.rdkit_utils import mute_rdkit_warnings
     except ImportError:
         return None
 
-    # 游离氢组分（[H+]/[H]/[H-] 孤立 H：质子/氢自由基/氢负离子）是合法
-    # 组分，保留并正常绘制（电荷圈/单电子点/孤对电子）；解析与坐标计算
-    # 对孤立 H 的警告（无害，C4）在调用点局部屏蔽。
+    # 解析阶段统一屏蔽 rdApp.error：探测性解析（含双轨制下 KMnO4/H2SO4 等
+    # 公式物种试解析）失败是常态，RDKit 的 SMILES Parse Error 对用户与日志
+    # 均无价值（与 core.tag_validator._parse_mol 的屏蔽口径一致）；
+    # 失败由返回 None + 调用方的可读错误串承接。游离氢警告同样被屏蔽。
     if allow_aromatic is None:
         # 自动：芳香小写→True（画圈），凯库勒大写→False（保留键级）
         allow_aromatic = has_aromatic_lowercase(smiles)
-    with (mute_rdkit_warnings() if FREE_H_COMPONENT_RE.search(smiles or "")
-          else contextlib.nullcontext()):
+    with mute_rdkit_warnings(include_error=True):
         if allow_aromatic:
             mol = Chem.MolFromSmiles(smiles) if smiles else None
         else:

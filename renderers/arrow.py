@@ -14,11 +14,11 @@ if __name__ == "__main__":
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from renderers.mol_primitives import prepare_mol, scale_mol_coords, \
-        split_species_coeff, wrap_format_text
+        split_species_coeff, wrap_format_text, is_formula_label
     from renderers.layout import layout_row, molecule_scope_lines
 else:
     from .mol_primitives import prepare_mol, scale_mol_coords, \
-        split_species_coeff, wrap_format_text
+        split_species_coeff, wrap_format_text, is_formula_label
     from .layout import layout_row, molecule_scope_lines
 
 
@@ -50,20 +50,33 @@ def render_arrow(reactant_smi: str, product_smi: str, reaction_type: str = None)
         if split_species_coeff(product_smi) else (1, product_smi)
 
     reactant = prepare_mol(r_smi)
+    r_text = None
     if reactant is None:
-        return f"（反应箭头渲染失败：无效反应物 SMILES「{r_smi}」）"
+        if is_formula_label(r_smi):
+            r_text = r_smi
+        else:
+            return f"（反应箭头渲染失败：无效反应物 SMILES「{r_smi}」）"
     product = prepare_mol(p_smi)
+    p_text = None
     if product is None:
-        return f"（反应箭头渲染失败：无效产物 SMILES「{p_smi}」）"
-    scale_mol_coords(reactant, _MOL_SCALE)
-    scale_mol_coords(product, _MOL_SCALE)
+        if is_formula_label(p_smi):
+            p_text = p_smi
+        else:
+            return f"（反应箭头渲染失败：无效产物 SMILES「{p_smi}」）"
+    items = []
+    if reactant is not None:
+        scale_mol_coords(reactant, _MOL_SCALE)
+        items.append(("mol", "r", reactant, r_coeff))
+    else:
+        items.append(("text", "r", r_text, r_coeff))
+    items.append(("arrow", ""))
+    if product is not None:
+        scale_mol_coords(product, _MOL_SCALE)
+        items.append(("mol", "p", product, p_coeff))
+    else:
+        items.append(("text", "p", p_text, p_coeff))
 
-    layout = layout_row(
-        [("mol", "r", reactant, r_coeff),
-         ("arrow", ""),
-         ("mol", "p", product, p_coeff)],
-        arrow_w=_ARR_W, arrow_pad=_ARR_PAD,
-    )
+    layout = layout_row(items, arrow_w=_ARR_W, arrow_pad=_ARR_PAD)
     main_arrow = layout.arrows[0]
 
     lines = ["\\begin{tikzpicture}"]
@@ -74,6 +87,16 @@ def render_arrow(reactant_smi: str, product_smi: str, reaction_type: str = None)
             lines.append(f"  \\node at ({bx:.2f},0) {{{_fmt_coeff(placed.coeff)}}};")
         lines.extend(molecule_scope_lines(placed.mol, placed.shift,
                                           show_lone_pairs=False))
+    for placed in layout.texts:
+        if placed.coeff != 1:
+            bbox = placed.bbox
+            bx = bbox[0] + placed.shift[0] - 0.35
+            lines.append(f"  \\node at ({bx:.2f},0) {{{_fmt_coeff(placed.coeff)}}};")
+        lines.append(
+            f"  \\node[fill=white, inner sep=1pt] at "
+            f"({placed.shift[0]:.2f},{placed.shift[1]:.2f}) "
+            f"{{{wrap_format_text(placed.text)}}};"
+        )
     cond_text = wrap_format_text(reaction_type)
     if cond_text:
         align = "align=center, " if "\\\\" in cond_text else ""

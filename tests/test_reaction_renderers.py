@@ -102,3 +102,80 @@ def test_composite_resonance_forms_differ():
     scopes = out.split("\\begin{scope}")[1:]
     assert len(scopes) == 2
     assert scopes[0] != scopes[1]
+
+
+# ---------------------------------------------------------------------------
+# 双轨制（20260814）：公式物种（KMnO4 等）渲染为下标文本节点。
+# ---------------------------------------------------------------------------
+
+
+def test_reaction_kmno4_oxidation_renders_text_species():
+    """KMnO4 氧化乙醇：SMILES 物种画结构式、化学式物种渲染为下标文本。"""
+    out = render_reaction("5CCO;4KMnO4;6H2SO4",
+                          "5CH3COOH;4MnSO4;2K2SO4;11H2O", "Δ")
+    assert out.startswith("\\begin{tikzpicture}")
+    # 唯一结构式 scope = CCO（乙醇）；其余 6 物种均为文本节点
+    assert out.count("\\begin{scope}[shift=") == 1
+    assert "KMnO$_4$" in out
+    assert "H$_2$SO$_4$" in out
+    assert "MnSO$_4$" in out
+    assert "K$_2$SO$_4$" in out
+    assert "H$_2$O" in out
+    assert "CH$_3$COOH" in out
+    assert "无法为" not in out
+
+
+def test_reaction_all_formula_species():
+    """纯化学式轨：全部物种为公式文本节点，无结构式 scope。"""
+    out = render_reaction("5CH3CH2OH;4KMnO4", "5CH3COOH;4MnSO4", "H+")
+    assert out.count("\\begin{scope}[shift=") == 0
+    assert "CH$_3$CH$_2$OH" in out
+    assert "KMnO$_4$" in out
+    assert "H$^{+}$" in out
+
+
+def test_reaction_formula_species_coeff_nodes():
+    """公式物种带系数：系数节点与文本节点并存（4KMnO4 → {4} + KMnO$_4$）。"""
+    out = render_reaction("CCO;4KMnO4", "CH3COOH;4MnSO4", "")
+    assert "KMnO$_4$" in out
+    # 系数 4 节点（4KMnO4）
+    assert re.search(r"\\node at \([-\d.]+,0\) \{4\};", out)
+
+
+def test_reaction_formula_invalid_species_still_errors():
+    """既非 SMILES 也非化学式仍报错（XYZ_INVALID 不受双轨制影响）。"""
+    out = render_reaction("XYZ_INVALID", "CC", "")
+    assert "无法为" in out
+
+
+def test_arrow_formula_product_renders_text():
+    """ARROW：化学式产物（CH3COOH）渲染为文本节点而非结构式。"""
+    out = render_arrow("CCO", "CH3COOH", "KMnO4, H+")
+    assert out.count("\\begin{scope}[shift=") == 1  # 仅反应物 CCO 为结构式
+    assert "CH$_3$COOH" in out
+    assert "KMnO$_4$, H$^{+}$" in out
+
+
+def test_arrow_all_formula_species():
+    """ARROW：两侧均为化学式 → 无结构式 scope，全部文本节点。"""
+    out = render_arrow("KMnO4", "MnSO4", "")
+    assert out.count("\\begin{scope}[shift=") == 0
+    assert "KMnO$_4$" in out
+    assert "MnSO$_4$" in out
+
+
+def test_layout_text_item_no_overlap():
+    """布局：文本节点与结构式节点按序排列不重叠（全局包围盒比较）。"""
+    out = render_reaction("CCO;KMnO4", "CH3COOH;MnSO4", "")
+    scopes = re.findall(r"\\begin\{scope\}\[shift=\{\(([-\d.]+),([-\d.]+)\)\}\]",
+                        out)
+    # 公式文本节点在 y=0（结构式 scope 内原子标签在分子局部坐标 y≠0）
+    text_xs = [float(m.group(1)) for m in
+               re.finditer(r"\\node\[fill=white, inner sep=1pt\] at "
+                           r"\(([-\d.]+),0\.00\)", out)]
+    assert len(scopes) == 1
+    assert len(text_xs) == 3  # KMnO4 / CH3COOH / MnSO4
+    all_x = sorted([float(sx) for sx, _ in scopes] + text_xs)
+    assert len(all_x) == 4
+    # 各组件 x 坐标严格递增（加号/箭头占位隔开，无重叠）
+    assert all(b - a > 0.5 for a, b in zip(all_x, all_x[1:]))

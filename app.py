@@ -213,6 +213,8 @@ def _build_correction_prompt(user_question: str, original: str,
         "**氧化剂（KMnO4/K2Cr2O7 等）参与反应（被还原）时是反应物，必须写"
         "完整配平方程式，不能用 2b 省略**（如乙醇被 KMnO4 氧化产物是乙酸："
         "5CCO+4KMnO4+6H2SO4→5CH3COOH+4MnSO4+2K2SO4+11H2O）；"
+        "**无机物种（盐/酸/氧化物/单质）可直接写化学式**（KMnO4、H2SO4、"
+        "MnSO4、K2SO4、H2O、O2、CO2——渲染为文本），不必转离子 SMILES；"
         "**氧化反应不要补 -H2**（氧化不放氢气，H 与氧化剂供的 O 结合成水）；"
         "禁止用 [O]/[H] 占位符配平，补足物质必须真实参与该反应。"
         "催化剂/溶剂等辅助试剂写在箭头条件里，不列入反应物或产物列表。"
@@ -227,9 +229,11 @@ def _build_correction_prompt(user_question: str, original: str,
         "写 [Ag+] 与 [OH-] 分离）；实在写不出合法 SMILES 的物种（如复杂配合物）"
         "降级为文字描述或从方程式中省略，只保留能渲染的主物种。",
         "6. 若失败原因是无机盐/含氧酸盐 SMILES 非法（如 KMnO4 写成 K[Mn](=O)(=O)=O"
-        "或 KMn(=O)=O——金属与中心原子无直接键）：改离子式——阳离子 [K+]/[Na+]"
-        "与阴离子用 . 分隔，含氧酸根中心原子带足双键氧：KMnO4 写"
-        "[K+].[O-][Mn](=O)(=O)=O，K2Cr2O7 写 [K+].[K+].[O-][Cr](=O)(=O)O[Cr]"
+        "或 KMn(=O)=O——金属与中心原子无直接键）：**最简单改法是直接写教科书化学式**"
+        "（KMnO4、H2SO4、MnSO4、K2SO4、Na2CO3、NaCl——渲染为文本，无需 SMILES）；"
+        "需要画结构图时才改离子式——阳离子 [K+]/[Na+] 与阴离子用 . 分隔，"
+        "含氧酸根中心原子带足双键氧：KMnO4 写 [K+].[O-][Mn](=O)(=O)=O，K2Cr2O7 写 "
+        "[K+].[K+].[O-][Cr](=O)(=O)O[Cr]"
         "(=O)(=O)[O-]，KClO3 写 [K+].[O-][Cl](=O)=O，Na2CO3 写"
         "[Na+].[Na+].[O-]C(=O)[O-]，H2SO4 写 OS(=O)(=O)O，HNO3 写"
         "[O-][N+](=O)O。",

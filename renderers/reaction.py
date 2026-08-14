@@ -27,11 +27,13 @@ if __name__ == "__main__":
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from renderers.mol_primitives import prepare_mol, scale_mol_coords, \
-        split_arrow_condition, split_species_coeff, wrap_format_text
+        split_arrow_condition, split_species_coeff, wrap_format_text, \
+        is_formula_label
     from renderers.layout import layout_row, molecule_scope_lines
 else:
     from .mol_primitives import prepare_mol, scale_mol_coords, \
-        split_arrow_condition, split_species_coeff, wrap_format_text
+        split_arrow_condition, split_species_coeff, wrap_format_text, \
+        is_formula_label
     from .layout import layout_row, molecule_scope_lines
 
 
@@ -78,18 +80,25 @@ def render_reaction(reactants_str: str, products_str: str, conditions: str = "")
     for coeff, smi in all_species:
         mol = prepare_mol(smi)
         if mol is None:
+            # 双轨制：非 SMILES 但为纯化学式（KMnO4 等）走文本节点轨道
+            if is_formula_label(smi):
+                species.append((coeff, None, smi))
+                continue
             return f"（反应式渲染失败：无法为「{smi}」生成结构式）"
         scale_mol_coords(mol, _MOL_SCALE)
-        species.append((coeff, mol))
+        species.append((coeff, mol, smi))
 
     items = []
     n_react = len(reactants)
-    for i, (coeff, mol) in enumerate(species):
+    for i, (coeff, mol, smi) in enumerate(species):
         if i == n_react:
             items.append(("arrow", conditions.strip()))
         elif i > 0:
             items.append(("plus",))
-        items.append(("mol", i, mol, coeff))
+        if mol is not None:
+            items.append(("mol", i, mol, coeff))
+        else:
+            items.append(("text", i, smi, coeff))
     layout = layout_row(items, mol_gap=_MOL_GAP, plus_w=_PLUS_W,
                         arrow_w=_ARR_W, arrow_pad=_ARR_PAD)
 
@@ -104,6 +113,16 @@ def render_reaction(reactants_str: str, products_str: str, conditions: str = "")
             lines.append(f"  \\node at ({bx:.2f},0) {{{_fmt_coeff(placed.coeff)}}};")
         lines.extend(molecule_scope_lines(placed.mol, placed.shift,
                                           show_lone_pairs=False))
+    for placed in layout.texts:
+        if placed.coeff != 1:
+            bbox = placed.bbox
+            bx = bbox[0] + placed.shift[0] - 0.15
+            lines.append(f"  \\node at ({bx:.2f},0) {{{_fmt_coeff(placed.coeff)}}};")
+        lines.append(
+            f"  \\node[fill=white, inner sep=1pt] at "
+            f"({placed.shift[0]:.2f},{placed.shift[1]:.2f}) "
+            f"{{{wrap_format_text(placed.text)}}};"
+        )
     for px in layout.pluses:
         lines.append(f"  \\node at ({px:.2f},0) {{$+$}};")
 
