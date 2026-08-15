@@ -111,6 +111,18 @@ def test_composite_mecharrow_nonexistent_bond_rejected():
     assert "没有成键" in invalid[0].reason
 
 
+def test_bond_ref_gives_neighbor_hint():
+    """键端点引用无键时，原因含原子实际连接——可操作化（帮助重数索引）。"""
+    pytest.importorskip("rdkit")
+    text = ("[COMPOSITE:reaction_mech]"
+            "[STRUCT:O=S([O-])(=O)C1C=CC=C[CH+]1,id=sigma]"
+            "[MECHARROW:sigma:3-8>sigma:8][/COMPOSITE]")
+    _, invalid = _validate(text)
+    assert len(invalid) == 1
+    assert "没有成键" in invalid[0].reason
+    assert "实际连接" in invalid[0].reason
+
+
 def test_composite_mecharrow_existing_bond_passes():
     """a-b 端点引用真实存在的键（乙醛 0-1）放行。"""
     pytest.importorskip("rdkit")
@@ -231,6 +243,22 @@ class TestChemicalChecks:
         assert "无效 SMILES" in shown
         assert shown.startswith("（结构式图示无法渲染：")
 
+    def test_degrade_text_friendly_omits_details(self):
+        """用户可见友好降级：不含校验技术细节（无效 SMILES/守恒等）。
+
+        前后端分开：注入回答的降级文本只告知"图示未生成"，技术原因仍在
+        reason（P2 修正 / diagnostics / metrics）里。"""
+        pytest.importorskip("rdkit")
+        _, invalid = _validate("[STRUCT:XYZABC]")
+        shown = tv.degrade_text_friendly(invalid[0].tag)
+        assert shown == "（结构式图示无法渲染，已省略）"
+        assert "无效 SMILES" not in shown
+        _, invalid2 = _validate("[REACTION:CCO|CC=O|Cu, Δ]")
+        shown2 = tv.degrade_text_friendly(invalid2[0].tag)
+        assert shown2 == "（反应方程式图示无法渲染，已省略）"
+        assert "不守恒" not in shown2
+        assert "化学校验" not in shown2
+
     def test_reaction_protonation_balanced_passes(self):
         pytest.importorskip("rdkit")
         _, invalid = _validate("[REACTION:CCO;[H+]|CC[OH2+]]")
@@ -334,6 +362,14 @@ class TestCoeffAndBalanceRules:
         assert _parse_coeff("1/3O2") is None
         assert _parse_coeff("2/3O2") is None
         assert _split_multi_coeff("2CCO;1/2O2") == [(2, "CCO"), (0.5, "O2")]
+
+    def test_balance_reason_gives_element_diff(self):
+        """守恒失败原因含两侧元素差——可操作化（H -2 提示脱氢漏 H2）。"""
+        pytest.importorskip("rdkit")
+        _, invalid = _validate("[REACTION:CCO|CC=O|Cu, Δ]")
+        assert len(invalid) == 1
+        assert "右侧相对左侧" in invalid[0].reason
+        assert "H -2" in invalid[0].reason
 
     def test_arrow_c_conservation(self):
         """ARROW 当量检验：C 守恒通过（O/H 增减允许），C 不守恒拦截。"""
@@ -660,11 +696,18 @@ def test_pipeline_degrades_invalid_tags(fake_rdkit, fake_renderers, monkeypatch)
     llm_text = ("苯是 [STRUCT:c1ccccc1]，无效 [STRUCT:XYZABC]，"
                 "超长 [STRUCT:CO,label=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]。")
     monkeypatch.setattr("app.ask_llm", lambda *a, **k: llm_text)
-    result = process_question("测试")
+    diag = []
+    result = process_question("测试", diagnostics=diag)
     assert "RENDERED:c1ccccc1" in result
-    assert "无效 SMILES「XYZABC」" in result
-    assert "label 过长" in result
+    # 前端：友好降级，不含校验技术细节（前后端分开）
+    assert "图示无法渲染" in result
+    assert "无效 SMILES「XYZABC」" not in result
+    assert "label 过长" not in result
     assert "[STRUCT:XYZABC]" not in result
+    # 后端：diagnostics 拿到完整技术原因
+    assert len(diag) >= 2
+    assert any("无效 SMILES" in d["reason"] for d in diag)
+    assert any("label 过长" in d["reason"] for d in diag)
 
 
 def test_benzene_style_consistency_warning():

@@ -368,8 +368,15 @@ def _balance_reason(left, right, strict_h: bool, step: str,
         rc.pop("H", None)
     if lc != rc:
         detail = f"{_hill_str(left[0])} vs {_hill_str(right[0])}"
-        return (f"{_CHEM_PREFIX}{step}两侧原子不守恒（{detail}，"
-                f"需配平或补全物种；辅助试剂请写入箭头条件而非省略主物种）")
+        # 元素差明细（供修正环节定位多写/漏写的物种；正=右侧多，负=右侧少）
+        diff = []
+        for k in sorted(set(lc) | set(rc)):
+            d = rc.get(k, 0) - lc.get(k, 0)
+            if d:
+                diff.append(f"{k} {d:+d}")
+        diff_txt = f"，右侧相对左侧：{'、'.join(diff)}" if diff else ""
+        return (f"{_CHEM_PREFIX}{step}两侧原子不守恒（{detail}{diff_txt}，"
+                f"请核对物种 SMILES 是否多写/漏写原子；辅助试剂请写入箭头条件而非省略主物种）")
     if check_charge and left[1] != right[1]:
         return (f"{_CHEM_PREFIX}{step}两侧净电荷不守恒"
                 f"（{left[1]:+d} vs {right[1]:+d}，需补全离子或修正电荷）")
@@ -653,8 +660,13 @@ def _validate_mech_arrow_pt(pt: str, n_atoms: int,
         if gba is not None:
             bond = gba(ia, ib)
             if bond is None:
+                # 列出 ia 的实际连接原子，帮助模型重数索引（可操作化）
+                gai = getattr(mol, "GetAtomWithIdx", None)
+                nbrs = [n.GetIdx() for n in gai(ia).GetNeighbors()] \
+                    if gai is not None else []
+                hint = f"，原子 {ia} 实际连接 {nbrs}" if nbrs else ""
                 return (f"键端点「{pt}」引用原子 {ia} 与 {ib} 之间的键，"
-                        f"但该分子中这两原子没有成键（先确认键的真实连接）")
+                        f"但该分子中这两原子没有成键（先确认键的真实连接{hint}）")
         return ""
     try:
         ia = int(pt)
@@ -1089,6 +1101,13 @@ def degrade_text(tag: RenderTag, reason: str) -> str:
     if msg.startswith(_CHEM_PREFIX):
         msg = msg[len(_CHEM_PREFIX):].split("（", 1)[0].strip()
     return f"（{tag_name(tag.type)}图示无法渲染：{msg}，已省略）"
+
+
+def degrade_text_friendly(tag: RenderTag) -> str:
+    """用户可见降级提示（友好版）：不含校验技术细节（原子守恒/元素差/索引
+    等），只告知该处图示未生成——普通用户不关心内部校验原因。详细原因仍由
+    reason（P2 修正 prompt / diagnostics / metrics）承载。"""
+    return f"（{tag_name(tag.type)}图示无法渲染，已省略）"
 
 
 if __name__ == "__main__":

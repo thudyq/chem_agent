@@ -94,6 +94,47 @@ def test_correction_exhausted_degrades(fake_rdkit, fake_renderers,
     assert "图示无法渲染" in result
 
 
+def test_diagnostics_resolved_after_correction(fake_rdkit, fake_renderers,
+                                               monkeypatch):
+    """修正救回：diagnostics 记录失败轮（round=0），resolved=True。"""
+    calls = []
+    answers = ["苯是 [STRUCT:XYZABC]。", "苯是 [STRUCT:c1ccccc1]。"]
+    monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
+    monkeypatch.setattr(
+        "app.ask_llm", lambda *a, **k: calls.append(a[0] if a else None) or answers.pop(0))
+    diag = []
+    result = process_question("画苯", max_corrections=1, diagnostics=diag)
+    assert len(diag) == 1
+    assert diag[0]["round"] == 0
+    assert diag[0]["resolved"] is True
+    assert "无效 SMILES" in diag[0]["reason"]          # 技术细节留给后端
+    assert diag[0]["friendly"] == "（结构式图示无法渲染，已省略）"  # 前端友好版
+    assert "RENDERED:c1ccccc1" in result
+
+
+def test_diagnostics_include_final_round_unresolved(fake_rdkit,
+                                                    fake_renderers,
+                                                    monkeypatch):
+    """修正救不回：diagnostics 含最后一轮（round=1，即 max），resolved=False
+    ——后端拿到完整失败反馈（含最后一次），前端只见友好降级。"""
+    calls = []
+    monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
+    monkeypatch.setattr(
+        "app.ask_llm",
+        lambda *a, **k: calls.append(a[0] if a else None) or "苯是 [STRUCT:XYZABC]。")
+    diag = []
+    result = process_question("画苯", max_corrections=1, diagnostics=diag)
+    assert len(calls) == 2
+    assert len(diag) == 2                       # 两轮失败都被记录（含最后一次）
+    assert [d["round"] for d in diag] == [0, 1]
+    assert all(d["resolved"] is False for d in diag)
+    assert all(d["raw"] == "[STRUCT:XYZABC]" for d in diag)
+    # 前端友好、后端拿技术细节
+    assert "图示无法渲染" in result
+    assert "无效 SMILES" not in result
+    assert all("无效 SMILES" in d["reason"] for d in diag)
+
+
 def test_correction_prompt_contains_failure_info():
     from core.tag_parser import parse_tags
     from core.tag_validator import validate_tag

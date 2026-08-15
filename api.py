@@ -179,6 +179,24 @@ def _extract_question(messages: list) -> tuple[str, list, list, list]:
     return "", [], [], []
 
 
+def _log_diagnostics(diag: list) -> None:
+    """后端日志：打印回答中未渲染标记的诊断（含修正救回/最终失败）。
+
+    前端只看到注入的友好降级文本（"图示无法渲染，已省略"），技术细节
+    （reason）仅在此处输出，供质量分析与修正闭环改进。diag 为空（无失败）
+    时静默。
+    """
+    if not diag:
+        return
+    unresolved = sum(1 for d in diag if d.get("resolved") is False)
+    print(f"[api] 回答含 {len(diag)} 个未渲染标记诊断"
+          f"（修正后仍失败 {unresolved} 个）：")
+    for d in diag:
+        status = "已修正救回" if d.get("resolved") else "未解决"
+        print(f"  - [round {d.get('round')}][{status}] "
+              f"{d.get('raw', '')[:60]} → {d.get('reason', '')[:120]}")
+
+
 _TIKZ_RE = re.compile(r"\\begin\{tikzpicture\}.*?\\end\{tikzpicture\}",
                       re.DOTALL)
 _CHEMFIG_RE = re.compile(r"\\chemfig\{[^}]*\}")
@@ -392,15 +410,18 @@ def _sse_stream(question: str, history: list, cid: str, created: int,
             pass
 
     def work():
+        diag = []
         try:
             answer = process_question(
                 question, history=history,
                 progress_callback=progress_q.put,
-                correction_callback=lambda: _safe_put(_CORRECTION_MARK))
+                correction_callback=lambda: _safe_put(_CORRECTION_MARK),
+                diagnostics=diag)
         except Exception as e:  # 管线异常兜底为 stop 帧 + error 字段
             answer_q.put(e)
             return
         answer_q.put(answer)
+        _log_diagnostics(diag)
         try:
             attachments = build_attachments(answer or "", public_base) \
                 if answer else []
@@ -551,7 +572,10 @@ async def chat_completions(request: Request, authorization: str | None = Header(
             media_type="text/event-stream",
         )
 
-    answer = process_question(question, history=history) or "（未能生成回答）"
+    diag = []
+    answer = process_question(question, history=history,
+                              diagnostics=diag) or "（未能生成回答）"
+    _log_diagnostics(diag)
     try:
         attachments = build_attachments(answer, public_base)
     except Exception as e:  # 编译异常不拖垮已生成的文本回答（与流式路径一致）

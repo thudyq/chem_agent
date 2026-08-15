@@ -8,7 +8,7 @@ process_question(user_question) 是核心编排函数，FastAPI 适配层
 from core.llm_client import ask_llm
 from core.tag_parser import parse_tags
 from core.tag_injector import inject_tags_into_text
-from core.tag_validator import degrade_text, validate_tags
+from core.tag_validator import degrade_text_friendly, validate_tags
 from renderers.registry import RENDERER_REGISTRY
 # 渲染器失败串的统一前缀（各渲染器内部约定："（XX渲染失败：原因）"）
 _RENDER_ERROR_PREFIX = "（"
@@ -247,7 +247,7 @@ def _build_correction_prompt(user_question: str, original: str,
 
 def process_question(user_question: str, max_corrections: int = 2,
                      history: list = None, progress_callback=None,
-                     correction_callback=None) -> str:
+                     correction_callback=None, diagnostics: list = None) -> str:
     """端到端处理用户问题，返回含渲染后图示代码的文本。
 
     流程：LLM 生成 → 解析标记 → 契约校验（P1）→ 逐标记渲染 → 注入替换。
@@ -259,6 +259,10 @@ def process_question(user_question: str, max_corrections: int = 2,
     correction_callback: 可选，P2 修正触发时回调（无参），前端据此提示
         "正在修正回答…"；修正调用强制 thinking=disabled（机械性任务，
         思考链收益小、延迟高）。
+    diagnostics: 可选 list，调用方传入后**每一轮校验/渲染失败**（含修正机会
+        耗尽前的最后一轮）都会 append 诊断 dict：
+        {round, type, raw, reason, friendly, resolved}——前端只展示 friendly
+        （已注入回答），后端用 reason/resolved 做日志与质量分析。
     """
     # 1. 调用 LLM（自动加载 system prompt，含标记协议）
     #    可选增强：用户问题含明确化学名称（"画 X 的结构/分子式"）时，
@@ -305,7 +309,7 @@ def process_question(user_question: str, max_corrections: int = 2,
         # 2.5 标记契约校验（P1）：渲染前拦截坏参数（非法 SMILES / 越界引用 /
         #    超长 label / 格式错误），降级为友好提示，坏参数不进渲染器
         valid_tags, invalid = validate_tags(tags)
-        degraded = {r.tag.raw: degrade_text(r.tag, r.reason) for r in invalid}
+        degraded = {r.tag.raw: degrade_text_friendly(r.tag) for r in invalid}
 
         # 3. 逐标记渲染（REASONING 无渲染器，由注入器特殊处理）
         rendered, failures = {}, []
@@ -325,8 +329,19 @@ def process_question(user_question: str, max_corrections: int = 2,
                 rendered[tag.raw] = out
 
         # 3.5 P2 渲染反馈闭环：有失败（校验拦截或渲染失败）且还有修正机会
-        #     → 回传 LLM 修正重试
+        #     → 回传 LLM 修正重试；同时把每一轮失败记入 diagnostics（含最后
+        #     一轮——供后端日志/质量分析，前端只展示注入的友好降级文本）
         problems = [(r.tag, r.reason) for r in invalid] + failures
+        if diagnostics is not None:
+            for tag, err in problems:
+                diagnostics.append({
+                    "round": attempt,
+                    "type": tag.type,
+                    "raw": tag.raw,
+                    "reason": err,
+                    "friendly": degrade_text_friendly(tag),
+                    "resolved": None,  # 循环后统一填充
+                })
         if problems and attempt < max_corrections:
             print(f"[process_question] {len(problems)} 个标记未通过校验/渲染，"
                   f"回传 LLM 修正（第 {attempt + 1}/{max_corrections} 次）：")
@@ -342,10 +357,15 @@ def process_question(user_question: str, max_corrections: int = 2,
                 full_response = fixed
                 continue
 
-        # 4. 注入：校验失败 → 降级提示；渲染失败（重试机会耗尽）→ 渲染器错误串
+        final_ok = not problems  # 修正救回（最终无失败）或从未失败
+        # 4. 注入：校验失败 → 友好降级提示；渲染失败（重试机会耗尽）→ 渲染器错误串
         rendered.update(degraded)
         for tag, err in failures:
             rendered.setdefault(tag.raw, err)
+        if diagnostics is not None:
+            for d in diagnostics:
+                if d["resolved"] is None:
+                    d["resolved"] = final_ok
         return inject_tags_into_text(full_response, tags, rendered)
 
     return "（LLM 调用失败，请检查 .env 配置与网络）"
