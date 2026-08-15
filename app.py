@@ -395,14 +395,15 @@ def process_question(user_question: str, max_corrections: int = 2,
         return text1  # 主模型一遍过（无失败标记）
 
     print(f"[process_question] 主模型输出含 {len(diag1)} 个失败标记，"
-          f"升级模型 {upgrade} 重新生成…")
+          f"升级模型 {upgrade} 部分修正（不重跑全文）…")
     if correction_callback is not None:
         correction_callback()  # 前端提示"正在修正/优化…"
     result = _generate_with_corrections(
         user_question, model=upgrade, max_corrections=max_corrections,
         history=history, progress_callback=progress_callback,
         correction_callback=correction_callback,
-        diagnostics=diagnostics, stage="upgrade", responses=responses)
+        diagnostics=diagnostics, stage="upgrade", responses=responses,
+        seed_text=text1)
     # 升级阶段最终无未解决失败 → 主模型（flash）阶段的失败视为被升级解决
     if diagnostics is not None:
         upgrade_unresolved = any(
@@ -420,49 +421,56 @@ def _generate_with_corrections(user_question: str, model=None,
                                progress_callback=None, correction_callback=None,
                                diagnostics: list = None,
                                stage: str = "main",
-                               responses: list = None) -> str:
+                               responses: list = None,
+                               seed_text: str = None) -> str:
     """单模型生成 + P2 修正闭环（PubChem 增强 → LLM → 校验 → 渲染 → 注入）。
 
     model: 覆盖 ask_llm 的模型名（None=配置默认）；stage: diagnostics 的阶段
     标识（"main"=主模型、"upgrade"=升级模型）。max_corrections=0 时不做修正
-    （校验失败即返回，供路由首跑使用）。responses: 可选 list，最终采用的
-    原始 LLM 输出（标记文本）append 到此（渲染前版本，供质量回溯）。
+    （校验失败即返回原始标记文本，供路由升级部分修正）。responses: 可选 list，
+    最终采用的原始 LLM 输出（标记文本）append 到此（渲染前版本，供质量回溯）。
+    seed_text: 非 None 时跳过 LLM 主生成，直接以该文本进入校验/修正循环——
+    用于"flash 失败 → 升级模型只做部分修正（不重跑全文）"：对失败标记
+    重新校验并让升级模型修正，成本远低于全文重新生成。
     """
-    # 1. 调用 LLM（自动加载 system prompt，含标记协议）
-    #    可选增强：用户问题含明确化学名称（"画 X 的结构/分子式"）时，
-    #    PubChem 反查 SMILES 作为参考上下文注入，帮助 LLM 输出正确结构
-    llm_input = user_question
-    try:
-        from utils.name_resolver import name_to_smiles
-        import re as _re
-        # 提取化学名称（中文/英文/混合），排除"反应/机理/方程"类问题
-        m = _re.search(
-            r"(?:画出|画|绘制)?\s*"
-            r"([\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-z0-9\- ]{0,29}?)\s*(?:的)?"
-            r"(?:结构(?:式)?|分子式|怎么写|是什么结构)", user_question)
-        if m:
-            chem_name = m.group(1).strip()
-            for _p in ("画出", "画 ", "绘制", "画"):
-                if chem_name.startswith(_p):
-                    chem_name = chem_name[len(_p):].strip()
-                    break
-            if chem_name and not _re.search(r"反应|机理|方程", user_question):
-                pub_smiles = name_to_smiles(chem_name)
-                if pub_smiles:
-                    llm_input = (
-                        f"[参考] 化合物「{chem_name}」的 PubChem 标准 SMILES 为"
-                        f" `{pub_smiles}`（仅作结构参考，请用 [STRUCT:...] 输出）。\n"
-                        f"用户问题：{user_question}"
-                    )
-                    print(f"[process_question] PubChem 名称→SMILES: "
-                          f"{chem_name} -> {pub_smiles}")
-    except Exception as e:
-        print(f"[process_question] PubChem 增强跳过: {e}")
+    if seed_text is not None:
+        full_response = seed_text
+    else:
+        # 1. 调用 LLM（自动加载 system prompt，含标记协议）
+        #    可选增强：用户问题含明确化学名称（"画 X 的结构/分子式"）时，
+        #    PubChem 反查 SMILES 作为参考上下文注入，帮助 LLM 输出正确结构
+        llm_input = user_question
+        try:
+            from utils.name_resolver import name_to_smiles
+            import re as _re
+            # 提取化学名称（中文/英文/混合），排除"反应/机理/方程"类问题
+            m = _re.search(
+                r"(?:画出|画|绘制)?\s*"
+                r"([\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-z0-9\- ]{0,29}?)\s*(?:的)?"
+                r"(?:结构(?:式)?|分子式|怎么写|是什么结构)", user_question)
+            if m:
+                chem_name = m.group(1).strip()
+                for _p in ("画出", "画 ", "绘制", "画"):
+                    if chem_name.startswith(_p):
+                        chem_name = chem_name[len(_p):].strip()
+                        break
+                if chem_name and not _re.search(r"反应|机理|方程", user_question):
+                    pub_smiles = name_to_smiles(chem_name)
+                    if pub_smiles:
+                        llm_input = (
+                            f"[参考] 化合物「{chem_name}」的 PubChem 标准 SMILES 为"
+                            f" `{pub_smiles}`（仅作结构参考，请用 [STRUCT:...] 输出）。\n"
+                            f"用户问题：{user_question}"
+                        )
+                        print(f"[process_question] PubChem 名称→SMILES: "
+                              f"{chem_name} -> {pub_smiles}")
+        except Exception as e:
+            print(f"[process_question] PubChem 增强跳过: {e}")
 
-    full_response = ask_llm(llm_input, history=history,
-                            on_piece=progress_callback, model=model)
-    if not full_response:
-        return "（LLM 调用失败，请检查 .env 配置与网络）"
+        full_response = ask_llm(llm_input, history=history,
+                                on_piece=progress_callback, model=model)
+        if not full_response:
+            return "（LLM 调用失败，请检查 .env 配置与网络）"
 
     for attempt in range(max_corrections + 1):
         # 2. 解析标记
@@ -549,6 +557,12 @@ def _generate_with_corrections(user_question: str, model=None,
                     continue
 
         final_ok = not problems  # 修正救回（最终无失败）或从未失败
+        if problems and max_corrections == 0:
+            # 路由首跑（flash）失败：返回原始标记文本（不降级注入），
+            # 供升级模型（pro）基于失败标记做部分修正
+            if responses is not None:
+                responses.append(full_response)
+            return full_response
         # 4. 注入：校验失败 → 友好降级提示；渲染失败（重试机会耗尽）→ 渲染器错误串
         rendered.update(degraded)
         for tag, err in failures:

@@ -283,46 +283,49 @@ def test_route_pass_no_upgrade(fake_rdkit, fake_renderers, monkeypatch):
 
 
 def test_route_upgrade_on_failure(fake_rdkit, fake_renderers, monkeypatch):
-    """主模型失败 → 升级模型重新生成（不做主模型修正），升级后一遍过。"""
+    """主模型失败 → 升级模型只做部分修正（不重跑全文），修正后一遍过。"""
     _enable_route(monkeypatch)
     calls = []
     answers = [
         "苯是 [STRUCT:XYZABC]。",      # flash 首跑失败（不做 flash 修正）
-        "苯是 [STRUCT:c1ccccc1]。",     # pro 重新生成一遍过
+        "[STRUCT:c1ccccc1]",            # pro 部分修正只输出修正标记
     ]
     monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
     monkeypatch.setattr(
         "app.ask_llm", lambda *a, **k: calls.append(k) or answers.pop(0))
     diag = []
     result = process_question("画苯", max_corrections=1, diagnostics=diag)
-    assert len(calls) == 2, "flash 失败应直接升级 pro（不经过 flash 修正）"
+    assert len(calls) == 2, "flash 失败应直接升级 pro 部分修正"
     assert calls[0].get("model") is None           # flash（默认配置）
     assert calls[1].get("model") == "deepseek-v4-pro"  # 升级 pro
+    assert calls[1].get("thinking") == "disabled"  # 修正调用关思考（非全文重跑）
     assert "RENDERED:c1ccccc1" in result
-    # 诊断：flash 失败已记录（stage=main，被升级解决）
-    assert len(diag) == 1
-    assert diag[0]["stage"] == "main"
-    assert diag[0]["resolved"] is True
+    # 诊断：flash 失败在 main 与 upgrade（修正前重新校验）各记一条，最终被解决
+    assert len(diag) == 2
+    assert [d["stage"] for d in diag] == ["main", "upgrade"]
+    assert all(d["resolved"] is True for d in diag)
 
 
 def test_route_upgrade_then_correction(fake_rdkit, fake_renderers,
                                        monkeypatch):
-    """flash 失败 → 升级 pro 也失败 → pro 部分修正救回。"""
+    """flash 失败 → 升级 pro 部分修正仍失败 → 再次修正救回。"""
     _enable_route(monkeypatch)
     calls = []
     answers = [
         "苯是 [STRUCT:XYZABC]。",      # flash 首跑失败
-        "苯是 [STRUCT:XYZABC]。",       # pro 首跑仍失败
-        "[STRUCT:c1ccccc1]",            # pro 部分修正只输出标记
+        "[STRUCT:XYZABC]",              # pro 第 1 次修正仍失败
+        "[STRUCT:c1ccccc1]",            # pro 第 2 次修正成功
     ]
     monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
     monkeypatch.setattr(
         "app.ask_llm", lambda *a, **k: calls.append(k) or answers.pop(0))
-    result = process_question("画苯", max_corrections=1)
+    result = process_question("画苯", max_corrections=2)
     assert len(calls) == 3
-    assert [c.get("model") for c in calls] == [None, "deepseek-v4-pro",
-                                               "deepseek-v4-pro"]
-    assert calls[2].get("thinking") == "disabled"   # 修正调用关思考
+    assert calls[0].get("model") is None
+    assert calls[1].get("model") == "deepseek-v4-pro"
+    assert calls[2].get("model") == "deepseek-v4-pro"
+    assert calls[1].get("thinking") == "disabled"   # 修正调用关思考
+    assert calls[2].get("thinking") == "disabled"
     assert "RENDERED:c1ccccc1" in result
 
 
