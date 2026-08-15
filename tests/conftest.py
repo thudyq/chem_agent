@@ -51,3 +51,18 @@ def fake_renderers(monkeypatch):
     yield
     registry.RENDERER_REGISTRY.clear()
     registry.RENDERER_REGISTRY.update(original)
+
+
+@pytest.fixture(autouse=True)
+def no_model_route(monkeypatch):
+    """默认禁用"flash 首跑 + 失败升级"路由——测试不依赖 .env 的
+    UPGRADE_MODEL_NAME/UPGRADE_KEYWORDS 配置（用户本地 .env 可能已启用路由）。
+
+    路由行为测试（tests/test_correction.py 的 test_route_*）用各自
+    monkeypatch 重新设置 app.settings 显式启用。
+    """
+    import types
+    monkeypatch.setattr(
+        "app.settings",
+        types.SimpleNamespace(
+            llm=types.SimpleNamespace(upgrade_model_name="")))

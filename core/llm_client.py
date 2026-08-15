@@ -150,6 +150,7 @@ def ask_llm(
     history: list = None,
     on_piece=None,
     thinking: str = None,
+    model: str = None,
 ) -> str:
     """调用 LLM（SSE 流式），返回回答文本。
 
@@ -165,6 +166,8 @@ def ask_llm(
         thinking: 可选覆盖思考模式（"enabled"/"disabled"），None 用配置；
             修正/标题等机械性调用传 "disabled"（思考阶段无内容帧，收益小、
             延迟高，前端看似卡死）。
+        model: 可选覆盖模型名（如路由升级时传 "deepseek-v4-pro"）；None 用
+            配置 MODEL_NAME。
 
     返回:
         回答文本；配置缺失或重试耗尽返回 None。
@@ -173,7 +176,8 @@ def ask_llm(
     if not config.is_configured:
         print("[ask_llm] 未配置 API_KEY/BASE_URL/MODEL_NAME，请创建 .env（参考 .env.example）。")
         return None
-    api_key, base_url, model = config.api_key, config.base_url, config.model_name
+    api_key, base_url = config.api_key, config.base_url
+    model = (model or config.model_name).strip()
 
     if system_prompt is None:
         system_prompt = load_system_prompt()

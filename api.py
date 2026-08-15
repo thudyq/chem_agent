@@ -193,7 +193,8 @@ def _log_diagnostics(diag: list) -> None:
           f"（修正后仍失败 {unresolved} 个）：")
     for d in diag:
         status = "已修正救回" if d.get("resolved") else "未解决"
-        print(f"  - [round {d.get('round')}][{status}] "
+        stage = d.get("stage", "main")
+        print(f"  - [round {d.get('round')}][{stage}][{status}] "
               f"{d.get('raw', '')[:60]} → {d.get('reason', '')[:120]}")
 
 

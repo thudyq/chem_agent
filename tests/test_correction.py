@@ -216,3 +216,128 @@ def test_retry_succeeds_after_smiles_fix(fake_rdkit, fake_renderers,
     assert len(calls) == 2, "首次失败应触发一次修正重试"
     assert "RENDERED:CCO" in result                # 修正版已渲染
     assert "无法渲染" not in result                # 无降级提示
+
+
+# ---------- flash 首跑 + 失败升级 pro 路由 ----------
+
+def _enable_route(monkeypatch, upgrade_model="deepseek-v4-pro"):
+    """启用路由：替换 app.settings.llm.upgrade_model_name。"""
+    import types
+    monkeypatch.setattr(
+        "app.settings",
+        types.SimpleNamespace(
+            llm=types.SimpleNamespace(upgrade_model_name=upgrade_model)))
+
+
+def test_route_keyword_direct_upgrade(fake_rdkit, fake_renderers,
+                                      monkeypatch):
+    """命中难题关键词（如"机理"）→ 跳过主模型首跑，直接升级模型。"""
+    _enable_route(monkeypatch)
+    calls = []
+    monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
+    monkeypatch.setattr(
+        "app.ask_llm",
+        lambda *a, **k: calls.append(k) or "SN1 机理是 [STRUCT:c1ccccc1]。")
+    diag = []
+    result = process_question("介绍 SN1 反应的机理", max_corrections=1,
+                              diagnostics=diag)
+    assert len(calls) == 1, "命中关键词应直接 pro（无 flash 首跑）"
+    assert calls[0].get("model") == "deepseek-v4-pro"
+    assert "RENDERED:c1ccccc1" in result
+    assert not diag                              # pro 一遍过，无失败诊断
+
+
+def test_route_keyword_custom_list(fake_rdkit, fake_renderers, monkeypatch):
+    """自定义 UPGRADE_KEYWORDS 生效；未命中词汇仍走主模型首跑。"""
+    import types
+    monkeypatch.setattr(
+        "app.settings",
+        types.SimpleNamespace(
+            llm=types.SimpleNamespace(
+                upgrade_model_name="deepseek-v4-pro",
+                upgrade_keywords=("卤代",))),)  # 仅"卤代"算难题
+    calls = []
+    answers = ["苯是 [STRUCT:XYZABC]。", "苯是 [STRUCT:c1ccccc1]。"]
+    monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
+    monkeypatch.setattr(
+        "app.ask_llm", lambda *a, **k: calls.append(k) or answers.pop(0))
+    # "画苯"不含"卤代" → 主模型首跑 → 失败升级 pro
+    process_question("画苯", max_corrections=1)
+    assert [c.get("model") for c in calls] == [None, "deepseek-v4-pro"]
+
+
+def test_route_pass_no_upgrade(fake_rdkit, fake_renderers, monkeypatch):
+    """主模型一遍过 → 不触发升级（ask_llm 仅 1 次，model 不覆盖）。"""
+    _enable_route(monkeypatch)
+    calls = []
+    monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
+    monkeypatch.setattr(
+        "app.ask_llm",
+        lambda *a, **k: calls.append(k) or "苯是 [STRUCT:c1ccccc1]。")
+    diag = []
+    result = process_question("画苯", max_corrections=1, diagnostics=diag)
+    assert len(calls) == 1
+    assert calls[0].get("model") is None          # 主模型默认配置
+    assert not diag                                # 无失败 → 无诊断
+    assert "RENDERED:c1ccccc1" in result
+
+
+def test_route_upgrade_on_failure(fake_rdkit, fake_renderers, monkeypatch):
+    """主模型失败 → 升级模型重新生成（不做主模型修正），升级后一遍过。"""
+    _enable_route(monkeypatch)
+    calls = []
+    answers = [
+        "苯是 [STRUCT:XYZABC]。",      # flash 首跑失败（不做 flash 修正）
+        "苯是 [STRUCT:c1ccccc1]。",     # pro 重新生成一遍过
+    ]
+    monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
+    monkeypatch.setattr(
+        "app.ask_llm", lambda *a, **k: calls.append(k) or answers.pop(0))
+    diag = []
+    result = process_question("画苯", max_corrections=1, diagnostics=diag)
+    assert len(calls) == 2, "flash 失败应直接升级 pro（不经过 flash 修正）"
+    assert calls[0].get("model") is None           # flash（默认配置）
+    assert calls[1].get("model") == "deepseek-v4-pro"  # 升级 pro
+    assert "RENDERED:c1ccccc1" in result
+    # 诊断：flash 失败已记录（stage=main，被升级解决）
+    assert len(diag) == 1
+    assert diag[0]["stage"] == "main"
+    assert diag[0]["resolved"] is True
+
+
+def test_route_upgrade_then_correction(fake_rdkit, fake_renderers,
+                                       monkeypatch):
+    """flash 失败 → 升级 pro 也失败 → pro 部分修正救回。"""
+    _enable_route(monkeypatch)
+    calls = []
+    answers = [
+        "苯是 [STRUCT:XYZABC]。",      # flash 首跑失败
+        "苯是 [STRUCT:XYZABC]。",       # pro 首跑仍失败
+        "[STRUCT:c1ccccc1]",            # pro 部分修正只输出标记
+    ]
+    monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
+    monkeypatch.setattr(
+        "app.ask_llm", lambda *a, **k: calls.append(k) or answers.pop(0))
+    result = process_question("画苯", max_corrections=1)
+    assert len(calls) == 3
+    assert [c.get("model") for c in calls] == [None, "deepseek-v4-pro",
+                                               "deepseek-v4-pro"]
+    assert calls[2].get("thinking") == "disabled"   # 修正调用关思考
+    assert "RENDERED:c1ccccc1" in result
+
+
+def test_route_upgrade_unresolved(fake_rdkit, fake_renderers, monkeypatch):
+    """flash 失败 → 升级 pro 仍失败且修正救不回 → 降级；诊断含 stage。"""
+    _enable_route(monkeypatch)
+    calls = []
+    monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
+    monkeypatch.setattr(
+        "app.ask_llm",
+        lambda *a, **k: calls.append(k) or "苯是 [STRUCT:XYZABC]。")
+    diag = []
+    result = process_question("画苯", max_corrections=1, diagnostics=diag)
+    assert "图示无法渲染" in result
+    assert "无效 SMILES" not in result               # 前端友好
+    stages = [d["stage"] for d in diag]
+    assert "main" in stages and "upgrade" in stages  # 两阶段失败都记录
+    assert all(d["resolved"] is False for d in diag)

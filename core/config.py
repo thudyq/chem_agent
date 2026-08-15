@@ -82,6 +82,22 @@ class LLMConfig:
     fallback_model_name: str = field(
         default_factory=lambda: _get_str("FALLBACK_MODEL_NAME")
     )
+    # 升级模型（UPGRADE_MODEL_NAME，可选）：flash 首跑 + 失败升级 pro 路由用。
+    # 主模型（MODEL_NAME，通常 flash）首次输出校验失败时**不做主模型修正**，
+    # 直接用此模型重新生成完整回答（升级后可带修正闭环）——简单题 flash 便宜、
+    # 难题（SMILES 化学构造错误等）flash 修正救不回时直接交 pro。留空则关闭
+    # 路由（保持"主模型 + 修正闭环"原行为）。
+    upgrade_model_name: str = field(
+        default_factory=lambda: _get_str("UPGRADE_MODEL_NAME")
+    )
+    # 难题预判关键词（UPGRADE_KEYWORDS，逗号分隔，可选）：用户问题命中任一
+    # 关键词时跳过主模型首跑、**直接走升级模型**——适用于机理类难题占比高的
+    # 场景，省一次主模型（flash）调用与串行延迟。留空用 app.py 内置默认
+    # （机理/箭头/SN/自由基/共振/势能面等词汇）。
+    upgrade_keywords: tuple = field(
+        default_factory=lambda: tuple(
+            k.strip() for k in _get_str("UPGRADE_KEYWORDS").split(",") if k.strip())
+    )
     # 思考模式（THINKING_MODE）：enabled / disabled / 空（不传，用 API 默认）。
     # DeepSeek 官方：请求体加 {"thinking": {"type": "enabled/disabled"}} 开关；
     # 思考模式下 temperature/top_p 等参数不生效（设置了也被忽略）。

@@ -5,6 +5,7 @@ process_question(user_question) 是核心编排函数，FastAPI 适配层
 （api.py）在此基础上包装 /chat/completions 端点。
 """
 
+from core.config import settings
 from core.llm_client import ask_llm
 from core.tag_parser import parse_tags
 from core.tag_injector import inject_tags_into_text
@@ -19,6 +20,17 @@ _ROLE_LABELS = {
     "过渡态", "离去基团", "溶剂", "催化剂", "加成产物", "σ络合物",
     "σ 络合物", "氧负离子", "碳正离子", "自由基",
 }
+
+# 难题预判关键词（未配置 UPGRADE_KEYWORDS 时的内置默认）：
+# 用户问题命中任一关键词 → 跳过主模型首跑、直接走升级模型。
+# 覆盖机理/箭头/命名反应/电子流动类提问；漏判由 flash 首跑 + 失败升级兜底，
+# 误判（简单题命中）代价仅为一次升级调用。
+_DEFAULT_UPGRADE_KEYWORDS = (
+    "机理", "箭头", "SN1", "SN2", "SN1/SN2", "自由基", "共振", "势能面",
+    "电子转移", "电子推动", "消除反应", "亲核取代", "亲电取代", "亲核加成",
+    "亲电加成", "加成反应", "重排", "去质子", "质子化", "催化循环",
+    "链式反应", "过渡态", "反应历程", "轨道", "HOMO", "LUMO",
+)
 
 # SMILES 相关失败原因关键词（值得 PubChem 兜底的类型）
 _SMILES_FAILURE_KEYWORDS = (
@@ -295,6 +307,13 @@ def process_question(user_question: str, max_corrections: int = 2,
     P2 渲染反馈闭环：首次渲染若有失败（校验拦截 / 渲染器失败），携带失败
     清单回传 LLM 自动修正（最多 max_corrections 次），修正版重新走管线；
     仍失败则降级（校验失败标记 → 友好提示，渲染失败标记 → 渲染器错误串）。
+
+    模型路由（配置 UPGRADE_MODEL_NAME 时启用）：主模型（通常 flash）首跑
+    **不做修正**，校验失败立即用升级模型（通常 pro）重新生成完整回答
+    （升级后可带修正闭环）。未配置则保持"主模型 + 修正闭环"原行为。
+    实测依据：flash 对索引/格式类错误修正能救回，对 SMILES 化学构造错误
+    （如碳正离子多写碳）修正救不回，而 pro 一遍过率高——难题直接交 pro。
+
     history: 多轮对话历史（透传给 ask_llm，见 core.llm_client）。
     progress_callback: 可选，LLM 每段生成内容实时回调（B2 流式转发草稿）。
     correction_callback: 可选，P2 修正触发时回调（无参），前端据此提示
@@ -302,8 +321,74 @@ def process_question(user_question: str, max_corrections: int = 2,
         思考链收益小、延迟高）。
     diagnostics: 可选 list，调用方传入后**每一轮校验/渲染失败**（含修正机会
         耗尽前的最后一轮）都会 append 诊断 dict：
-        {round, type, raw, reason, friendly, resolved}——前端只展示 friendly
-        （已注入回答），后端用 reason/resolved 做日志与质量分析。
+        {round, stage, type, raw, reason, friendly, resolved}——前端只展示
+        friendly（已注入回答），后端用 reason/resolved/stage 做日志与质量分析。
+    """
+    upgrade = (settings.llm.upgrade_model_name or "").strip()
+    if not upgrade:
+        # 未配置路由：主模型 + 修正闭环（原行为）
+        return _generate_with_corrections(
+            user_question, model=None, max_corrections=max_corrections,
+            history=history, progress_callback=progress_callback,
+            correction_callback=correction_callback,
+            diagnostics=diagnostics, stage="main")
+
+    # 难题预判：命中关键词直接走升级模型（省一次主模型首跑与串行延迟）；
+    # 漏判由下方"主模型首跑 + 失败升级"兜底，最坏不劣于不配置关键词。
+    keywords = getattr(settings.llm, "upgrade_keywords", None) \
+        or _DEFAULT_UPGRADE_KEYWORDS
+    if any(k and k in user_question for k in keywords):
+        print(f"[process_question] 命中难题关键词，直接使用升级模型 {upgrade}…")
+        if correction_callback is not None:
+            correction_callback()  # 前端提示"正在修正/优化…"
+        return _generate_with_corrections(
+            user_question, model=upgrade, max_corrections=max_corrections,
+            history=history, progress_callback=progress_callback,
+            correction_callback=correction_callback,
+            diagnostics=diagnostics, stage="upgrade")
+
+    # flash 首跑 + 失败升级 pro 路由：主模型首跑 max_corrections=0（失败即升级）
+    diag1 = []
+    text1 = _generate_with_corrections(
+        user_question, model=None, max_corrections=0,
+        history=history, progress_callback=progress_callback,
+        correction_callback=None, diagnostics=diag1, stage="main")
+    if diagnostics is not None:
+        diagnostics.extend(diag1)
+    if not diag1:
+        return text1  # 主模型一遍过（无失败标记）
+
+    print(f"[process_question] 主模型输出含 {len(diag1)} 个失败标记，"
+          f"升级模型 {upgrade} 重新生成…")
+    if correction_callback is not None:
+        correction_callback()  # 前端提示"正在修正/优化…"
+    result = _generate_with_corrections(
+        user_question, model=upgrade, max_corrections=max_corrections,
+        history=history, progress_callback=progress_callback,
+        correction_callback=correction_callback,
+        diagnostics=diagnostics, stage="upgrade")
+    # 升级阶段最终无未解决失败 → 主模型（flash）阶段的失败视为被升级解决
+    if diagnostics is not None:
+        upgrade_unresolved = any(
+            d.get("stage") == "upgrade" and d.get("resolved") is False
+            for d in diagnostics)
+        if not upgrade_unresolved:
+            for d in diagnostics:
+                if d.get("stage") == "main":
+                    d["resolved"] = True
+    return result
+
+
+def _generate_with_corrections(user_question: str, model=None,
+                               max_corrections: int = 2, history: list = None,
+                               progress_callback=None, correction_callback=None,
+                               diagnostics: list = None,
+                               stage: str = "main") -> str:
+    """单模型生成 + P2 修正闭环（PubChem 增强 → LLM → 校验 → 渲染 → 注入）。
+
+    model: 覆盖 ask_llm 的模型名（None=配置默认）；stage: diagnostics 的阶段
+    标识（"main"=主模型、"upgrade"=升级模型）。max_corrections=0 时不做修正
+    （校验失败即返回，供路由首跑使用）。
     """
     # 1. 调用 LLM（自动加载 system prompt，含标记协议）
     #    可选增强：用户问题含明确化学名称（"画 X 的结构/分子式"）时，
@@ -337,7 +422,7 @@ def process_question(user_question: str, max_corrections: int = 2,
         print(f"[process_question] PubChem 增强跳过: {e}")
 
     full_response = ask_llm(llm_input, history=history,
-                            on_piece=progress_callback)
+                            on_piece=progress_callback, model=model)
     if not full_response:
         return "（LLM 调用失败，请检查 .env 配置与网络）"
 
@@ -378,6 +463,7 @@ def process_question(user_question: str, max_corrections: int = 2,
             for tag, err in problems:
                 diagnostics.append({
                     "round": attempt,
+                    "stage": stage,
                     "type": tag.type,
                     "raw": tag.raw,
                     "reason": err,
@@ -401,7 +487,7 @@ def process_question(user_question: str, max_corrections: int = 2,
             correction = _build_correction_prompt(
                 user_question, full_response, problems)
             fixed = ask_llm(correction, on_piece=progress_callback,
-                            thinking="disabled")
+                            thinking="disabled", model=model)
             if fixed:
                 # 部分修正：用模型输出的修正标记替换原文对应位置
                 patched = _apply_patch_corrections(
