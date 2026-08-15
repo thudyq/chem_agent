@@ -28,13 +28,14 @@ from .tag_parser import RenderTag
 try:
     from rdkit import Chem  # noqa: F401
     from utils.rdkit_utils import FREE_H_COMPONENT_RE, mute_rdkit_warnings, \
-        normalize_h_prefix_smiles
+        normalize_h_prefix_smiles, expand_group_abbrevs
     _RDKIT_OK = True
 except ImportError:
     _RDKIT_OK = False
     FREE_H_COMPONENT_RE = None
     mute_rdkit_warnings = None
     normalize_h_prefix_smiles = None
+    expand_group_abbrevs = None
 
 
 def _parse_mol(smiles: str):
@@ -47,10 +48,14 @@ def _parse_mol(smiles: str):
     （Drawbacks 九 C-1：O 价态 4 超限的 Explicit valence 日志）。
 
     H 数字前缀写法（[H3O+]）先经 normalize_h_prefix_smiles 规范化为
-    合法 SMILES（[OH3+]）再解析（20260815：化学式习惯误写放行）。
+    合法 SMILES（[OH3+]）再解析；通用基团缩写（R/X/Ph/Ac 等）经
+    expand_group_abbrevs 替换为 dummy 原子（[*:n]）后解析
+    （20260815：化学式习惯误写与通用基团占位放行）。
     """
     if normalize_h_prefix_smiles is not None:
         smiles = normalize_h_prefix_smiles(smiles)
+    if expand_group_abbrevs is not None:
+        smiles, _ = expand_group_abbrevs(smiles)
     cm = None
     if mute_rdkit_warnings is not None:
         cm = mute_rdkit_warnings(include_error=True)
@@ -221,12 +226,20 @@ _REAL_ELEMENTS = {
 
 
 def _parse_plain_formula(text: str):
-    """把纯化学式 label（CH3Cl / OH- / NO2+ / H3O+ 等）解析为候选
+    """把纯化学式（CH3Cl / OH- / NO2+ / H3O+ / FeBr4- 等）解析为候选
     (元素计数 dict, 净电荷) 列表；非纯化学式返回 []——含中文/空格/结构括号、
     通用基团缩写（R/Ar/X/Ph 等）、或含不可识别"元素"（如占位字母 A）一律跳过。
 
-    尾电荷的数字归属有歧义（NO2+ 是 N1O2 带 +1，Ca2+ 是 Ca 带 +2），
-    两种解读都给出候选，由 SMILES 比对定夺。
+    尾电荷的数字归属有歧义（NO2+ 是 N1O2 带 +1，Ca2+ 是 Ca 带 +2），按
+    启发式消解并排序（正确解读排在 cands[0]，调用方取第一个即可）：
+    - 尾数字串为空 → 唯一候选（电荷 ±1）；
+    - 尾数字串 ≥2 位 → 最后一位归电荷、前面归元素下标（SO42- → SO4 带 -2、
+      Cr2O72- → Cr2O7 带 -2）；
+    - 尾数字 1 位：元素部分 ≥2 个元素 → 数字归元素（FeBr4- → FeBr4 带 -1、
+      NO2+ → NO2 带 +1、NH4+ → NH4 带 +1）；单元素 → 数字归电荷
+      （Ca2+ → Ca 带 +2、Al3+ → Al 带 +3）。
+    残余本质歧义：单元素双关（如 O2- = 超氧根 O₂⁻ 或 O²⁻）语法无法消除，
+    本函数取"归电荷"解读（O²⁻）；精确物种请写 SMILES（如超氧根 [O-][O]）。
     """
     s = (text or "").strip()
     if not s:
@@ -234,13 +247,20 @@ def _parse_plain_formula(text: str):
     bodies = []
     m = re.search(r"(\d+)?([+-])$", s)
     if m:
-        # 尾部数字串归属有歧义：NO2+ 的 2 归元素（N1O2 带 +1）、Ca2+ 的 2
-        # 归电荷（Ca 带 +2）、SO42- 的 4 归元素而 2 归电荷（S1O4 带 -2）。
-        # 按数字串的每个切分点各给一个候选，由 SMILES 比对定夺。
         sign = 1 if m.group(2) == "+" else -1
         digits = m.group(1) or ""
         base = s[: m.start()]
-        for j in range(len(digits) + 1):
+        # 歧义消解：正确解读排在候选前面（见 docstring），其余解读作兜底
+        multi = len(_FORMULA_TOKEN_RE.findall(base)) >= 2
+        if not digits:
+            order = [0]
+        elif len(digits) >= 2:
+            order = list(range(len(digits) - 1, -1, -1)) + [len(digits)]
+        elif multi:
+            order = [1, 0]
+        else:
+            order = [0, 1]
+        for j in order:
             q = int(digits[j:]) if digits[j:] else 1
             bodies.append((base + digits[:j], q * sign))
     else:
@@ -262,10 +282,16 @@ def _parse_plain_formula(text: str):
 
 
 def _mol_counts(mol):
-    """RDKit Mol → (元素计数 dict（重原子 + 隐式 H）, 净电荷)；失败返回 None。"""
+    """RDKit Mol → (元素计数 dict（重原子 + 隐式 H）, 净电荷)；失败返回 None。
+
+    通用基团占位符（dummy 原子，原子序 0，expand_group_abbrevs 引入的
+    R/X/Ph/Ac）组成未知——不参与元素守恒比对（跳过计数），净电荷不受影响。
+    """
     try:
         counts, charge = {}, 0
         for a in mol.GetAtoms():
+            if a.GetAtomicNum() == 0:
+                continue  # 通用基团占位符：未知组成，不计入元素守恒
             sym = a.GetSymbol()
             counts[sym] = counts.get(sym, 0) + 1
             h = a.GetTotalNumHs()

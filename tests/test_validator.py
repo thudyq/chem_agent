@@ -832,6 +832,29 @@ def test_reaction_unresolvable_species_rejected():
     assert "无效 SMILES" in invalid[0].reason
 
 
+def test_formula_tail_digit_disambiguation():
+    """化学式尾数字歧义消解（2026-08-14 修复）：
+
+    - 多位尾数字：最后一位归电荷（SO42- → SO4 带 -2、Cr2O72- → Cr2O7 带 -2）；
+    - 单数字 + 多元素：归元素（FeBr4- → FeBr4 带 -1、NO2+ → NO2 带 +1）；
+    - 单数字 + 单元素：归电荷（Ca2+ → Ca 带 +2、Al3+ → Al 带 +3）。
+    回归锚点：FeBr4- 曾误解析为 FeBr 带 -4（1 个 Br、4 个负电荷）。
+    """
+    pytest.importorskip("rdkit")
+    from core.tag_validator import _formula_or_smiles_counts as f
+    assert f("FeBr4-") == ({"Fe": 1, "Br": 4}, -1)
+    assert f("NO2+") == ({"N": 1, "O": 2}, 1)
+    assert f("SO42-") == ({"S": 1, "O": 4}, -2)
+    assert f("Cr2O72-") == ({"Cr": 2, "O": 7}, -2)
+    assert f("NH4+") == ({"N": 1, "H": 4}, 1)
+    assert f("HSO4-") == ({"H": 1, "S": 1, "O": 4}, -1)
+    assert f("CO32-") == ({"C": 1, "O": 3}, -2)
+    assert f("Ca2+") == ({"Ca": 1}, 2)
+    assert f("Al3+") == ({"Al": 1}, 3)
+    assert f("Fe3+") == ({"Fe": 1}, 3)
+    assert f("OH-") == ({"O": 1, "H": 1}, -1)
+
+
 def test_reaction_formula_unbalanced_rejected():
     """化学式轨同样受守恒约束：乙醇+氧气不守恒（缺产物水）被拦截。"""
     pytest.importorskip("rdkit")
