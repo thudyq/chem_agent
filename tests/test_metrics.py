@@ -110,20 +110,27 @@ def test_evaluate_route_counts(monkeypatch):
     _enable_route_config(monkeypatch)
 
     def fake_pq(q, max_corrections=2, history=None, progress_callback=None,
-                correction_callback=None, diagnostics=None):
+                correction_callback=None, diagnostics=None, responses=None):
         d = diagnostics
         if "机理" in q:   # 命中关键词 → 直 pro → 失败降级
+            if responses is not None:
+                responses.append(f"机理标记文本：[REACTION:x]")
             d.append({"round": 0, "stage": "upgrade", "type": "REACTION",
                       "raw": "[REACTION:x]", "reason": "化学校验：不守恒",
                       "friendly": "（反应方程式图示无法渲染，已省略）",
                       "resolved": False})
             return "机理回答（反应方程式图示无法渲染，已省略）"
         if "氧化" in q:   # flash 失败 → 升级 pro 救回
+            if responses is not None:
+                responses.append("flash 标记文本：[STRUCT:bad]")
+                responses.append("pro 标记文本：[STRUCT:c1ccccc1]")
             d.append({"round": 0, "stage": "main", "type": "STRUCT",
                       "raw": "[STRUCT:bad]", "reason": "无效 SMILES",
                       "friendly": "（结构式图示无法渲染，已省略）",
                       "resolved": True})
             return "氧化回答 [STRUCT:c1ccccc1]"
+        if responses is not None:
+            responses.append("苯标记文本：[STRUCT:c1ccccc1]")
         return "苯是 [STRUCT:c1ccccc1]。"   # flash 一遍过
 
     import app
@@ -136,6 +143,10 @@ def test_evaluate_route_counts(monkeypatch):
     assert stats["keyword_direct"] == 1
     assert stats["unresolved_tags"] == 1
     assert stats["degraded_answers"] == 1
+    # 原始 LLM 输出记录：每题 1+ 条（氧化题为 flash + pro 两条）
+    by_q = {r["question"]: r for r in stats["responses"]}
+    assert by_q["苯的结构式"]["llm_outputs"] == ["苯标记文本：[STRUCT:c1ccccc1]"]
+    assert len(by_q["乙醇氧化方程式"]["llm_outputs"]) == 2
 
 
 def test_format_route_report_and_detail():
@@ -148,11 +159,13 @@ def test_format_route_report_and_detail():
             {"question": "q1", "keyword_hit": False,
              "upgrade_triggered": False, "degraded": False,
              "corrections_failed_after": False, "unresolved": 0, "diag": [],
-             "text": "苯是 [STRUCT:c1ccccc1]。"},
+             "text": "苯是 [STRUCT:c1ccccc1]。",
+             "llm_outputs": ["苯标记文本：[STRUCT:c1ccccc1]"]},
             {"question": "q2", "keyword_hit": True,
              "upgrade_triggered": True, "degraded": True,
              "corrections_failed_after": False, "unresolved": 1,
              "text": "机理回答（反应方程式图示无法渲染，已省略）",
+             "llm_outputs": ["机理标记文本：[REACTION:x]"],
              "diag": [{"round": 0, "stage": "upgrade", "resolved": False,
                        "reason": "化学校验：不守恒"}]},
         ],
@@ -165,3 +178,5 @@ def test_format_route_report_and_detail():
     assert "flash 一遍过" in det
     assert "关键词直 pro" in det and "未解决 1" in det
     assert "最终回答" in det and "苯是 [STRUCT:c1ccccc1]" in det
+    assert "原始输出（主模型，渲染前）" in det
+    assert "苯标记文本：[STRUCT:c1ccccc1]" in det

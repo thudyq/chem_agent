@@ -155,8 +155,9 @@ def evaluate_route(questions: list, max_corrections: int = 2) -> dict:
     }
     for q in questions:
         diag = []
+        resp_out = []   # 各阶段原始 LLM 输出（标记文本，渲染前）
         text = process_question(q, max_corrections=max_corrections,
-                                diagnostics=diag)
+                                diagnostics=diag, responses=resp_out)
         keyword_hit = has_route and any(k and k in q for k in keywords)
         # 升级判定：关键词直 pro / 有 main 失败（flash 失败必升级）/
         # 有 upgrade 阶段失败记录
@@ -186,6 +187,7 @@ def evaluate_route(questions: list, max_corrections: int = 2) -> dict:
             "corrections_failed_after": corrections_failed_after,
             "unresolved": len(unresolved),
             "text": text or "",          # 最终回答全文（含渲染后 TikZ/降级提示）
+            "llm_outputs": resp_out,     # 各阶段原始 LLM 输出（标记文本，渲染前）
             "diag": [
                 {"round": d.get("round"), "stage": d.get("stage"),
                  "resolved": d.get("resolved"),
@@ -238,6 +240,12 @@ def format_route_detail(stats: dict, output_limit: int = 300) -> str:
             shown = text if len(text) <= output_limit \
                 else text[:output_limit] + "…"
             lines.append(f"    最终回答：\n{_indent(shown)}")
+        raw_list = r.get("llm_outputs") or []
+        for j, raw in enumerate(raw_list):
+            shown = raw if len(raw) <= output_limit \
+                else raw[:output_limit] + "…"
+            tag = "主模型" if j == 0 else f"阶段 {j}"
+            lines.append(f"    原始输出（{tag}，渲染前）：\n{_indent(shown)}")
     return "\n".join(lines)
 
 

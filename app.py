@@ -300,7 +300,8 @@ def _apply_patch_corrections(original: str, failures: list,
 
 def process_question(user_question: str, max_corrections: int = 2,
                      history: list = None, progress_callback=None,
-                     correction_callback=None, diagnostics: list = None) -> str:
+                     correction_callback=None, diagnostics: list = None,
+                     responses: list = None) -> str:
     """端到端处理用户问题，返回含渲染后图示代码的文本。
 
     流程：LLM 生成 → 解析标记 → 契约校验（P1）→ 逐标记渲染 → 注入替换。
@@ -323,6 +324,10 @@ def process_question(user_question: str, max_corrections: int = 2,
         耗尽前的最后一轮）都会 append 诊断 dict：
         {round, stage, type, raw, reason, friendly, resolved}——前端只展示
         friendly（已注入回答），后端用 reason/resolved/stage 做日志与质量分析。
+    responses: 可选 list，调用方传入后记录**各阶段最终采用的原始 LLM 输出**
+        （未注入渲染的标记文本；路由下可能 2 条：主模型 + 升级模型）。渲染后
+        的 TikZ 无法反推模型写的标记，此字段用于质量回溯（如图文不符时定位
+        模型实际写的 SMILES/序号）。
     """
     upgrade = (settings.llm.upgrade_model_name or "").strip()
     if not upgrade:
@@ -331,7 +336,7 @@ def process_question(user_question: str, max_corrections: int = 2,
             user_question, model=None, max_corrections=max_corrections,
             history=history, progress_callback=progress_callback,
             correction_callback=correction_callback,
-            diagnostics=diagnostics, stage="main")
+            diagnostics=diagnostics, stage="main", responses=responses)
 
     # 难题预判：命中关键词直接走升级模型（省一次主模型首跑与串行延迟）；
     # 漏判由下方"主模型首跑 + 失败升级"兜底，最坏不劣于不配置关键词。
@@ -345,14 +350,15 @@ def process_question(user_question: str, max_corrections: int = 2,
             user_question, model=upgrade, max_corrections=max_corrections,
             history=history, progress_callback=progress_callback,
             correction_callback=correction_callback,
-            diagnostics=diagnostics, stage="upgrade")
+            diagnostics=diagnostics, stage="upgrade", responses=responses)
 
     # flash 首跑 + 失败升级 pro 路由：主模型首跑 max_corrections=0（失败即升级）
     diag1 = []
     text1 = _generate_with_corrections(
         user_question, model=None, max_corrections=0,
         history=history, progress_callback=progress_callback,
-        correction_callback=None, diagnostics=diag1, stage="main")
+        correction_callback=None, diagnostics=diag1, stage="main",
+        responses=responses)
     if diagnostics is not None:
         diagnostics.extend(diag1)
     if not diag1:
@@ -366,7 +372,7 @@ def process_question(user_question: str, max_corrections: int = 2,
         user_question, model=upgrade, max_corrections=max_corrections,
         history=history, progress_callback=progress_callback,
         correction_callback=correction_callback,
-        diagnostics=diagnostics, stage="upgrade")
+        diagnostics=diagnostics, stage="upgrade", responses=responses)
     # 升级阶段最终无未解决失败 → 主模型（flash）阶段的失败视为被升级解决
     if diagnostics is not None:
         upgrade_unresolved = any(
@@ -383,12 +389,14 @@ def _generate_with_corrections(user_question: str, model=None,
                                max_corrections: int = 2, history: list = None,
                                progress_callback=None, correction_callback=None,
                                diagnostics: list = None,
-                               stage: str = "main") -> str:
+                               stage: str = "main",
+                               responses: list = None) -> str:
     """单模型生成 + P2 修正闭环（PubChem 增强 → LLM → 校验 → 渲染 → 注入）。
 
     model: 覆盖 ask_llm 的模型名（None=配置默认）；stage: diagnostics 的阶段
     标识（"main"=主模型、"upgrade"=升级模型）。max_corrections=0 时不做修正
-    （校验失败即返回，供路由首跑使用）。
+    （校验失败即返回，供路由首跑使用）。responses: 可选 list，最终采用的
+    原始 LLM 输出（标记文本）append 到此（渲染前版本，供质量回溯）。
     """
     # 1. 调用 LLM（自动加载 system prompt，含标记协议）
     #    可选增强：用户问题含明确化学名称（"画 X 的结构/分子式"）时，
@@ -430,6 +438,8 @@ def _generate_with_corrections(user_question: str, model=None,
         # 2. 解析标记
         tags = parse_tags(full_response)
         if not tags:
+            if responses is not None:
+                responses.append(full_response)  # 纯文本回答（无标记）
             return full_response  # 纯文本回答，无需渲染
 
         # 2.5 标记契约校验（P1）：渲染前拦截坏参数（非法 SMILES / 越界引用 /
@@ -505,6 +515,8 @@ def _generate_with_corrections(user_question: str, model=None,
             for d in diagnostics:
                 if d["resolved"] is None:
                     d["resolved"] = final_ok
+        if responses is not None:
+            responses.append(full_response)  # 最终采用的原始标记文本
         return inject_tags_into_text(full_response, tags, rendered)
 
     return "（LLM 调用失败，请检查 .env 配置与网络）"
