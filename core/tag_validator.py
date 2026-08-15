@@ -27,12 +27,14 @@ from .tag_parser import RenderTag
 # rdkit 可用性探测：缺失时跳过 SMILES / 原子数语义校验（渲染器内部会兜底）
 try:
     from rdkit import Chem  # noqa: F401
-    from utils.rdkit_utils import FREE_H_COMPONENT_RE, mute_rdkit_warnings
+    from utils.rdkit_utils import FREE_H_COMPONENT_RE, mute_rdkit_warnings, \
+        normalize_h_prefix_smiles
     _RDKIT_OK = True
 except ImportError:
     _RDKIT_OK = False
     FREE_H_COMPONENT_RE = None
     mute_rdkit_warnings = None
+    normalize_h_prefix_smiles = None
 
 
 def _parse_mol(smiles: str):
@@ -43,7 +45,12 @@ def _parse_mol(smiles: str):
     失败时的 RDKit 日志（SMILES Parse Error / Explicit valence 超限）对
     用户与日志都无价值——统一屏蔽 rdApp.error，避免终端被噪音刷屏
     （Drawbacks 九 C-1：O 价态 4 超限的 Explicit valence 日志）。
+
+    H 数字前缀写法（[H3O+]）先经 normalize_h_prefix_smiles 规范化为
+    合法 SMILES（[OH3+]）再解析（20260815：化学式习惯误写放行）。
     """
+    if normalize_h_prefix_smiles is not None:
+        smiles = normalize_h_prefix_smiles(smiles)
     cm = None
     if mute_rdkit_warnings is not None:
         cm = mute_rdkit_warnings(include_error=True)
@@ -188,7 +195,7 @@ def _label_ok(label) -> Tuple[bool, str]:
 
 
 # ---------------------------------------------------------------------------
-# 化学校验（T2）：label 化学式一致性 + 原子守恒。
+# 化学校验（T2）：原子守恒（T2-3）。
 # 失败原因统一以「化学校验：」前缀，metrics 据此统计化学正确率维度。
 # 均为 best-effort：元素计数无法计算（rdkit 缺失/fake mol）时跳过不放行误判。
 # ---------------------------------------------------------------------------
@@ -297,21 +304,6 @@ def _hill_str(counts: dict) -> str:
         n = counts[sym]
         parts.append(sym + (str(n) if n > 1 else ""))
     return "".join(parts)
-
-
-def _check_label_formula(smiles: str, label: str) -> str:
-    """T2-2：label 为纯化学式时与 SMILES 元素计数/电荷比对；不一致返回原因。"""
-    cands = _parse_plain_formula(label)
-    if not cands:
-        return ""
-    mc = _mol_counts(_parse_mol(smiles))
-    if mc is None:
-        return ""
-    if mc not in cands:
-        return (f"{_CHEM_PREFIX}label「{label}」与 SMILES「{smiles}」化学式不一致"
-                f"（label={_hill_str(cands[0][0])}，SMILES={_hill_str(mc[0])}，"
-                f"请使 label 与结构指向同一物质）")
-    return ""
 
 
 def _sum_species(species: list):
@@ -540,8 +532,7 @@ def _check_composite_balance(children: list, layout_name: str) -> str:
 
 
 def _validate_struct_args(args: list) -> Tuple[bool, str]:
-    """校验单个 STRUCT 参数（顶层或容器内）：SMILES 非空 + label 长度
-    + label 化学式一致性（化学校验 T2-2）。"""
+    """校验单个 STRUCT 参数（顶层或容器内）：SMILES 非空 + label 长度。"""
     if not args or not args[0] or not args[0].strip():
         return False, "SMILES 为空"
     ok, reason = _label_ok(args[1] if len(args) > 1 else None)
@@ -550,10 +541,6 @@ def _validate_struct_args(args: list) -> Tuple[bool, str]:
     smi = args[0].strip()
     if not _smiles_ok(smi):
         return False, f"无效 SMILES「{smi}」"
-    if _RDKIT_OK and len(args) > 1 and args[1]:
-        reason = _check_label_formula(smi, str(args[1]))
-        if reason:
-            return False, reason
     return True, ""
 
 
