@@ -112,5 +112,6 @@ def test_pipeline_mixed_degrades(fake_rdkit, fake_renderers, monkeypatch):
     from app import process_question
     result = process_question("测试")
     assert "RENDERED:c1ccccc1" in result
-    assert "图示无法渲染" in result
-    assert "[STRUCT:c1c" in result or result  # 半截标记原文保留，不崩溃
+    # 部分修正：非法标记被修正输出中的合法标记替换修复（无降级）
+    assert "图示无法渲染" not in result
+    assert "[STRUCT:c1c" in result or result  # 半截标记（未闭合）保留原文，不崩溃

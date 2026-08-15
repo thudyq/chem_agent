@@ -698,16 +698,14 @@ def test_pipeline_degrades_invalid_tags(fake_rdkit, fake_renderers, monkeypatch)
     monkeypatch.setattr("app.ask_llm", lambda *a, **k: llm_text)
     diag = []
     result = process_question("测试", diagnostics=diag)
+    # 部分修正：非法/超长标记被修正输出中的合法标记替换修复（无降级）
     assert "RENDERED:c1ccccc1" in result
-    # 前端：友好降级，不含校验技术细节（前后端分开）
-    assert "图示无法渲染" in result
-    assert "无效 SMILES「XYZABC」" not in result
-    assert "label 过长" not in result
-    assert "[STRUCT:XYZABC]" not in result
-    # 后端：diagnostics 拿到完整技术原因
+    assert "图示无法渲染" not in result
+    # 后端：diagnostics 记录每轮失败（最终被修复 → resolved=True）
     assert len(diag) >= 2
     assert any("无效 SMILES" in d["reason"] for d in diag)
     assert any("label 过长" in d["reason"] for d in diag)
+    assert all(d["resolved"] is True for d in diag)
 
 
 def test_benzene_style_consistency_warning():

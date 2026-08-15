@@ -162,25 +162,42 @@ def _fetch_synrbl_balance(failures: list) -> str:
         + "\n".join(hints)
 
 
+def _context_around(text: str, tag) -> str:
+    """标记在原文中的上下文（前后各 ~40 字符），帮助部分修正时理解语境。"""
+    start = getattr(tag, "start_pos", None)
+    if start is None:
+        return ""
+    before = text[max(0, start - 40): start].replace("\n", " ")
+    after = text[start + len(tag.raw): start + len(tag.raw) + 40].replace("\n", " ")
+    ctx = f"{before} ⟦此处⟧ {after}".strip()
+    return ctx[:160] if ctx else ""
+
+
 def _build_correction_prompt(user_question: str, original: str,
                              failures: list) -> str:
-    """构造 P2 修正 prompt：原始问题 + 失败标记清单 + 修正要求。
+    """构造 P2 修正 prompt：失败标记清单（含上下文）+ 修正要求。
+
+    部分修正模式：模型**只输出修正后的标记**（不重输出整个回答），
+    process_question 用修正标记替换原文对应位置后重新校验/渲染——
+    相比"全篇重生成"大幅节省 token 且修正更聚焦。
 
     failures: [(RenderTag, 失败原因字符串), ...]。
     """
     lines = [
-        "你刚才的回答中有一些化学标记无法渲染。请修正后重新输出完整的回答。",
+        "你刚才的回答中有一些化学标记无法渲染。下面列出每个失败标记及其原因，",
+        "请为每个标记输出**修正后的标记**。",
         "",
         "原始用户问题：",
         user_question,
         "",
-        "你的上一个回答：",
-        original,
-        "",
         "渲染失败的标记及原因：",
     ]
-    for tag, err in failures[:10]:
-        lines.append(f"- {tag.raw}：{err}")
+    for i, (tag, err) in enumerate(failures[:10], 1):
+        lines.append(f"- 标记 {i}：{tag.raw}")
+        lines.append(f"  原因：{err}")
+        ctx = _context_around(original, tag)
+        if ctx:
+            lines.append(f"  上下文：{ctx}")
 
     # PubChem 兜底：失败标记的 label 是化合物名时，反查权威 SMILES 作为修正参考
     pubchem_ref = _fetch_pubchem_references(failures, user_question)
@@ -199,17 +216,17 @@ def _build_correction_prompt(user_question: str, original: str,
     lines += [
         "",
         "修正要求：",
-        "1. 保持回答的内容和结构不变，只修正上述失败标记"
-        "（SMILES、原子编号、组件引用、格式、化学一致性——"
-        "label 与 SMILES 指向同一物质、方程式两侧原子守恒）。",
-        "2. 不要新增或删除其他标记。",
-        "3. 修正后的标记必须严格遵循标记语法。",
-        "4. 若失败原因是化学校验（两侧原子不守恒或净电荷不守恒）：先核对两侧"
+        "1. **只输出修正后的标记本身**（保持 [TYPE:...] 语法；COMPOSITE 容器要完整，"
+        "含开闭标签），多个失败标记按上面顺序依次输出；不要输出解释、序号或任何其他文字。",
+        "2. 不要新增或删除其他标记；修正后的标记必须严格遵循标记语法。",
+        "3. 若失败原因是化学校验（两侧原子不守恒或净电荷不守恒）：先核对两侧"
         "元素计数与电荷，补全缺失的具体反应物/生成物（如催化脱氢/芳构化确实"
         "放 H2 才补 -H2），或修正化学计量系数（整数或 n/2，如 2CCO、1/2O2）"
         "使两侧守恒；也可用 2b 箭头补足——把省略的具体物质写进反应条件"
         "（无符号=反应物侧补足、如 H2O；\"-\"前缀=产物侧补足、如 -H2O），"
         "补上后两侧守恒即可；"
+        "**同时核对每个物种的分子式与它在反应中的角色是否对应**（如 SN1/SN2"
+        "离去步之后，碳正离子/底物的碳数必须与原料相同——不能多写或漏写碳）；"
         "**氧化剂（KMnO4/K2Cr2O7 等）参与反应（被还原）时是反应物，必须写"
         "完整配平方程式，不能用 2b 省略**（如乙醇被 KMnO4 氧化产物是乙酸："
         "5CCO+4KMnO4+6H2SO4→5CH3COOH+4MnSO4+2K2SO4+11H2O）；"
@@ -222,13 +239,13 @@ def _build_correction_prompt(user_question: str, original: str,
         "**原始用户问题是\"化学方程式/配平\"时：必须保持 REACTION 并补全物种"
         "使守恒（配离子带电荷写，如银氨 [Ag+]([NH3])([NH3])、氢氧根 [OH-]，"
         "按电荷配系数），不得降级为 ARROW——ARROW 只在用户只要转化示意时使用。**",
-        "5. 若失败原因是无效 SMILES（如 [Ag(NH3)2]OH、NH3 裸写）：SMILES 不是"
+        "4. 若失败原因是无效 SMILES（如 [Ag(NH3)2]OH、NH3 裸写）：SMILES 不是"
         "化学式——配位化合物/络离子（银氨 [Ag(NH3)2]+ 等）不能用 \"(NH3)2\" 表示"
         "配位，氨必须写 [NH3] 或 N（RDKit 中 NH3 裸写非法）。改法：络离子拆成"
         "可表达的组分（如银氨写 [Ag]([NH3])[NH3] 或 [Ag+]，氨写 N，氢氧化银"
         "写 [Ag+] 与 [OH-] 分离）；实在写不出合法 SMILES 的物种（如复杂配合物）"
         "降级为文字描述或从方程式中省略，只保留能渲染的主物种。",
-        "6. 若失败原因是无机盐/含氧酸盐 SMILES 非法（如 KMnO4 写成 K[Mn](=O)(=O)=O"
+        "5. 若失败原因是无机盐/含氧酸盐 SMILES 非法（如 KMnO4 写成 K[Mn](=O)(=O)=O"
         "或 KMn(=O)=O——金属与中心原子无直接键）：**最简单改法是直接写教科书化学式**"
         "（KMnO4、H2SO4、MnSO4、K2SO4、Na2CO3、NaCl——渲染为文本，无需 SMILES）；"
         "需要画结构图时才改离子式——阳离子 [K+]/[Na+] 与阴离子用 . 分隔，"
@@ -237,12 +254,36 @@ def _build_correction_prompt(user_question: str, original: str,
         "(=O)(=O)[O-]，KClO3 写 [K+].[O-][Cl](=O)=O，Na2CO3 写"
         "[Na+].[Na+].[O-]C(=O)[O-]，H2SO4 写 OS(=O)(=O)O，HNO3 写"
         "[O-][N+](=O)O。",
-        "7. 若失败原因是无效物种/无效 SMILES（如 `-H+`）：`-` 前缀补足只写在箭头条件里"
+        "6. 若失败原因是无效物种/无效 SMILES（如 `-H+`）：`-` 前缀补足只写在箭头条件里"
         "（第 3 段，如 `|-H2O`），**不能写进反应物/产物列表**——列表中的离子直接写"
         "（H+、Br-、[OH-] 或 [H+]、[Br-]），去掉 `-` 前缀并用 `;` 分隔、保证两侧电荷"
         "守恒；无法解析的物种从方程式省略或降级为文字描述。",
     ]
     return "\n".join(lines)
+
+
+def _apply_patch_corrections(original: str, failures: list,
+                             fixed_text: str) -> str | None:
+    """把 LLM 部分修正输出（应为一组修正标记）替换进原文对应位置。
+
+    failures: [(RenderTag, reason), ...]（与修正 prompt 顺序一致）。
+    返回替换后的完整文本；修正输出解析不出标记、或原文中找不到对应标记
+    时返回 None（调用方保留原文，继续下一轮或降级）。
+    """
+    fixed_tags = parse_tags(fixed_text)
+    if not fixed_tags:
+        return None
+    new_text = original
+    for i, (tag, _err) in enumerate(failures):
+        if i >= len(fixed_tags):
+            break
+        new_raw = fixed_tags[i].raw
+        if new_raw == tag.raw:
+            continue
+        if tag.raw not in new_text:
+            return None  # 原文位置丢失（不应发生），保守放弃本次修补
+        new_text = new_text.replace(tag.raw, new_raw, 1)
+    return new_text
 
 
 def process_question(user_question: str, max_corrections: int = 2,
@@ -329,8 +370,9 @@ def process_question(user_question: str, max_corrections: int = 2,
                 rendered[tag.raw] = out
 
         # 3.5 P2 渲染反馈闭环：有失败（校验拦截或渲染失败）且还有修正机会
-        #     → 回传 LLM 修正重试；同时把每一轮失败记入 diagnostics（含最后
-        #     一轮——供后端日志/质量分析，前端只展示注入的友好降级文本）
+        #     → 回传 LLM 部分修正（只重写失败标记，不重输出全文）；同时把
+        #     每一轮失败记入 diagnostics（含最后一轮——供后端日志/质量分析，
+        #     前端只展示注入的友好降级文本）
         problems = [(r.tag, r.reason) for r in invalid] + failures
         if diagnostics is not None:
             for tag, err in problems:
@@ -342,11 +384,18 @@ def process_question(user_question: str, max_corrections: int = 2,
                     "friendly": degrade_text_friendly(tag),
                     "resolved": None,  # 循环后统一填充
                 })
-        if problems and attempt < max_corrections:
-            print(f"[process_question] {len(problems)} 个标记未通过校验/渲染，"
-                  f"回传 LLM 修正（第 {attempt + 1}/{max_corrections} 次）：")
+        if problems:
+            # 每轮失败都打印（含最后一轮，供后端诊断）
+            round_info = (f"第 {attempt + 1} 轮校验" if attempt == 0
+                          else f"修正后第 {attempt + 1} 轮校验")
+            print(f"[process_question] {len(problems)} 个标记未通过校验/渲染"
+                  f"（{round_info}"
+                  + ("，回传 LLM 修正"
+                     if attempt < max_corrections
+                     else "，修正机会耗尽，降级处理") + "）：")
             for tag, err in problems[:5]:
                 print(f"  - {tag.raw[:60]} → {err[:80]}")
+        if problems and attempt < max_corrections:
             if correction_callback is not None:
                 correction_callback()
             correction = _build_correction_prompt(
@@ -354,8 +403,12 @@ def process_question(user_question: str, max_corrections: int = 2,
             fixed = ask_llm(correction, on_piece=progress_callback,
                             thinking="disabled")
             if fixed:
-                full_response = fixed
-                continue
+                # 部分修正：用模型输出的修正标记替换原文对应位置
+                patched = _apply_patch_corrections(
+                    full_response, problems, fixed)
+                if patched is not None:
+                    full_response = patched
+                    continue
 
         final_ok = not problems  # 修正救回（最终无失败）或从未失败
         # 4. 注入：校验失败 → 友好降级提示；渲染失败（重试机会耗尽）→ 渲染器错误串
@@ -378,4 +431,11 @@ if __name__ == "__main__":
     print("=" * 60)
     print(f"用户问题：{question}")
     print("=" * 60)
-    print(process_question(question))
+    diag = []
+    print(process_question(question, diagnostics=diag))
+    if diag:
+        print("\n[诊断] 未渲染标记（含修正后仍失败的最后一轮）：")
+        for d in diag:
+            status = "✓已修正救回" if d["resolved"] else "✗未解决"
+            print(f"  round {d['round']} {status}："
+                  f"{d['raw'][:50]} → {d['reason'][:100]}")
