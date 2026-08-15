@@ -237,6 +237,10 @@ def _build_correction_prompt(user_question: str, original: str,
         "(=O)(=O)[O-]，KClO3 写 [K+].[O-][Cl](=O)=O，Na2CO3 写"
         "[Na+].[Na+].[O-]C(=O)[O-]，H2SO4 写 OS(=O)(=O)O，HNO3 写"
         "[O-][N+](=O)O。",
+        "7. 若失败原因是无效物种/无效 SMILES（如 `-H+`）：`-` 前缀补足只写在箭头条件里"
+        "（第 3 段，如 `|-H2O`），**不能写进反应物/产物列表**——列表中的离子直接写"
+        "（H+、Br-、[OH-] 或 [H+]、[Br-]），去掉 `-` 前缀并用 `;` 分隔、保证两侧电荷"
+        "守恒；无法解析的物种从方程式省略或降级为文字描述。",
     ]
     return "\n".join(lines)
 
