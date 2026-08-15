@@ -806,10 +806,10 @@ def atom_charge_label(atom) -> str | None:
 
 _CHARGE_POS_DIST = 0.34    # 电荷到元素符号中心的距离（原 0.42，调至 0.34；不与孤对电子重叠）
 # 无标签碳（键线式：atom_label 返回 None，含带电碳）的电荷圈距离——
-# 使 45° 方向上水平/竖直分量 ≈ 0.10（原 0.34×cos45° ≈ 0.24），电荷圈
-# 更贴近原子，不与键线交点混淆。保持角度只改距离：任意角度下
-# 水平/竖直分量 |dist·cos/sin(ang)| 均 ≤ 0.10。
-_CHARGE_POS_DIST_NO_LABEL = 0.10 / math.cos(math.radians(45.0))
+# 使 45° 方向上水平/竖直分量 ≈ 0.15（原 0.10；0.34×cos45° ≈ 0.24 为
+# 有标签原子的分量），电荷圈更贴近原子，不与键线交点混淆。
+# 保持角度只改距离：任意角度下水平/竖直分量 |dist·cos/sin(ang)| 均 ≤ 0.15。
+_CHARGE_POS_DIST_NO_LABEL = 0.15 / math.cos(math.radians(45.0))
 _CHARGE_SCALE = 0.5        # 电荷圈缩放（为默认大小的一半）
 
 
@@ -874,26 +874,39 @@ def charge_tikz(mol, idx: int, shift=(0.0, 0.0), explicit_hs: int = 0,
             f"scale={_CHARGE_SCALE}] at ({x:.2f},{y:.2f}) {{{text}}};")
 
 
-_PARTIAL_CHARGE_DIST = 0.34  # 部分电荷到元素符号中心的距离（与 _CHARGE_POS_DIST 一致）
-
-
-def partial_charge_angle(mol, idx: int) -> float:
+def partial_charge_angle(mol, idx: int, explicit_hs: int = 0) -> float:
     """部分电荷（δ+/δ-）标注方位角（Drawbacks 手动测试第 7 条）。
 
     起点与形式电荷圈一致（_charge_angle：默认右上 45°；标签氢在右侧
-    且左侧无阻碍时左上 135°），再按 block（直接相连的键/原子 + 标签氢）
-    微调避让（过近 ≤30° 时向 ±30°/±60°/90° 微调；极端拥挤保持原角）。
+    且左侧无阻碍时左上 135°）；**原子带形式电荷时起点 +45° 偏移**，
+    避免 δ 标注与圆圈电荷同位重叠（P2）；再按避让方向（直接相连的
+    键/原子 + 标签氢 + **该原子实际孤对电子点槽位**）微调（过近 ≤30°
+    时向 ±30°/±60°/90° 微调；极端拥挤保持原角）。
     """
-    return _nudge_from_avoid(_charge_angle(mol, idx), _bond_blocks(mol, idx))
+    base = _charge_angle(mol, idx)
+    if mol.GetAtomWithIdx(idx).GetFormalCharge() != 0:
+        base = (base + 45.0) % 360.0
+    avoid = _bond_blocks(mol, idx)
+    # 孤对电子点槽位角度（P3'）：δ 标注不得压住电子点
+    groups, singles = lone_pair_dot_groups(mol, idx, explicit_hs=explicit_hs)
+    cx, cy = _dot_center(mol, idx, explicit_hs)
+    for px, py in [p for g in groups for p in g] + singles:
+        avoid.append(math.degrees(math.atan2(py - cy, px - cx)) % 360.0)
+    return _nudge_from_avoid(base, avoid)
 
 
 def partial_charge_pos(mol, idx: int, shift=(0.0, 0.0),
                        explicit_hs: int = 0) -> tuple[float, float]:
-    """部分电荷标注的画布坐标（元素符号中心 + 方向避让，见 partial_charge_angle）。"""
+    """部分电荷标注的画布坐标（元素符号中心 + 方向避让，见 partial_charge_angle）。
+
+    距离复用 _charge_dist（与形式电荷圈一致）：无标签碳（键线式端点）
+    水平/竖直分量 0.10，有标签原子保持 0.34。
+    """
     cx, cy = _dot_center(mol, idx, explicit_hs)
-    r = math.radians(partial_charge_angle(mol, idx))
-    return (cx + shift[0] + _PARTIAL_CHARGE_DIST * math.cos(r),
-            cy + shift[1] + _PARTIAL_CHARGE_DIST * math.sin(r))
+    r = math.radians(partial_charge_angle(mol, idx, explicit_hs))
+    d = _charge_dist(mol, idx, explicit_hs)
+    return (cx + shift[0] + d * math.cos(r),
+            cy + shift[1] + d * math.sin(r))
 
 
 def lone_pair_dot_groups(mol, idx: int, shift=(0.0, 0.0), explicit_hs: int = 0):
