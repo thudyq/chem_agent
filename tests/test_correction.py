@@ -341,3 +341,71 @@ def test_route_upgrade_unresolved(fake_rdkit, fake_renderers, monkeypatch):
     stages = [d["stage"] for d in diag]
     assert "main" in stages and "upgrade" in stages  # 两阶段失败都记录
     assert all(d["resolved"] is False for d in diag)
+
+
+# ---------- 部分降级：COMPOSITE 仅 MECHARROW 报错时剔除箭头保留分子 ----------
+
+_BAD_MECH_COMPOSITE = (
+    "[COMPOSITE:reaction_mech]"
+    "[STRUCT:CCl,id=r0,label=CH3Cl][RXNARROW]"
+    "[STRUCT:CO,id=p0,label=CH3OH]"
+    "[MECHARROW:r0:9>r0:0]"   # 9 越界（该分子只有 2 个重原子）→ 仅 MECHARROW 报错
+    "[/COMPOSITE]"
+)
+
+
+def test_partial_render_without_mecharrows():
+    """部分降级：仅 MECHARROW 报错的 COMPOSITE 剔除箭头后仍渲染出分子图。"""
+    pytest.importorskip("rdkit")
+    from app import _partial_render_composite_without_mecharrows
+    from core.tag_parser import parse_tags
+    from core.tag_validator import validate_tags
+
+    tags = parse_tags(_BAD_MECH_COMPOSITE)
+    _, invalid = validate_tags(tags)
+    assert len(invalid) == 1
+    assert "MECHARROW" in invalid[0].reason
+    out = _partial_render_composite_without_mecharrows(invalid[0].tag)
+    assert out is not None
+    assert out.startswith("\\begin{tikzpicture}")
+    assert "\\begin{scope}" in out          # 分子组件保留
+    assert "\\draw[->, very thick]" in out  # 主反应箭头保留
+
+
+def test_partial_render_not_for_non_mecharrow():
+    """非 MECHARROW 错误（STRUCT 无效）不触发部分渲染（整体降级）。"""
+    pytest.importorskip("rdkit")
+    from app import _partial_render_composite_without_mecharrows
+    from core.tag_parser import parse_tags
+    from core.tag_validator import validate_tags
+
+    text = ("[COMPOSITE:reaction_mech][STRUCT:XYZABC,id=r0][RXNARROW]"
+            "[STRUCT:CO,id=p0][MECHARROW:r0:0>r0:0][/COMPOSITE]")
+    tags = parse_tags(text)
+    _, invalid = validate_tags(tags)
+    assert "MECHARROW" not in invalid[0].reason
+    assert _partial_render_composite_without_mecharrows(invalid[0].tag) is None
+
+
+def test_mecharrow_only_degrades_partially(monkeypatch):
+    """集成：仅 MECHARROW 报错且修正耗尽 → 输出分子图 + 「反应箭头无法渲染」
+    提示（而非整图省略）。"""
+    pytest.importorskip("rdkit")
+    bad = f"机理：{_BAD_MECH_COMPOSITE}"
+    monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
+    monkeypatch.setattr("app.ask_llm", lambda *a, **k: bad)
+    result = process_question("画机理", max_corrections=1)
+    assert "反应箭头无法渲染，已省略" in result
+    assert "\\begin{tikzpicture}" in result           # 分子图保留
+    assert "（复合图图示无法渲染" not in result        # 未整体降级
+
+
+def test_non_mecharrow_still_whole_degrade(monkeypatch):
+    """非 MECHARROW 错误修正耗尽 → 仍整体降级（行为不变）。"""
+    pytest.importorskip("rdkit")
+    bad = "苯是 [STRUCT:XYZABC]。"
+    monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
+    monkeypatch.setattr("app.ask_llm", lambda *a, **k: bad)
+    result = process_question("画苯", max_corrections=1)
+    assert "图示无法渲染" in result
+    assert "无效 SMILES" not in result                # 前端友好（无技术细节）

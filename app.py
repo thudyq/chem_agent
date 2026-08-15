@@ -298,6 +298,36 @@ def _apply_patch_corrections(original: str, failures: list,
     return new_text
 
 
+def _partial_render_composite_without_mecharrows(tag) -> str | None:
+    """COMPOSITE 仅 MECHARROW 报错（修正机会耗尽）时：剔除全部 MECHARROW
+    子标记后重新渲染——分子/加号/主箭头保留（反应骨架完整，仅缺机理弯
+    箭头）。返回 TikZ 代码；仍失败返回 None（调用方走整体降级）。
+
+    依据：MECHARROW 错误（索引/引用/格式）不影响分子与反应骨架的正确性，
+    整图降级太可惜；剔除箭头后"反应物→产物"仍完整可读。
+    """
+    if tag.type != "COMPOSITE" or not tag.args or len(tag.args) < 2:
+        return None
+    children = tag.args[1]
+    if not isinstance(children, list) or \
+            not any(c.type == "MECHARROW" for c in children):
+        return None
+    new_children = [c for c in children if c.type != "MECHARROW"]
+    if not new_children:
+        return None
+    new_args = [tag.args[0], new_children] + list(tag.args[2:])
+    renderer = RENDERER_REGISTRY.get(tag.type)
+    if renderer is None:
+        return None
+    try:
+        out = renderer(*new_args)
+    except Exception:
+        return None
+    if not isinstance(out, str) or out.startswith(_RENDER_ERROR_PREFIX):
+        return None  # 剔除箭头后仍有其他错误（渲染器失败串）→ 整体降级
+    return out
+
+
 def process_question(user_question: str, max_corrections: int = 2,
                      history: list = None, progress_callback=None,
                      correction_callback=None, diagnostics: list = None,
@@ -445,7 +475,19 @@ def _generate_with_corrections(user_question: str, model=None,
         # 2.5 标记契约校验（P1）：渲染前拦截坏参数（非法 SMILES / 越界引用 /
         #    超长 label / 格式错误），降级为友好提示，坏参数不进渲染器
         valid_tags, invalid = validate_tags(tags)
-        degraded = {r.tag.raw: degrade_text_friendly(r.tag) for r in invalid}
+        degraded = {}
+        for r in invalid:
+            partial = None
+            # 部分降级：COMPOSITE 仅 MECHARROW 报错（修正耗尽）时，剔除全部
+            # MECHARROW 子标记后重新渲染——分子/加号/主箭头保留（反应骨架
+            # 完整，仅缺机理弯箭头），避免整图省略
+            if r.tag.type == "COMPOSITE" and "MECHARROW" in (r.reason or ""):
+                partial = _partial_render_composite_without_mecharrows(r.tag)
+            if partial is not None:
+                degraded[r.tag.raw] = (
+                    partial + "\n\n> 反应箭头无法渲染，已省略")
+            else:
+                degraded[r.tag.raw] = degrade_text_friendly(r.tag)
 
         # 3. 逐标记渲染（REASONING 无渲染器，由注入器特殊处理）
         rendered, failures = {}, []
