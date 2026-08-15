@@ -97,3 +97,20 @@ def test_charge_angle_side_selection():
     assert mp._charge_angle(mol, 0) == 45.0
     mol = mp.prepare_mol("[CH3-]")         # 右侧 H 阻碍、左侧无键
     assert mp._charge_angle(mol, 0) == 135.0
+
+
+def test_flipped_h_prefix_blocks_left():
+    """带电 flip 场景（标签 H₂O，H 前缀在左）：左侧 180° 视为 H 阻挡，
+    孤对电子与电荷圈避开左侧——回归锚点（20260815：[OH2+] 孤对与
+    H 标签重叠，原逻辑仅按化学惯例判 H 方向，flip 场景判反）。"""
+    mol = mp.prepare_mol("C[OH2+]")
+    conf = mol.GetConformer()
+    conf.SetAtomPosition(0, (2, 0, 0))     # 重原子 C 在 O 正右侧 → 标签翻转 H₂O
+    conf.SetAtomPosition(1, (0, 0, 0))     # [OH2+] 的 O
+    o = 1
+    assert mp._label_h_is_left(mol, o) is True   # H 前缀（flip）在左
+    assert mp._charge_angle(mol, o) == 45.0      # 电荷圈右上，避开左侧 H
+    blocked = mp._bond_blocks(mol, o)
+    assert 180.0 in [round(b % 360.0) for b in blocked]
+    for a in mp.lone_pair_angles(mol, o):        # 孤对避开左侧 H 前缀
+        assert mp._ang_diff(a, 180.0) >= 60.0

@@ -551,22 +551,38 @@ def _ang_diff(a: float, b: float) -> float:
     return min(d, 360.0 - d)
 
 
+def _label_h_is_left(mol, idx: int) -> bool:
+    """渲染标签中 H 是否在元素符号左侧（H 前缀，如 H₂O/HF/HCl）。
+
+    同时覆盖两类来源：化学惯例（孤立氢化物 H 前置）与标签翻转
+    （flip：键端在右侧时 OH₂ → H₂O）。按**实际渲染标签文本**判断——
+    标签以 H 开头且非元素符号开头即为 H 前缀（阻挡左侧 180°）；
+    H 后缀（OH₂/CH₃）阻挡右侧（0°）。此前仅按化学惯例判断，
+    带电 flip 场景（如 [OH2+] 标签 H₂O）误判 H 在右 → 孤对/电荷
+    压住左侧 H 前缀（20260815 修复）。
+    """
+    atom = mol.GetAtomWithIdx(idx)
+    if _implicit_shown_hs(atom) == 0:
+        return False
+    lab = mol_default_labeler(mol)(atom, flip=_label_flip_for(mol, idx))
+    plain = re.sub(r"[$_{}^\\]", "", lab or "")
+    sym = atom.GetSymbol()
+    return plain.startswith("H") and not plain.startswith(sym)
+
+
 def _bond_blocks(mol, idx: int) -> list:
     """规范定义的 block：直接相连的化学键和原子方向 + 标签氢方向。
 
-    标签氢方向：孤立中性非碳原子（如 HCl/HBr）的 H 前置（H 在左侧，
-    180°）；其余（CH₃ 等 H 后置）H 在右侧（0°）——问题 7：原固定 0°
-    使 HCl 的孤对电子误占左侧与 H 标签重叠。电荷不是 block（规范仅要求
+    标签氢方向：H 前缀（H₂O/HF/HCl，含 flip 场景）→ 左侧 180°；
+    H 后缀（OH₂/CH₃ 等）→ 右侧 0°——问题 7：原固定 0° 使 HCl 的
+    孤对电子误占左侧与 H 标签重叠。电荷不是 block（规范仅要求
     电荷与孤对电子不重叠），单独作为避让约束。
     """
     atom = mol.GetAtomWithIdx(idx)
     blocked = _bond_angles(mol, idx)
     if _implicit_shown_hs(atom) > 0:
-        # H 前置（标签以 H 开头）→ H 在左侧 180°；否则 H 在右侧 0°
-        z = atom.GetAtomicNum()
-        h_prefixed = (z in _H_PREFIX_ELEMENTS and atom.GetFormalCharge() == 0
-                      and _only_h_neighbors(atom))
-        blocked.append(180.0 if h_prefixed else 0.0)
+        # H 前缀（标签以 H 开头，含 flip）→ H 在左侧 180°；否则 H 在右侧 0°
+        blocked.append(180.0 if _label_h_is_left(mol, idx) else 0.0)
     return blocked
 
 
@@ -825,13 +841,14 @@ def _charge_dist(mol, idx: int, explicit_hs: int = 0) -> float:
 def _charge_angle(mol, idx: int) -> float:
     """电荷圈方位角：已被候选位放置选定（mol prop 缓存）时读缓存；
     否则按规则——右侧有标签氢阻碍且左侧无阻碍时在左上（135°），
-    否则在右上（45°）（左右都有阻碍时保持右上）。"""
+    否则在右上（45°）（左右都有阻碍时保持右上）。标签 H 前缀
+    （H₂O/HF，含 flip）视为左侧阻碍（_label_h_is_left）。"""
     prop = f"_charge_ang_{idx}"
     if mol.HasProp(prop):
         return float(mol.GetProp(prop))
     if _implicit_shown_hs(mol.GetAtomWithIdx(idx)) == 0:
         return 45.0
-    left_blocked = any(
+    left_blocked = _label_h_is_left(mol, idx) or any(
         _ang_diff(a, 180.0) <= 45.0 for a in _bond_angles(mol, idx)
     )
     return 45.0 if left_blocked else 135.0
