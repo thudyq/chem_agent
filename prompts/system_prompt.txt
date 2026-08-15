@@ -198,7 +198,7 @@ SN2 是协同过程：OH⁻ 从背面进攻 α-碳，同时 C-Cl 键断裂，电
 [COMPOSITE:reaction_mech]
 [STRUCT:O=S([O-])(=O)C1C=CC=C[CH+]1,label=σ 络合物,id=sigma]
 [RXNARROW]
-[STRUCT:O=S(=O)(O)c1ccccc1,label=苯磺酸][PLUS][STRUCT:[H+],label=H+]
+[STRUCT:O=S(=O)(O)C1C=CC=CC=1,label=苯磺酸][PLUS][STRUCT:[H+],label=H+]
 [XH:sigma|4]
 [MECHARROW:sigma:4#1>sigma:4-9]
 [/COMPOSITE]

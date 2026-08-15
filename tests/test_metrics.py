@@ -88,3 +88,80 @@ def test_format_report_without_by_type_ok():
     out = metrics.format_report(stats)
     assert "标记遵循率报告" in out
     assert "按标记类型统计" not in out
+
+
+# ---------- 端到端路由评估（evaluate_route） ----------
+
+def _enable_route_config(monkeypatch):
+    """启用路由配置（core.config.settings，非 app.settings——evaluate_route
+    内部从 core.config 延迟导入）。"""
+    import types
+    import core.config as cfg
+    monkeypatch.setattr(
+        cfg, "settings",
+        types.SimpleNamespace(
+            llm=types.SimpleNamespace(
+                upgrade_model_name="deepseek-v4-pro",
+                upgrade_keywords=())))  # 空 → 用 app 内置默认关键词
+
+
+def test_evaluate_route_counts(monkeypatch):
+    """路由三种结局统计：flash 一遍过 / 关键词直 pro 降级 / flash 失败升级救回。"""
+    _enable_route_config(monkeypatch)
+
+    def fake_pq(q, max_corrections=2, history=None, progress_callback=None,
+                correction_callback=None, diagnostics=None):
+        d = diagnostics
+        if "机理" in q:   # 命中关键词 → 直 pro → 失败降级
+            d.append({"round": 0, "stage": "upgrade", "type": "REACTION",
+                      "raw": "[REACTION:x]", "reason": "化学校验：不守恒",
+                      "friendly": "（反应方程式图示无法渲染，已省略）",
+                      "resolved": False})
+            return "机理回答（反应方程式图示无法渲染，已省略）"
+        if "氧化" in q:   # flash 失败 → 升级 pro 救回
+            d.append({"round": 0, "stage": "main", "type": "STRUCT",
+                      "raw": "[STRUCT:bad]", "reason": "无效 SMILES",
+                      "friendly": "（结构式图示无法渲染，已省略）",
+                      "resolved": True})
+            return "氧化回答 [STRUCT:c1ccccc1]"
+        return "苯是 [STRUCT:c1ccccc1]。"   # flash 一遍过
+
+    import app
+    monkeypatch.setattr(app, "process_question", fake_pq)
+
+    stats = metrics.evaluate_route(
+        ["苯的结构式", "介绍苯的硝化反应机理", "乙醇氧化方程式"])
+    assert stats["main_pass"] == 1
+    assert stats["upgrade_triggered"] == 2
+    assert stats["keyword_direct"] == 1
+    assert stats["unresolved_tags"] == 1
+    assert stats["degraded_answers"] == 1
+
+
+def test_format_route_report_and_detail():
+    """路由报告与逐题详情输出格式。"""
+    stats = {
+        "total": 3, "main_pass": 1, "upgrade_triggered": 2,
+        "keyword_direct": 1, "unresolved_tags": 1, "degraded_answers": 1,
+        "corrections_after_upgrade": 0,
+        "responses": [
+            {"question": "q1", "keyword_hit": False,
+             "upgrade_triggered": False, "degraded": False,
+             "corrections_failed_after": False, "unresolved": 0, "diag": [],
+             "text": "苯是 [STRUCT:c1ccccc1]。"},
+            {"question": "q2", "keyword_hit": True,
+             "upgrade_triggered": True, "degraded": True,
+             "corrections_failed_after": False, "unresolved": 1,
+             "text": "机理回答（反应方程式图示无法渲染，已省略）",
+             "diag": [{"round": 0, "stage": "upgrade", "resolved": False,
+                       "reason": "化学校验：不守恒"}]},
+        ],
+    }
+    rep = metrics.format_route_report(stats)
+    assert "路由评估报告" in rep
+    assert "主模型（flash）一遍过: 1" in rep
+    assert "升级触发: 2" in rep and "关键词直 pro: 1" in rep
+    det = metrics.format_route_detail(stats)
+    assert "flash 一遍过" in det
+    assert "关键词直 pro" in det and "未解决 1" in det
+    assert "最终回答" in det and "苯是 [STRUCT:c1ccccc1]" in det

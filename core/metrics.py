@@ -119,6 +119,128 @@ def evaluate_compliance(questions: list, *, max_corrections: int = 1) -> dict:
     return stats
 
 
+def evaluate_route(questions: list, max_corrections: int = 2) -> dict:
+    """端到端路由评估：每问题走 process_question（含关键词预判直 pro /
+    flash 首跑失败升级 / 部分修正闭环），统计路由效果。
+
+    与 evaluate_compliance 的区别：后者只测单模型（MODEL_NAME）首次输出
+    质量（prompt 基线）；本函数测真实管线（路由 + 修正 + 降级）的最终结果，
+    回答的是"路由把哪些题救回来了、还剩多少降级"。
+
+    统计口径：
+    - main_pass: flash 一遍过（无失败，未升级）
+    - upgrade_triggered: 命中难题关键词直 pro，或 flash 首跑失败升级
+    - keyword_direct: 其中命中关键词直接走 pro 的题数
+    - unresolved_tags: 最终未解决（resolved=False）标记总数
+    - degraded_answers: 输出文本含"图示无法渲染"（降级）的回答数
+    - corrections_after_upgrade: 升级后修正仍失败的题数（diag 有 round>=1）
+    """
+    from .config import settings
+    import app as _app
+    from app import process_question
+
+    keywords = getattr(settings.llm, "upgrade_keywords", None) \
+        or _app._DEFAULT_UPGRADE_KEYWORDS
+    has_route = bool((settings.llm.upgrade_model_name or "").strip())
+
+    stats = {
+        "total": len(questions),
+        "main_pass": 0,
+        "upgrade_triggered": 0,
+        "keyword_direct": 0,
+        "unresolved_tags": 0,
+        "degraded_answers": 0,
+        "corrections_after_upgrade": 0,
+        "responses": [],
+    }
+    for q in questions:
+        diag = []
+        text = process_question(q, max_corrections=max_corrections,
+                                diagnostics=diag)
+        keyword_hit = has_route and any(k and k in q for k in keywords)
+        # 升级判定：关键词直 pro / 有 main 失败（flash 失败必升级）/
+        # 有 upgrade 阶段失败记录
+        upgrade_triggered = (keyword_hit
+                             or any(d["stage"] == "main" for d in diag)
+                             or any(d["stage"] == "upgrade" for d in diag))
+        unresolved = [d for d in diag if d.get("resolved") is False]
+        degraded = bool(text) and "图示无法渲染" in text
+        corrections_failed_after = any(d.get("round", 0) >= 1 for d in diag)
+
+        if keyword_hit:
+            stats["keyword_direct"] += 1
+        if upgrade_triggered:
+            stats["upgrade_triggered"] += 1
+        else:
+            stats["main_pass"] += 1
+        stats["unresolved_tags"] += len(unresolved)
+        if degraded:
+            stats["degraded_answers"] += 1
+        if corrections_failed_after:
+            stats["corrections_after_upgrade"] += 1
+        stats["responses"].append({
+            "question": q,
+            "keyword_hit": keyword_hit,
+            "upgrade_triggered": upgrade_triggered,
+            "degraded": degraded,
+            "corrections_failed_after": corrections_failed_after,
+            "unresolved": len(unresolved),
+            "text": text or "",          # 最终回答全文（含渲染后 TikZ/降级提示）
+            "diag": [
+                {"round": d.get("round"), "stage": d.get("stage"),
+                 "resolved": d.get("resolved"),
+                 "reason": (d.get("reason") or "")[:120]}
+                for d in diag
+            ],
+        })
+    return stats
+
+
+def format_route_report(stats: dict) -> str:
+    total = stats["total"]
+    mp = stats["main_pass"]
+    up = stats["upgrade_triggered"]
+    return "\n".join([
+        "路由评估报告",
+        "============",
+        f"问题数: {total}",
+        f"主模型（flash）一遍过: {mp}（{_pct(mp, total)}）",
+        f"升级触发: {up}（{_pct(up, total)}）"
+        f"，其中关键词直 pro: {stats['keyword_direct']}",
+        f"升级后修正仍失败: {stats['corrections_after_upgrade']}",
+        f"最终未解决标记: {stats['unresolved_tags']}",
+        f"降级回答数: {stats['degraded_answers']}"
+        f"（{_pct(stats['degraded_answers'], total)}）",
+    ])
+
+
+def format_route_detail(stats: dict, output_limit: int = 300) -> str:
+    lines = ["逐问题路由详情", "=============="]
+    for i, r in enumerate(stats["responses"], 1):
+        flags = []
+        if r["keyword_hit"]:
+            flags.append("关键词直 pro")
+        elif r["upgrade_triggered"]:
+            flags.append("flash 失败升级")
+        if r["corrections_failed_after"]:
+            flags.append("升级后修正仍失败")
+        if r["degraded"]:
+            flags.append("降级")
+        lines.append(f"\n[{i}] 问题：{r['question']}")
+        lines.append(f"    状态：{'、'.join(flags) if flags else 'flash 一遍过'}"
+                     f"（未解决 {r['unresolved']}）")
+        for d in r["diag"]:
+            lines.append(f"    ✗ round {d['round']}[{d['stage']}]"
+                         f"{'✗未解决' if d['resolved'] is False else '✓已解决'}"
+                         f" → {d['reason']}")
+        text = r.get("text") or ""
+        if text:
+            shown = text if len(text) <= output_limit \
+                else text[:output_limit] + "…"
+            lines.append(f"    最终回答：\n{_indent(shown)}")
+    return "\n".join(lines)
+
+
 def _pct(a: int, b: int) -> str:
     return f"{100.0 * a / b:.1f}%" if b else "—"
 
@@ -222,11 +344,12 @@ if __name__ == "__main__":
     # 与 composite.py 同款处理：强制 UTF-8、不可编码字符替换
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     # 解析选项：--questions-file / --detail-file 各带 1 个文件参数，
-    # --report-only 为标志；其余位置参数才是问题（避免选项被当作问题）
+    # --report-only / --route 为标志；其余位置参数才是问题（避免选项被当作问题）
     args = sys.argv[1:]
     questions = []
     detail_file = None
     report_only = False
+    route_mode = False
     i = 0
     while i < len(args):
         a = args[i]
@@ -241,6 +364,9 @@ if __name__ == "__main__":
         elif a == "--report-only":
             report_only = True
             i += 1
+        elif a == "--route":
+            route_mode = True
+            i += 1
         elif a.startswith("--"):
             print(f"未知选项: {a}")
             i += 1
@@ -252,7 +378,19 @@ if __name__ == "__main__":
         print("      python -m core.metrics --questions-file questions.txt")
         print("      --detail-file FILE 把每条 LLM 完整输出写入文件（终端仍打印摘要）")
         print("      --report-only 终端只打印统计报告，不打印逐问题详情")
+        print("      --route 端到端路由评估（process_question 含关键词直 pro /")
+        print("              flash 失败升级 / 部分修正；默认模式为单模型首次输出基线）")
         sys.exit(1)
+    if route_mode:
+        stats = evaluate_route(questions)
+        print(format_route_report(stats))
+        if not report_only:
+            print()
+            print(format_route_detail(stats))  # 终端截断版
+        if detail_file:
+            with open(detail_file, "w", encoding="utf-8") as f:
+                f.write(format_route_detail(stats, output_limit=1 << 30))
+        sys.exit(0)
     stats = evaluate_compliance(questions)
     print(format_report(stats))
     if not report_only:
