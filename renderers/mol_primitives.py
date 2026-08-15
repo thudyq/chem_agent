@@ -80,9 +80,10 @@ def atom_label(atom, explicit_hs: int = 0, flip: bool = False) -> str | None:
     sym = sym[0].upper() + sym[1:]
     h = max(0, atom.GetTotalNumHs() - explicit_hs)
     if (h >= 1 and atom.GetAtomicNum() in _H_PREFIX_ELEMENTS
-            and atom.GetFormalCharge() == 0 and _only_h_neighbors(atom)):
-        # 氢化物惯例 H 前置（HF/HCl/HBr/HI/H2O/H2S）；带电离子保持 XH
-        # （如 OH⁻ 写 OH，不写 HO）；碳始终 CHn（C 在前，·CH3 也写 CH3）；
+            and atom.GetFormalCharge() >= 0 and _only_h_neighbors(atom)):
+        # 氢化物惯例 H 前置（HF/HCl/HBr/HI/H2O/H2S）；正离子氢化物同惯例
+        # （H3O⁺ 而非 OH3⁺，20260815）；负离子保持 XH（如 OH⁻ 写 OH，
+        # 不写 HO）；碳始终 CHn（C 在前，·CH3 也写 CH3）；
         # N/P/B/Si 的氢化物写 NH3/PH3/BH3/SiH4（元素在前）——问题 2（NH3→H3N）
         parts = (f"H$_{{{h}}}$" if h > 1 else "H") + sym
     elif flip:
@@ -794,10 +795,11 @@ def atom_main_label(atom, explicit_hs: int = 0, flip: bool = False) -> str | Non
         sym = sym[0].upper() + sym[1:]
     h = max(0, atom.GetTotalNumHs() - explicit_hs)
     # 氢化物惯例 H 前置（HF/HCl/HBr/HI/H2O/H2S，见 _H_PREFIX_ELEMENTS）；
-    # 带电离子保持 XH（如 OH⁻ 写 OH，不写 HO）；碳始终 CHn；N/P/B/Si
+    # 正离子氢化物同惯例（H3O⁺ 而非 OH3⁺，20260815）；负离子保持 XH
+    # （如 OH⁻ 写 OH，不写 HO）；碳始终 CHn；N/P/B/Si
     # 氢化物写 NH3/PH3/BH3/SiH4（元素在前）——问题 2（NH3→H3N）
     if (h >= 1 and atom.GetAtomicNum() in _H_PREFIX_ELEMENTS
-            and atom.GetFormalCharge() == 0 and _only_h_neighbors(atom)):
+            and atom.GetFormalCharge() >= 0 and _only_h_neighbors(atom)):
         parts = (f"H$_{{{h}}}$" if h > 1 else "H") + sym
     elif flip:
         parts = (f"H$_{{{h}}}$" if h > 1 else ("H" if h == 1 else "")) + sym
@@ -1152,9 +1154,14 @@ def prepare_mol(smiles: str, *, add_hs: bool = False, kekulize: bool = False,
         from rdkit import Chem
         from rdkit.Chem import AllChem
         from rdkit.Chem.Draw import rdMolDraw2D
-        from utils.rdkit_utils import mute_rdkit_warnings
+        from utils.rdkit_utils import mute_rdkit_warnings, \
+            normalize_h_prefix_smiles
     except ImportError:
         return None
+
+    # H 数字前缀写法（[H3O+]）规范化为合法 SMILES（[OH3+]）再解析
+    # （20260815：化学式习惯误写，与 tag_validator._parse_mol 同口径）
+    smiles = normalize_h_prefix_smiles(smiles)
 
     # 解析阶段统一屏蔽 rdApp.error：探测性解析（含双轨制下 KMnO4/H2SO4 等
     # 公式物种试解析）失败是常态，RDKit 的 SMILES Parse Error 对用户与日志

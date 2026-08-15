@@ -14,6 +14,24 @@ from rdkit.Chem.rdMolDescriptors import CalcMolFormula
 # 警告（无害，C4）。
 FREE_H_COMPONENT_RE = re.compile(r"(?:^|(?<=\.))\[H[+-]?\](?=\.|$)")
 
+# H 数字前缀的化学式习惯写法（非法 SMILES）：[H3O+] / [H2O] / [H3N+]。
+# 方括号内以 H 开头、后跟数字 n 与元素符号 X 及可选的电荷（+/-/数字）——
+# LLM 把化学式 H₃O⁺ 误写成 SMILES 时，H3 前缀在 SMILES 语法中非法
+# （H 原子不能带隐式 H），RDKit 解析失败；规范化重写为 [XHn...]（[OH3+]）。
+# 不匹配 H 原子/离子写法（[H]/[H+]/[H-]，无数字）、同位素（[2H]，
+# 数字在 H 前）与元素开头写法（[OH3+]/[CH3]/[NH4+]）→ 原样返回。
+_H_PREFIX_SMILES_RE = re.compile(r"\[H(\d+)([A-Z][a-z]?)([+-]?\d*)\]")
+
+
+def normalize_h_prefix_smiles(smiles: str) -> str:
+    """规范化"H 数字前缀"SMILES 写法：[H3O+] → [OH3+]、[H2O] → [OH2]、
+    [H3N+] → [NH3+]。校验层与渲染层共用（tag_validator._parse_mol /
+    renderers.mol_primitives.prepare_mol 解析前调用）；未匹配原样返回。
+    """
+    if not smiles or not isinstance(smiles, str):
+        return smiles
+    return _H_PREFIX_SMILES_RE.sub(r"[\2H\1\3]", smiles)
+
 
 @contextlib.contextmanager
 def mute_rdkit_warnings(include_error: bool = False):

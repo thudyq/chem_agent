@@ -32,6 +32,16 @@ def test_water_label_is_h2o():
     assert atom_label(o) == "H$_{2}$O"
 
 
+def test_hydronium_label_h_prefix():
+    """水合氢离子 [OH3+] 标签 H₃O（H 前缀，化学惯例 H₃O⁺ 而非 OH₃⁺）；
+    [OH-] 保持 OH（负离子 O 前缀）。"""
+    mol = prepare_mol("[OH3+]")
+    assert atom_main_label(_atom(mol, "O")) == "H$_{3}$O"
+    assert atom_label(_atom(mol, "O")) == "H$_{3}$O"
+    mol = prepare_mol("[OH-]")
+    assert atom_main_label(_atom(mol, "O")) == "OH"
+
+
 def test_ammonia_label_is_nh3():
     """问题 2（NH3→H3N）：N/P/B 氢化物元素在前（NH3/PH3/BH3），
     仅 F/Cl/Br/I/O/S/Se/Te 的氢化物 H 在前（HF/HCl/H2O/H2S）。"""

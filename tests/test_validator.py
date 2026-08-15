@@ -28,6 +28,27 @@ def test_invalid_smiles_rejected(fake_rdkit):
     assert "无效 SMILES" in invalid[0].reason
 
 
+def test_h_prefix_smiles_normalized():
+    """[H3O+] 化学式习惯写法：规范化后通过校验（20260815）。
+
+    [H3O+] 的 H3 前缀在 SMILES 语法中非法（RDKit 解析失败），经
+    normalize_h_prefix_smiles 重写为 [OH3+] 后放行；[H+]/[2H]/
+    [OH3+] 等合法写法原样不受影响。需真实 RDKit（不用 fake_rdkit）。"""
+    pytest.importorskip("rdkit")
+    from utils.rdkit_utils import normalize_h_prefix_smiles
+    assert normalize_h_prefix_smiles("[H3O+]") == "[OH3+]"
+    assert normalize_h_prefix_smiles("[H2O]") == "[OH2]"
+    assert normalize_h_prefix_smiles("[H3N+]") == "[NH3+]"
+    assert normalize_h_prefix_smiles("[H+]") == "[H+]"     # 质子原样
+    assert normalize_h_prefix_smiles("[2H]") == "[2H]"     # 同位素原样
+    assert normalize_h_prefix_smiles("[OH3+]") == "[OH3+]"
+    assert normalize_h_prefix_smiles("[NH4+]") == "[NH4+]"
+    _, invalid = _validate("[STRUCT:[H3O+],label=H3O+]")
+    assert len(invalid) == 0
+    _, invalid = _validate("[STRUCT:[H3O+],label=OH3+]")
+    assert len(invalid) == 0
+
+
 def test_empty_smiles_rejected():
     _, invalid = _validate("[STRUCT:]")
     assert len(invalid) == 1
@@ -133,19 +154,23 @@ def test_composite_mecharrow_existing_bond_passes():
 
 
 class TestChemicalChecks:
-    """化学校验（T2-2 label 一致性 / T2-3 原子守恒）：需要真实 RDKit，
-    不使用 fake_rdkit（元素计数依赖真实 Mol）。"""
+    """化学校验（T2-3 原子守恒）：需要真实 RDKit，不使用 fake_rdkit
+    （元素计数依赖真实 Mol）。
+
+    注：T2-2 label 与 SMILES 化学式一致性校验已于 2026-08-14 按用户裁定
+    删除（误报多于收益，如 H3O+ 配 [OH2+] 属可容忍表述差异）。
+    """
 
     def test_label_formula_consistent_passes(self):
         pytest.importorskip("rdkit")
         _, invalid = _validate("[STRUCT:CCl,label=CH3Cl]")
         assert len(invalid) == 0
 
-    def test_label_formula_mismatch_rejected(self):
+    def test_label_formula_mismatch_allowed(self):
+        """label 与 SMILES 化学式不一致 → 放行（T2-2 已删除）。"""
         pytest.importorskip("rdkit")
         _, invalid = _validate("[STRUCT:CCl,label=CH4Cl]")
-        assert len(invalid) == 1
-        assert "化学校验" in invalid[0].reason
+        assert len(invalid) == 0
 
     def test_label_non_formula_skipped(self):
         pytest.importorskip("rdkit")
