@@ -805,7 +805,21 @@ def atom_charge_label(atom) -> str | None:
 
 
 _CHARGE_POS_DIST = 0.34    # 电荷到元素符号中心的距离（原 0.42，调至 0.34；不与孤对电子重叠）
+# 无标签碳（键线式：atom_label 返回 None，含带电碳）的电荷圈距离——
+# 使 45° 方向上水平/竖直分量 ≈ 0.10（原 0.34×cos45° ≈ 0.24），电荷圈
+# 更贴近原子，不与键线交点混淆。保持角度只改距离：任意角度下
+# 水平/竖直分量 |dist·cos/sin(ang)| 均 ≤ 0.10。
+_CHARGE_POS_DIST_NO_LABEL = 0.10 / math.cos(math.radians(45.0))
 _CHARGE_SCALE = 0.5        # 电荷圈缩放（为默认大小的一半）
+
+
+def _charge_dist(mol, idx: int, explicit_hs: int = 0) -> float:
+    """电荷圈径向距离：原子无可见标签（键线式碳，含带电碳）时贴近
+    （水平/竖直分量 0.10）；有标签（杂原子/结构简式碳）保持 0.34。
+    与绘制端同一 labeler（mol_default_labeler）判断，保证口径一致。"""
+    if mol_default_labeler(mol)(mol.GetAtomWithIdx(idx), explicit_hs) is None:
+        return _CHARGE_POS_DIST_NO_LABEL
+    return _CHARGE_POS_DIST
 
 
 def _charge_angle(mol, idx: int) -> float:
@@ -828,18 +842,20 @@ def charge_tikz(mol, idx: int, shift=(0.0, 0.0), explicit_hs: int = 0,
     r"""圆圈电荷节点；无电荷返回 None。
 
     occupancy 非空时启用候选位放置（R-8）：候选角 = [现有规则首选, 镜像,
-    上, 下, 右, 左] × 距离 0.34/0.44，逐个查占据表取第一个零冲突者
-    （不撞键/标签/其他电荷圈）；首选即现有规则输出，零冲突时图面不变。
+    上, 下, 右, 左] × 距离（有标签 0.34/0.44；无标签碳 0.141/0.241），
+    逐个查占据表取第一个零冲突者（不撞键/标签/其他电荷圈）；
+    首选即现有规则输出，零冲突时图面不变。
     选定角度写入 mol 属性（_charge_ang_{idx}），孤对电子避让读取同一角度。
     """
     text = atom_charge_label(mol.GetAtomWithIdx(idx))
     if text is None:
         return None
     cx, cy = _dot_center(mol, idx, explicit_hs)
+    d0 = _charge_dist(mol, idx, explicit_hs)
     if occupancy is not None:
         base = _charge_angle(mol, idx)
         cands = []
-        for dist in (_CHARGE_POS_DIST, _CHARGE_POS_DIST + 0.10):
+        for dist in (d0, d0 + 0.10):
             for ang in (base, (180.0 - base) % 360.0, 90.0, 270.0, 0.0, 180.0):
                 r = math.radians(ang)
                 cands.append(("circle",
@@ -852,8 +868,8 @@ def charge_tikz(mol, idx: int, shift=(0.0, 0.0), explicit_hs: int = 0,
         x, y = chosen[1] + shift[0], chosen[2] + shift[1]
     else:
         r = math.radians(_charge_angle(mol, idx))
-        x = cx + shift[0] + _CHARGE_POS_DIST * math.cos(r)
-        y = cy + shift[1] + _CHARGE_POS_DIST * math.sin(r)
+        x = cx + shift[0] + d0 * math.cos(r)
+        y = cy + shift[1] + d0 * math.sin(r)
     return (f"\\node[draw, circle, inner sep=0.6pt, font=\\scriptsize, "
             f"scale={_CHARGE_SCALE}] at ({x:.2f},{y:.2f}) {{{text}}};")
 
@@ -943,9 +959,10 @@ def mol_visual_bbox(mol, labeler=None,
         xs += [x - hw, x + hw]
         ys += [y - hh, y + hh]
         if atom.GetFormalCharge() != 0:
+            d0 = _charge_dist(mol, atom.GetIdx())
             r = math.radians(_charge_angle(mol, atom.GetIdx()))
-            xs.append(x + _CHARGE_POS_DIST * math.cos(r) + 0.1 * math.cos(r))
-            dy = _CHARGE_POS_DIST * math.sin(r) + 0.1
+            xs.append(x + d0 * math.cos(r) + 0.1 * math.cos(r))
+            dy = d0 * math.sin(r) + 0.1
             ys.append(y + dy)
             # 电荷圈总在上半部（45°/135°），只计入上界会把包围盒中心抬高、
             # 使带电分子整体下移（OH⁻/Cl⁻ 标签比中性分子低 ~0.05）；镜像
