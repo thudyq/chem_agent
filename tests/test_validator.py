@@ -49,6 +49,57 @@ def test_h_prefix_smiles_normalized():
     assert len(invalid) == 0
 
 
+def test_group_abbrev_smiles_allowed():
+    """通用基团缩写（R/X/Ph/Ac 等）作为 SMILES 原子放行（20260815）。
+
+    R/X/Ph/Ac 不是合法 SMILES 元素，经 expand_group_abbrevs 替换为
+    dummy 原子（[*:n]）后校验通过；化学式后缀（-OH/COOH 等）一并
+    规范化；真实元素（Cl/Br/CCO）与方括号原子（[OH-]）不受影响。
+    需真实 RDKit。"""
+    pytest.importorskip("rdkit")
+    from utils.rdkit_utils import expand_group_abbrevs
+    out, m = expand_group_abbrevs("R-Br")
+    assert out == "[*:1]-Br" and m == {1: "R"}
+    out, m = expand_group_abbrevs("Ph-OH")
+    assert out == "[*:1]-O" and m == {1: "Ph"}
+    out, m = expand_group_abbrevs("AcOH")
+    assert out == "[*:1]O" and m == {1: "Ac"}
+    out, m = expand_group_abbrevs("BuLi")
+    assert out == "[*:1][Li]" and m == {1: "Bu"}      # 金属加方括号
+    out, m = expand_group_abbrevs("RC(=O)OEt")
+    assert out == "[*:1]C(=O)O[*:2]" and m == {1: "R", 2: "Et"}  # 多占位
+    out, m = expand_group_abbrevs("RC(=O)O[Et]")
+    assert out == "[*:2]C(=O)O[*:1]" and m == {1: "Et", 2: "R"}  # 方括号无残留
+    out, m = expand_group_abbrevs("R1-Br")
+    assert out == "[*:1]-Br" and m == {1: "R1"}      # R/X 编号
+    out, m = expand_group_abbrevs("R'-Br")
+    assert out == "[*:1]-Br" and m == {1: "R'"}      # R 撇号
+    assert expand_group_abbrevs("[OH-]")[0] == "[OH-]"  # 方括号原子不误伤
+    assert expand_group_abbrevs("CCO")[1] == {}
+    assert expand_group_abbrevs("Cl")[1] == {}          # Cl 的 C 不误伤
+    for text in ("[STRUCT:R-Br]", "[STRUCT:Ph-OH]",
+                 "[STRUCT:AcOH]", "[STRUCT:MeOH]",
+                 "[STRUCT:EtBr,label=溴乙烷]", "[STRUCT:BuLi]",
+                 "[STRUCT:PhCOOH]", "[STRUCT:RC(=O)OEt]",
+                 "[STRUCT:RC(=O)O[Et]]", "[STRUCT:OEt]",
+                 "[STRUCT:R1-Br]", "[STRUCT:R2COOH]",
+                 "[STRUCT:R'-Br]", "[STRUCT:X2]"):
+        _, invalid = _validate(text)
+        assert len(invalid) == 0, f"{text} → {[r.reason for r in invalid]}"
+
+
+def test_reaction_with_group_abbrev_balances():
+    """REACTION 含 R 的物种：dummy 占位不计入元素守恒（未知组成），
+    骨架元素与净电荷照常比对（20260815）。"""
+    pytest.importorskip("rdkit")
+    _, invalid = _validate("[REACTION:R-Br;[OH-]|R-OH;[Br-]|]")
+    assert len(invalid) == 0
+    # 骨架不守恒仍拦截（Br 消失、O 凭空出现）
+    _, invalid = _validate("[REACTION:R-Br|[OH-]|R-O|]")
+    assert len(invalid) == 1
+    assert "不守恒" in invalid[0].reason
+
+
 def test_empty_smiles_rejected():
     _, invalid = _validate("[STRUCT:]")
     assert len(invalid) == 1

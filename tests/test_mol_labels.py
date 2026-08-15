@@ -42,6 +42,30 @@ def test_hydronium_label_h_prefix():
     assert atom_main_label(_atom(mol, "O")) == "OH"
 
 
+def test_group_abbrev_label():
+    """通用基团占位符（expand_group_abbrevs 的 dummy 原子）标签显示
+    缩写文本（普通节点）：R-Br → R + Br、Ph-OH → Ph + OH、AcOH → Ac + OH。"""
+    from renderers.mol_primitives import prepare_mol as _pm
+    mol = _pm("R-Br")
+    assert [atom_label(a) for a in mol.GetAtoms()] == ["R", "Br"]
+    assert [atom_main_label(a) for a in mol.GetAtoms()] == ["R", "Br"]
+    mol = _pm("Ph-OH")
+    assert [atom_label(a) for a in mol.GetAtoms()] == ["Ph", "OH"]
+    mol = _pm("AcOH")
+    assert [atom_label(a) for a in mol.GetAtoms()] == ["Ac", "OH"]
+
+
+def test_group_abbrev_numbered_and_prime():
+    """R/X 编号转下标（R1 → R$_1$）与 R 撇号（R'）标签（20260815）。"""
+    from renderers.mol_primitives import prepare_mol as _pm
+    mol = _pm("R1-Br")
+    assert [atom_label(a) for a in mol.GetAtoms()] == ["R$_1$", "Br"]
+    mol = _pm("X2")
+    assert [atom_label(a) for a in mol.GetAtoms()] == ["X$_2$"]
+    mol = _pm("R'-Br")
+    assert [atom_label(a) for a in mol.GetAtoms()] == ["R'", "Br"]
+
+
 def test_ammonia_label_is_nh3():
     """问题 2（NH3→H3N）：N/P/B 氢化物元素在前（NH3/PH3/BH3），
     仅 F/Cl/Br/I/O/S/Se/Te 的氢化物 H 在前（HF/HCl/H2O/H2S）。"""

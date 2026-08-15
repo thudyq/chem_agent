@@ -62,6 +62,13 @@
 - Me：甲基，Et：乙基，Ph：苯基，Ac：乙酰基，Ts：对甲苯磺酰基，Boc：叔丁氧羰基
 - ~：表示与分子其余部分相连的不重要结构
 
+**缩写可直接写进 `[STRUCT]` 的 SMILES**（渲染器支持，无需展开成具体基团）：
+- `[STRUCT:R-Br]`、`[STRUCT:Ph-OH]`、`[STRUCT:AcOH]`、`[STRUCT:EtBr]`
+- 支持全套常用缩写：R/Ar/X/M、Me/Et/Pr/Bu 及 n-Pr/i-Pr/n-Bu/i-Bu/s-Bu/t-Bu、
+  Ph/Bn、Ac/Bz/Ts/Tf/Ms、Boc/Cbz/TBDMS/TMS；渲染为普通文本节点（如 R、Ph）
+- 后缀写法也放行：`-OH`（羟基）、`COOH`（羧基）、`-CHO`（醛基）、`-NH2`（氨基）
+- 画通用反应/省略非反应部分时优先用缩写，聚焦反应位点
+
 **示例：**
 - 讨论羰基 α-氢的酸性时，可以画 `[CH3-CO-CH2-]⁻` 或简化成 `~CO-CH₂⁻`。
 

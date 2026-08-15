@@ -65,6 +65,10 @@ def atom_label(atom, explicit_hs: int = 0, flip: bool = False) -> str | None:
     （Instruction-for-Electrons §三；此前与圆圈并存导致双重显示）。
     """
     z = atom.GetAtomicNum()
+    # 通用基团占位符（R/X/Ph/Ac 等，expand_group_abbrevs 的 dummy 原子）：
+    # 直接显示缩写文本（普通文本节点），不走元素标签逻辑
+    if atom.HasProp("_abbr"):
+        return atom.GetProp("_abbr")
     if z == 6 and atom.IsInRing():
         # 键线式：环内碳一律不标（含带电荷的，如 σ 络合物的 [CH+]——
         # 正电荷用圆圈电荷显示，不标 CH，与 atom_main_label 一致）
@@ -788,6 +792,9 @@ def atom_main_label(atom, explicit_hs: int = 0, flip: bool = False) -> str | Non
     """
     if atom.GetAtomicNum() == 6 and atom.IsInRing():
         return None
+    # 通用基团占位符（R/X/Ph/Ac 等）：显示缩写文本
+    if atom.HasProp("_abbr"):
+        return atom.GetProp("_abbr")
     if atom.GetAtomicNum() == 6:
         sym = "C"
     else:
@@ -1155,13 +1162,16 @@ def prepare_mol(smiles: str, *, add_hs: bool = False, kekulize: bool = False,
         from rdkit.Chem import AllChem
         from rdkit.Chem.Draw import rdMolDraw2D
         from utils.rdkit_utils import mute_rdkit_warnings, \
-            normalize_h_prefix_smiles
+            normalize_h_prefix_smiles, expand_group_abbrevs
     except ImportError:
         return None
 
-    # H 数字前缀写法（[H3O+]）规范化为合法 SMILES（[OH3+]）再解析
-    # （20260815：化学式习惯误写，与 tag_validator._parse_mol 同口径）
+    # H 数字前缀写法（[H3O+]）规范化为合法 SMILES（[OH3+]）再解析；
+    # 通用基团缩写（R/X/Ph/Ac 等）替换为 dummy 原子（[*:n]），解析后
+    # 给 dummy 原子设 _abbr prop（标签端显示缩写文本）
+    # （20260815：与 tag_validator._parse_mol 同口径）
     smiles = normalize_h_prefix_smiles(smiles)
+    smiles, abbr_map = expand_group_abbrevs(smiles)
 
     # 解析阶段统一屏蔽 rdApp.error：探测性解析（含双轨制下 KMnO4/H2SO4 等
     # 公式物种试解析）失败是常态，RDKit 的 SMILES Parse Error 对用户与日志
@@ -1213,6 +1223,18 @@ def prepare_mol(smiles: str, *, add_hs: bool = False, kekulize: bool = False,
             mol.SetProp("_aromatic_lowercase", "1" if has_aromatic_lowercase(smiles) else "0")
         except Exception:
             pass
+        # 通用基团占位符（dummy 原子，expand_group_abbrevs 的 [*:n]）：
+        # 按 atom map 回写缩写文本，标签端（atom_label/atom_main_label）
+        # 读 _abbr prop 显示 R/X/Ph/Ac 等。PrepareMolForDrawing 会复制
+        # 分子，因此 prop 在最终分子上设置。数字转下标（R1 → R$_1$）。
+        if abbr_map:
+            for a in mol.GetAtoms():
+                mp_ = a.GetAtomMapNum()
+                if mp_ and mp_ in abbr_map:
+                    try:
+                        a.SetProp("_abbr", format_chem_text(abbr_map[mp_]))
+                    except Exception:
+                        pass
     return mol
 
 
