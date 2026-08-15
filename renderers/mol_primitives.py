@@ -733,10 +733,14 @@ def _dot_center(mol, idx: int, explicit_hs: int = 0) -> tuple[float, float]:
     （下标/上标小字降权）。含下标标签文字主体相对 node 中心上移
     （下标占下方空间）→ 环绕中心随之上移补偿，避免电荷/电子点重叠。
     explicit_hs 已显式画出的 H 会同步缩小后缀宽度。
+    flip 感知（_label_flip_for）：键端在标签右侧时绘制标签翻转
+    （OH→HO，元素符号从标签左端变右端），环绕中心必须按翻转后的
+    标签文本修正，否则电荷/孤对电子点错位约半个标签宽。
     """
     atom = mol.GetAtomWithIdx(idx)
     x, y = atom_pos(mol, idx)
-    lab = mol_default_labeler(mol)(atom, explicit_hs)
+    lab = mol_default_labeler(mol)(atom, explicit_hs,
+                                   flip=_label_flip_for(mol, idx))
     if lab:
         sym = atom.GetSymbol()
         sym = sym[0].upper() + sym[1:]

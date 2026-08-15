@@ -116,6 +116,25 @@ def test_scope_flips_label():
     assert any("{OH}" in ln for ln in lines), lines
 
 
+def test_dot_center_flip_aware():
+    """_dot_center 感知标签翻转：键端在右侧（标签 HO）时元素符号中心
+    右移（+0.13），而非按未翻转标签 OH 左移（-0.13）——电荷/孤对
+    电子点错位约半个标签宽的回归锚点。"""
+    from renderers.mol_primitives import _label_flip_for, symbol_center
+    mol = prepare_mol("OC")
+    conf = mol.GetConformer()
+    o = _atom(mol, "O")
+    c = _atom(mol, "C")
+    conf.SetAtomPosition(o.GetIdx(), (0, 0, 0))
+    conf.SetAtomPosition(c.GetIdx(), (2, 0, 0))   # 键端在右侧 → 翻转
+    assert _label_flip_for(mol, o.GetIdx())
+    assert symbol_center(mol, o.GetIdx())[0] > 0  # 右移（HO 的 O 在右侧）
+    # 反向（键端在左侧）→ 不翻转，中心左移（OH 的 O 在左侧）
+    conf.SetAtomPosition(c.GetIdx(), (-2, 0, 0))
+    assert not _label_flip_for(mol, o.GetIdx())
+    assert symbol_center(mol, o.GetIdx())[0] < 0
+
+
 def test_is_formula_label():
     """纯化学式 label 识别（含自由基 ·）：决定是否在分子下方重复显示。"""
     from renderers.mol_primitives import is_formula_label
