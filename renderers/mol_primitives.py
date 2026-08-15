@@ -49,7 +49,13 @@ def _covalent_bond_len(atom) -> float:
 def atom_label(atom, explicit_hs: int = 0, flip: bool = False) -> str | None:
     """生成非隐式碳原子的标签（如 OH、NH₂、Cl）。
 
-    纯碳原子（原子序 6、形式电荷 0）返回 None，表示不显示标签（键线式）。
+    纯碳原子（原子序 6）返回 None，表示不显示标签（键线式）：
+    - 环内碳一律不标（含带电荷的，如 σ 络合物的 [CH+]——正电荷用
+      圆圈电荷显示，不标 CH，与 atom_main_label 一致）；
+    - 有重原子邻居的链上碳不标（CHn 由骨架线隐含）；**带电碳同样不标**
+      （形式电荷由圆圈电荷 ⊕ 标注，键的根数已反映其连接情况）。
+    孤立碳（仅连 H，如 CH4 的 C）无键线式可言——必须显示 C/CH4
+    （带电孤立碳如 [CH3+] 仍标 CH₃，电荷由圆圈电荷显示）。
     explicit_hs：已显式画出的 H 数（[XH]/氢键给体），从标签 H 计数中
     扣除，保证"标签 H + 画出 H"总数正确（如 OH 画出 H 后标签为 O）。
     水分子特例：O 只连 H 时写 H₂O（H 在前）。
@@ -63,8 +69,9 @@ def atom_label(atom, explicit_hs: int = 0, flip: bool = False) -> str | None:
         # 键线式：环内碳一律不标（含带电荷的，如 σ 络合物的 [CH+]——
         # 正电荷用圆圈电荷显示，不标 CH，与 atom_main_label 一致）
         return None
-    if z == 6 and atom.GetFormalCharge() == 0 and not _only_h_neighbors(atom):
-        # 键线式：有重原子邻居的链上碳不标（CHn 由骨架线隐含）
+    if z == 6 and not _only_h_neighbors(atom):
+        # 键线式：有重原子邻居的链上碳不标（CHn 由骨架线隐含）；
+        # 带电碳同样不标——正电荷由圆圈电荷 ⊕ 标注
         return None
     # 孤立碳（仅连 H，如 CH4 的 C）无键线式可言——必须显示 C/CH4
     # （B1 20260812：自由基夺氢机理的单碳组分，否则图上是空位）
