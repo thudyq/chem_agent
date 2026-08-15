@@ -100,6 +100,7 @@
       [COMPOSITE:row][STRUCT:C1=CC=CC=C1,label=式 I][RESARROW][STRUCT:C1C=CC=CC=1,label=式 II][/COMPOSITE]
     含 [RESARROW] 时渲染器自动保留各极限式的显式键级（Kekulé 式不统一芳香化）。
     MECHARROW 要点：
+    - 原子序号 = SMILES 从左到右的原子顺序（0 起、H 不占号）：`O=S(=O)=O` 的 0 号是 O、1 号是 S；`[N+](=O)=O` 的 0 号是 N——写端点前从 SMILES 第一个字符数起，勿凭直觉以为 0 号是中心原子
     - 起点=电子供体（孤对电子/π键/σ键/单电子），终点=电子受体（缺电子原子/键位）
     - 断键用键中点 a-b（如 r0:0-1 表示 0-1 键），进攻用原子号（如 nu:0）
     - 自由基用 >>（鱼钩）；成键终点写 id:a+id:b（两原子间空白）
@@ -193,12 +194,12 @@ SN2 是协同过程：OH⁻ 从背面进攻 α-碳，同时 C-Cl 键断裂，电
 [/COMPOSITE]
 
 示例 5b（对照：SMILES 变了，原子索引必须重数）
-磺化与硝化机理模式完全相同，但 σ 络合物 SMILES 多了 S 原子，原子索引整体偏移——**禁止照抄硝化示例的序号**。磺化脱质子步（σ 络合物 → 苯磺酸 + H+）写法：
+磺化与硝化机理模式完全相同，但 σ 络合物 SMILES 多了 S 原子，原子索引整体偏移——**禁止照抄硝化示例的序号**。磺化脱质子步（σ 络合物 → 苯磺酸阴离子 + H+）写法：
 
 [COMPOSITE:reaction_mech]
 [STRUCT:O=S([O-])(=O)C1C=CC=C[CH+]1,label=σ 络合物,id=sigma]
 [RXNARROW]
-[STRUCT:O=S(=O)(O)C1C=CC=CC=1,label=苯磺酸][PLUS][STRUCT:[H+],label=H+]
+[STRUCT:O=S([O-])(=O)C1C=CC=CC=1,label=苯磺酸阴离子][PLUS][STRUCT:[H+],label=H+]
 [XH:sigma|4]
 [MECHARROW:sigma:4#1>sigma:4-9]
 [/COMPOSITE]
