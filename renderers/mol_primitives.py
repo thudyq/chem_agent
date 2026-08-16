@@ -1805,13 +1805,10 @@ def mech_arrow_origin(mol, spec: str, shift=(0.0, 0.0),
                 cands = angles
             best = min(cands, key=lambda a: _ang_diff(a, 90.0))
             r = math.radians(best)
-            # 起点沿槽位方向外移：孤对电子在"两点连线段中垂线上"（距连线
-            # _ARROW_POINT_GAP）；单电子需考虑半径（_LP_DOT_RADIUS 之外再留
-            # _ARROW_POINT_GAP），使其不与电子点重叠。
-            if is_single:
-                d = _LP_DIST + _LP_DOT_RADIUS + _ARROW_POINT_GAP
-            else:
-                d = _LP_DIST + _ARROW_POINT_GAP
+            # 起点 = 电子点中心（槽位方向 _LP_DIST）——gap 由 mech_arrow_tikz
+            # 沿弯向（bend_side 法线方向）追加，保证 gap 方向与弧线弯向一致
+            # （20260815：原在槽位方向外移 gap，方向与弯向可能不一致）。
+            d = _LP_DIST
             return (cx + d * math.cos(r), cy + d * math.sin(r), False, True, False)
     if labeler is not None and toward is not None:
         lab = labeler(atom)
@@ -1834,17 +1831,20 @@ def mech_arrow_between(fx: float, fy: float, tx: float, ty: float,
                        kind: str = "standard", from_bond: bool = False,
                        inset_start: float = 0.15, inset_end: float = 0.10,
                        bond_break: bool = False, aim_end: bool = False,
-                       text_box=None) -> list:
+                       text_box=None, bend_side: float | None = None,
+                       gap_along_bend: bool = False) -> list:
     """按教科书风格生成弯箭头：键中点出发的箭头向下弯（断键方向），
     孤对电子/原子出发的箭头向上弯（进攻方向）；弧线贴近分子，
     弯曲幅度随跨度自适应（上限 0.6）。
 
-    bond_break（σ 断键源）的起点 inset 改为纵坐标向下偏移 inset_start
-    （贴近键线下方），而非沿箭头方向内缩；aim_end（字母标签目标）让
-    终点沿末端切线退到标签正方形外 inset_end 处，尖端指向原子中心且不压标签。"""
-    if bond_break:
-        fy -= inset_start
-        inset_start = 0.0
+    bond_break（σ 断键源）/ gap_along_bend（电子点起点）的起点 gap 沿弯向
+    法线方向（mech_arrow_tikz 的 gap_along_bend，bend_side 决定侧——
+    "向上弯则向上 gap"，20260815 起取代原固定画布向下偏移 fy-=inset_start）；
+    aim_end（字母标签目标）让终点沿末端切线退到标签正方形外 inset_end 处，
+    尖端指向原子中心且不压标签。
+    bend_side: 显式弯向（±1，弦法线方向）——空间感知弯向由调用方计算
+    （draw_mech_arrows）；None 时按 bend 符号 + 法线 y 近似选择（旧逻辑）。
+    """
     dist = math.hypot(tx - fx, ty - fy)
     if aim_end:
         mag = min(0.30 * dist + 0.15, 1.15)
@@ -1853,7 +1853,9 @@ def mech_arrow_between(fx: float, fy: float, tx: float, ty: float,
     bend = -mag if from_bond else mag
     return mech_arrow_tikz(fx, fy, tx, ty, kind, bend=bend,
                            inset_start=inset_start, inset_end=inset_end,
-                           aim_end=aim_end, text_box=text_box)
+                           aim_end=aim_end, text_box=text_box,
+                           bend_side=bend_side,
+                           gap_along_bend=gap_along_bend)
 
 
 def _text_extent_out(cx: float, cy: float, hw: float, hh: float,
@@ -1870,7 +1872,9 @@ def _text_extent_out(cx: float, cy: float, hw: float, hh: float,
 def mech_arrow_tikz(fx: float, fy: float, tx: float, ty: float,
                     kind: str = "standard", bend: float = 0.5,
                     inset_start: float = 0.15, inset_end: float = 0.10,
-                    aim_end: bool = False, text_box=None) -> list:
+                    aim_end: bool = False, text_box=None,
+                    bend_side: float | None = None,
+                    gap_along_bend: bool = False) -> list:
     r"""生成一条电子推进弯箭头的 TikZ 线条列表。
 
     bend 为正向上弯、为负向下弯；起点内缩 inset_start、终点内缩 inset_end，
@@ -1888,23 +1892,34 @@ def mech_arrow_tikz(fx: float, fy: float, tx: float, ty: float,
             （中心=符号中心、hw=hh=_LABEL_SQUARE_HALF）；aim_end 时终点沿
             切线退到正方形边缘外 inset_end（_MECH_LABEL_GAP=0.05），
             控制点随后按"起点→末端"实际箭头段重算（短箭头不重叠）。
+        bend_side: 显式弯向（±1，弦法线方向；None=按 bend 符号 + 法线 y
+            近似选择，20260815 起空间感知弯向由调用方计算后传入）。
+        gap_along_bend: 起点 gap 沿弯向法线方向偏移（断键/电子点起点——
+            "向上弯则向上 gap"），而非沿弦方向。
     """
     dx, dy = tx - fx, ty - fy
     length = math.hypot(dx, dy) or 1.0
     ux, uy = dx / length, dy / length
-    sx, sy = fx + ux * inset_start, fy + uy * inset_start
+    px, py = -uy, ux
+    if gap_along_bend and bend_side is not None:
+        # 起点 gap 沿弯向法线方向（断键/孤对电子点起点）
+        sx, sy = fx + px * bend_side * inset_start, fy + py * bend_side * inset_start
+    else:
+        sx, sy = fx + ux * inset_start, fy + uy * inset_start
     ex, ey = tx, ty
     if not aim_end:
         ex, ey = tx - ux * inset_end, ty - uy * inset_end
-    px, py = -uy, ux
     mid_x, mid_y = (sx + ex) / 2.0, (sy + ey) / 2.0
     mag = abs(bend)
-    mx_a, my_a = mid_x + px * mag, mid_y + py * mag
-    mx_b, my_b = mid_x - px * mag, mid_y - py * mag
-    if (bend >= 0) == (my_a >= my_b):
-        mx, my = mx_a, my_a
+    if bend_side is not None:
+        mx, my = mid_x + px * bend_side * mag, mid_y + py * bend_side * mag
     else:
-        mx, my = mx_b, my_b
+        mx_a, my_a = mid_x + px * mag, mid_y + py * mag
+        mx_b, my_b = mid_x - px * mag, mid_y - py * mag
+        if (bend >= 0) == (my_a >= my_b):
+            mx, my = mx_a, my_a
+        else:
+            mx, my = mx_b, my_b
     if aim_end:
         ddx, ddy = tx - mx, ty - my
         dl = math.hypot(ddx, ddy) or 1.0
@@ -1928,10 +1943,15 @@ def mech_arrow_tikz(fx: float, fy: float, tx: float, ty: float,
         mag2 = min(0.30 * l2 + 0.15, 1.15)
         mx_a, my_a = mid2_x + p2x * mag2, mid2_y + p2y * mag2
         mx_b, my_b = mid2_x - p2x * mag2, mid2_y - p2y * mag2
-        if (bend >= 0) == (my_a >= my_b):
-            mx, my = mx_a, my_a
+        if bend_side is not None:
+            # 空间感知弯向：重算后仍保持 bend_side 侧（切线校验的翻转
+            # 仅作为最后手段，语义由空间感知决定）
+            mx, my = (mx_a, my_a) if bend_side >= 0 else (mx_b, my_b)
         else:
-            mx, my = mx_b, my_b
+            if (bend >= 0) == (my_a >= my_b):
+                mx, my = mx_a, my_a
+            else:
+                mx, my = mx_b, my_b
         # 切线校验：切线（控制点→末端）必须指向标签方向——标签视为
         # "中心=符号中心、边长 0.26 的正方形"，切线方向应穿过它。
         # 若切线方向与"末端→符号中心"方向夹角 > 90°（指向标签外），

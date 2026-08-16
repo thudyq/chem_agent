@@ -71,7 +71,7 @@ if __name__ == "__main__":
         format_partial_charge,
         hbond_dots_tikz, mech_arrow_between, mech_arrow_origin,
         mol_visual_bbox, mol_visual_bbox_xh, parse_charge_pairs, parse_hbond_pairs, atom_label,
-        atom_main_label, bond_segments_for, label_bond_margin,
+        atom_main_label, bond_segments, bond_segments_for, label_bond_margin,
         label_edge_point, prepare_mol, scale_mol_coords, symbol_center,
         atom_pos, place_donor_h, place_explicit_hs, place_h_avoiding,
         adjust_hbond_conformation,
@@ -91,7 +91,7 @@ else:
         format_partial_charge,
         hbond_dots_tikz, mech_arrow_between, mech_arrow_origin,
         mol_visual_bbox, mol_visual_bbox_xh, parse_charge_pairs, parse_hbond_pairs, atom_label,
-        atom_main_label, bond_segments_for, label_bond_margin,
+        atom_main_label, bond_segments, bond_segments_for, label_bond_margin,
         label_edge_point, prepare_mol, scale_mol_coords, symbol_center,
         atom_pos, place_donor_h, place_explicit_hs, place_h_avoiding,
         adjust_hbond_conformation,
@@ -207,6 +207,79 @@ def _bond_form_midpoint(mols: dict, id_a: str, pt_a: str,
     return (mx, my, False, False, False)
 
 
+def _seg_point_dist(seg, pt):
+    """点到线段的最短距离（空间感知弯向用）。"""
+    x1, y1, x2, y2 = seg
+    px, py = pt
+    vx, vy = x2 - x1, y2 - y1
+    wx, wy = px - x1, py - y1
+    c1 = vx * wx + vy * wy
+    if c1 <= 0:
+        return math.hypot(px - x1, py - y1)
+    c2 = vx * vx + vy * vy
+    if c2 <= c1:
+        return math.hypot(px - x2, py - y2)
+    b = c1 / c2
+    return math.hypot(px - (x1 + b * vx), py - (y1 + b * vy))
+
+
+def _arrow_near_segments(sm, dm):
+    """源/目标组件的键线段（全局坐标），供弯向空间感知。
+
+    bond_segments 返回局部坐标（分子 2D），平移 shift 到画布坐标。
+    """
+    segs = []
+    for info in (sm, dm):
+        mol, sh = info["mol"], info["shift"]
+        for s in bond_segments(mol, labeler=_mech_labeler(info),
+                               margin_fn=label_bond_margin):
+            segs.extend((a + sh[0], b + sh[1], c + sh[0], d + sh[1])
+                        for a, b, c, d in s)
+    return segs
+
+
+def _arc_mid(fx, fy, tx, ty, mag, side):
+    """贝塞尔 t=0.5 弧线中点：弦中点 + 0.5×mag×法线×side（弯向侧）。"""
+    dx, dy = tx - fx, ty - fy
+    L = math.hypot(dx, dy) or 1.0
+    px, py = -dy / L, dx / L
+    return ((fx + tx) / 2.0 + side * 0.5 * mag * px,
+            (fy + ty) / 2.0 + side * 0.5 * mag * py)
+
+
+def _pick_bend_side(p0, p1, from_bond, aim_end, sm, dm):
+    """空间感知弯向（20260815）：评估两个候选弯向（弦法线 ±）的弧线中点
+    距源/目标组件键线的最短距离，选空旷侧。
+
+    默认侧复现原 bend 语义（from_bond 断键→法线反侧、进攻→法线正侧，
+    法线 y 分量近似"上下"；弦竖直退化时按 bend 符号固定）；默认侧贴近
+    键线（< 0.20）而反侧明显更空旷（> 默认+0.05）时翻转弯向。
+    返回 ±1（弦法线方向 side）。
+    """
+    fx, fy = p0[0], p0[1]
+    tx, ty = p1[0], p1[1]
+    dx, dy = tx - fx, ty - fy
+    dist = math.hypot(dx, dy) or 1.0
+    py = dx / dist                         # 法线 y 分量（px, py = -uy, ux）
+    bend_sign = -1.0 if from_bond else 1.0
+    if abs(py) < 1e-9:
+        side = 1.0 if bend_sign >= 0 else -1.0
+    else:
+        side = (1.0 if py > 0 else -1.0) * bend_sign
+    segs = _arrow_near_segments(sm, dm)
+    if not segs:
+        return side
+    mag = (min(0.30 * dist + 0.15, 1.15) if aim_end
+           else min(0.22 * dist + 0.15, 0.6))
+    m1 = _arc_mid(fx, fy, tx, ty, mag, side)
+    m2 = _arc_mid(fx, fy, tx, ty, mag, -side)
+    d1 = min(_seg_point_dist(s, m1) for s in segs)
+    d2 = min(_seg_point_dist(s, m2) for s in segs)
+    if d1 < 0.20 and d2 > d1 + 0.05:
+        return -side
+    return side
+
+
 def draw_mech_arrows(mols: dict, arrows: list,
                      plus_positions: list | None = None) -> list:
     """绘制机理弯箭头（p0/p1 定位、端点吸附避让），返回 TikZ 行列表。
@@ -263,8 +336,12 @@ def draw_mech_arrows(mols: dict, arrows: list,
         # 断键起点：σ 键中点（a-b）或显式 H（a#k，X—H 键端点）——都从键出发
         bond_break = (("-" in src_pt and bond_order_of(sm["mol"], src_pt) == 1)
                       or "#" in src_pt)
-        inset_start = (_ARROW_POINT_GAP if bond_break
-                       else (0.0 if (p0[2] or p0[3] or p0[4]) else 0.15))
+        # 起点 gap：断键/电子点起点沿弯向法线方向（gap_along_bend——
+        # "向上弯则向上 gap"），普通原子起点沿弦方向内缩 0.15；
+        # 吸附标签/靠外杠起点（from_bond 非断键）无 gap
+        gap_along_bend = bond_break or p0[3]
+        inset_start = (_ARROW_POINT_GAP if gap_along_bend
+                       else (0.0 if (p0[2] or p0[4]) else 0.15))
         # aim_end（末端沿切线退让到标签正方形外 0.05）：纯原子终点（元素标签）
         # 与 a#k 终点（H 节点标签）都启用——H 节点在渲染中同为 \node{H}
         # （fill=white, inner sep=1pt），占位约边长 0.26（_LABEL_SQUARE_HALF=0.13），
@@ -293,11 +370,17 @@ def draw_mech_arrows(mols: dict, arrows: list,
                 aim_end = True
         inset_end = (_MECH_LABEL_GAP if aim_end
                      else (0.0 if p1[4] else 0.10))
+        # 弯向空间感知（在 aim_end 确定后）：默认侧（from_bond 断键向下/
+        # 进攻向上——含双键起点，与 mech_arrow_between 的 bend 符号一致）
+        # 贴近键线而反侧空旷时翻转，起点 gap 随弯向对齐
+        bend_side = _pick_bend_side(p0, p1, p0[2], aim_end, sm, dm)
         lines.extend(
             mech_arrow_between(p0[0], p0[1], p1[0], p1[1], kind,
                                from_bond=p0[2], inset_start=inset_start,
                                inset_end=inset_end, bond_break=bond_break,
-                               aim_end=aim_end, text_box=tb)
+                               aim_end=aim_end, text_box=tb,
+                               bend_side=bend_side,
+                               gap_along_bend=gap_along_bend)
         )
     return lines
 
