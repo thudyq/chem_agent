@@ -8,7 +8,8 @@ RDKit 2D 坐标自绘分子骨架，在指定原子旁标注 δ+/δ-（红色）
 
 from .mol_primitives import (
     atom_label, atom_pos, charge_tikz, format_partial_charge,
-    parse_charge_pairs, partial_charge_pos, prepare_mol, bond_segments,
+    label_bond_margin, parse_charge_pairs, partial_charge_pos, prepare_mol,
+    bond_segments,
 )
 
 
@@ -27,8 +28,10 @@ def render_charge(smiles: str, charges_str: str = "") -> str:
 
     lines = ["\\begin{tikzpicture}"]
 
-    # 骨架键
-    for segs in bond_segments(mol, label_margin=0.25, bond_gap=0.08):
+    # 骨架键：与标签绘制端同一 labeler（atom_label）+ label_bond_margin
+    # 分档留白——原固定 0.25 对双字符标签（OH/NH₂，需 0.30）留白不足
+    for segs in bond_segments(mol, labeler=atom_label,
+                              margin_fn=label_bond_margin, bond_gap=0.08):
         for x1, y1, x2, y2 in segs:
             lines.append(f"  \\draw ({x1:.2f},{y1:.2f}) -- ({x2:.2f},{y2:.2f});")
 

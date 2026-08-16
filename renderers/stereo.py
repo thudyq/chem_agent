@@ -9,7 +9,7 @@ RDKit 解析含 @/@@ 的 SMILES → PrepareMolForDrawing（含坐标+楔形方�
 import math
 
 from .mol_primitives import atom_label, atom_pos, charge_tikz, \
-    mol_visual_bbox, prepare_mol, wrap_format_text
+    label_bond_margin, mol_visual_bbox, prepare_mol, wrap_format_text
 
 
 def render_stereo(smiles: str, label: str = None) -> str:
@@ -40,8 +40,12 @@ def render_stereo(smiles: str, label: str = None) -> str:
         L = math.hypot(dx, dy) or 1.0
         ux, uy = dx / L, dy / L
         px, py = -uy, ux
-        si = 0.25 if atom_label(mol.GetAtomWithIdx(i)) else 0.0
-        sj = 0.25 if atom_label(mol.GetAtomWithIdx(j)) else 0.0
+        # 标签留白按 label_bond_margin 分档（OH/NH₂=0.30、CH₃=0.45…）——
+        # 原固定 0.25 对双字符标签（半宽≈0.26）留白不足、端点落入标签字符区
+        lab_i = atom_label(mol.GetAtomWithIdx(i))
+        lab_j = atom_label(mol.GetAtomWithIdx(j))
+        si = label_bond_margin(lab_i) if lab_i else 0.0
+        sj = label_bond_margin(lab_j) if lab_j else 0.0
         x1, y1 = xi + ux * si, yi + uy * si
         x2, y2 = xj - ux * sj, yj - uy * sj
         bdir = b.GetBondDir()
