@@ -440,14 +440,23 @@ def _collect_components(children):
 
 
 def _molecule_with_annotations_lines(info: dict, *, show_numbers: bool,
-                                     show_lone_pairs: bool) -> list:
+                                     show_lone_pairs: bool,
+                                     hbond_toward: dict = None,
+                                     hbond_away: dict = None) -> list:
     """单个分子组件的完整绘制行：系数 + scope 骨架/标签/电子点 + 组件级注解
     （CHARGE 部分电荷 / HBOND 氢键 / XH 显式氢 / BOND 键突出），全部随
     info["shift"] 移动。主行布局与 energy 布局共用（B3：energy 驻点结构
     不再静默丢弃注解）。
+
+    hbond_toward/hbond_away：HBOND 方向回灌——{原子序号: 目标方向点（本组件
+    局部坐标）}。XH 绘制显式 H 时，给体原子（被 HBOND 引用为 a#k）的首个 H
+    沿 hbond_toward（朝向受体，X—H···Y 尽量直线）；受体原子（被 HBOND 引用
+    为 idB:b）的 H 沿 hbond_away（远离给体，避免遮挡氢键虚线）。
     """
     mol = info["mol"]
     hs = info["explicit_hs"]
+    hbond_toward = hbond_toward or {}
+    hbond_away = hbond_away or {}
     lines = []
     # 标签风格统一规则（heavy_atom_count）：≤2 重原子小分子结构简式，
     # 其余键线式（带 XH/BOND/HBOND 标注的分子自然落在键线式——标注
@@ -490,7 +499,19 @@ def _molecule_with_annotations_lines(info: dict, *, show_numbers: bool,
         h_len = None
         if not mol_has_bond:
             h_len = _covalent_bond_len(mol.GetAtomWithIdx(a)) * _MOL_SCALE
-        for hx, hy in place_explicit_hs(mol, a, count, h_len=h_len):
+        # HBOND 方向回灌：给体 H 朝向受体、受体 H 远离给体（place_explicit_hs
+        # 的 toward 只影响首个 H——给体常画 1 个 H，正好是 a#1 被引用者）
+        toward = None
+        if a in hbond_toward:
+            toward = hbond_toward[a]
+        elif a in hbond_away:
+            toward = hbond_away[a]
+        if toward is not None:
+            pos_list = place_explicit_hs(mol, a, count, toward=toward,
+                                         h_len=h_len)
+        else:
+            pos_list = place_explicit_hs(mol, a, count, h_len=h_len)
+        for hx, hy in pos_list:
             # R-8 避障：规则位置撞键/标签/电荷圈/电子点时绕原子旋转取候选
             hx, hy = place_h_avoiding(mol, a, (hx, hy), occ)
             sx, sy = label_edge_point(mol, a, (hx, hy), labeler=labeler)
@@ -760,6 +781,32 @@ def render_composite(layout: str, children: list) -> str:
                 arr[2] = global_cond
                 break
 
+    # HBOND 方向回灌：给体 H 朝向受体（X—H···Y 尽量直线）、受体 H 远离给体
+    # （避免遮挡虚线）。布局 shift 已定，转各组件局部坐标供 XH 绘制使用。
+    hbond_toward = {}   # {idA: {原子a: 受体在 idA 局部坐标}}
+    hbond_away = {}     # {idB: {原子b: 远离给体方向点（idB 局部坐标）}}
+    for ida, a, _k, idb, b in _parse_hbond_specs(annotations):
+        info_a, info_b = mols.get(ida), mols.get(idb)
+        if info_a is None or info_b is None:
+            continue
+        mol_a, mol_b = info_a["mol"], info_b["mol"]
+        if not (0 <= a < mol_a.GetNumAtoms()
+                and 0 <= b < mol_b.GetNumAtoms()):
+            continue
+        ga = symbol_center(mol_a, a, 0)
+        gb = symbol_center(mol_b, b, 0)
+        # 受体全局坐标 → idA 局部（给体 H 朝向方向）
+        tx = gb[0] + info_b["shift"][0] - info_a["shift"][0]
+        ty = gb[1] + info_b["shift"][1] - info_a["shift"][1]
+        hbond_toward.setdefault(ida, {})[a] = (tx, ty)
+        if ida != idb:
+            # 受体 H 远离给体：受体 → 延长线方向（idB 局部）
+            gax = ga[0] + info_a["shift"][0]
+            gay = ga[1] + info_a["shift"][1]
+            dx = gb[0] + info_b["shift"][0] - gax
+            dy = gb[1] + info_b["shift"][1] - gay
+            hbond_away.setdefault(idb, {})[b] = (gb[0] + dx, gb[1] + dy)
+
     lines = [r"\begin{tikzpicture}"]
 
     # 键线式默认不标孤对电子（规范第 3 条）；仅机理场景（弯箭头起点）、
@@ -773,7 +820,9 @@ def render_composite(layout: str, children: list) -> str:
     for comp in structs:
         lines.extend(_molecule_with_annotations_lines(
             mols[comp["id"]], show_numbers=show_numbers,
-            show_lone_pairs=show_lone_pairs))
+            show_lone_pairs=show_lone_pairs,
+            hbond_toward=hbond_toward.get(comp["id"], {}),
+            hbond_away=hbond_away.get(comp["id"], {})))
 
     # 氢键点状虚线（分子内/分子间统一）：H 位置取自 [XH] 画的显式 H
     # （xh_points，MECHARROW a#k 同机制），受体为组件 idB 的原子 b——

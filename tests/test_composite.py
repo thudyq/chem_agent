@@ -1033,3 +1033,29 @@ def test_hbond_intra_unified():
     assert out.startswith("\\begin{tikzpicture}")
     assert out.count("\\fill[teal]") >= 3
     assert out.count("{H}") == 1              # 仅给体 H（受体不画 H）
+
+
+def test_hbond_donor_h_toward_acceptor():
+    """方向回灌：给体 H 朝向受体（X—H···Y 直线），虚线从 H 指向受体不穿分子。"""
+    from core.tag_validator import validate_tags
+    text = ("[COMPOSITE:row][STRUCT:O,id=a,label=水A][STRUCT:O,id=b,label=水B]"
+            "[XH:a|0][HBOND:a:0#1>b:0][/COMPOSITE]")
+    tags = parse_tags(text)
+    _, invalid = validate_tags(tags)
+    assert not invalid
+    out = render_composite(*tags[0].args)
+    scopes = re.findall(
+        r"\\begin\{scope\}\[shift=\{\(([-\d.]+),([-\d.]+)\)\}\]", out)
+    assert len(scopes) == 2
+    ax, bx = float(scopes[0][0]), float(scopes[1][0])
+    assert bx > ax                       # 水 A 左、水 B 右
+    h_nodes = [(float(x), float(y)) for x, y in re.findall(
+        r"\\node\[fill=white, inner sep=1pt\] at \(([-\d.]+),([-\d.]+)\) \{H\}", out)]
+    assert len(h_nodes) == 1
+    hx = h_nodes[0][0]
+    assert ax < hx < bx                  # 给体 H 在 A 右侧、朝向受体 B
+    dots = [(float(x), float(y)) for x, y in re.findall(
+        r"\\fill\[teal\] \(([-\d.]+),([-\d.]+)\)", out)]
+    assert len(dots) >= 3
+    assert min(d[0] for d in dots) >= hx - 0.01   # 点不从 H 左侧出发（不穿给体）
+    assert max(d[0] for d in dots) <= bx + 0.35   # 点到达受体 O
