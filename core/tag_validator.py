@@ -838,12 +838,17 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
                         return False, f"HBOND 引用未知组件「{idb}」"
                     found += 1
                     if _RDKIT_OK:
-                        # 给体 H 端点 a#k：必须先写 XH:idA|a（a#k 与 XH 成对）
-                        reason = _validate_mech_arrow_pt(
-                            f"{a}#{k}", atom_counts.get(ref, 0),
-                            xh_count.get(ref), comp_mols.get(ref))
-                        if reason:
-                            return False, f"HBOND 给体端点「{ref}:{a}#{k}」{reason}"
+                        # 给体 H 端点 a#k：常规必须先写 XH:idA|a（a#k 与 XH 成对）；
+                        # 例外——给体组件为孤立原子（重原子=1，水/氨等无骨架）时
+                        # 由渲染端假骨架补 H，免 XH 配对。
+                        donor_mol = comp_mols.get(ref)
+                        if not (donor_mol is not None
+                                and donor_mol.GetNumAtoms() == 1):
+                            reason = _validate_mech_arrow_pt(
+                                f"{a}#{k}", atom_counts.get(ref, 0),
+                                xh_count.get(ref), comp_mols.get(ref))
+                            if reason:
+                                return False, f"HBOND 给体端点「{ref}:{a}#{k}」{reason}"
                         # 受体原子范围
                         nb = atom_counts.get(idb, 0)
                         if not 0 <= b < nb:

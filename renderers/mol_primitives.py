@@ -1278,6 +1278,30 @@ def scale_mol_coords(mol, factor: float) -> None:
         conf.SetAtomPosition(i, (p.x * factor, p.y * factor, p.z))
 
 
+def rotate_mol_coords(mol, angle_deg: float,
+                      center: tuple[float, float] | None = None) -> None:
+    """绕 center（默认几何中心）旋转全部原子 2D 坐标（原地修改）。
+
+    用于氢键受体对齐等"分子级刚体变换"：旋转后 bbox/标签随原子移动，
+    布局引擎自动按新 bbox 重排。原子顺序不变（SMILES 顺序索引保持）。
+    """
+    if not angle_deg or angle_deg % 360.0 == 0.0:
+        return
+    conf = mol.GetConformer()
+    if center is None:
+        xs = [conf.GetAtomPosition(i).x for i in range(mol.GetNumAtoms())]
+        ys = [conf.GetAtomPosition(i).y for i in range(mol.GetNumAtoms())]
+        center = (sum(xs) / len(xs), sum(ys) / len(ys)) if xs else (0.0, 0.0)
+    r = math.radians(angle_deg)
+    cosr, sinr = math.cos(r), math.sin(r)
+    cx, cy = center
+    for i in range(mol.GetNumAtoms()):
+        p = conf.GetAtomPosition(i)
+        dx, dy = p.x - cx, p.y - cy
+        conf.SetAtomPosition(
+            i, (cx + dx * cosr - dy * sinr, cy + dx * sinr + dy * cosr, p.z))
+
+
 def bond_type_order(bond) -> int:
     """把 BondTypeAsDouble 规整为 1/2/3（单/双/三键）。"""
     order = bond.GetBondTypeAsDouble()

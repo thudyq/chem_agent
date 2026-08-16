@@ -95,7 +95,10 @@
                                                 统一）：先 [XH:组件|原子序号] 画
                                                 出给体 H，再引用 原子#k；分子内
                                                 供体/受体组件写同一 id（如
-                                                HBOND:diol:0#1>diol:3）
+                                                HBOND:diol:0#1>diol:3）。给体/
+                                                 受体为孤立原子（水、氨等无骨架
+                                                 小分子）时无需 XH——渲染器自动
+                                                 补完整结构式（O V 形 / N 三角锥）
     共振式（如苯的两个 Kekulé 式）用 row 布局 + 显式 [RESARROW] 连接：
       [COMPOSITE:row][STRUCT:C1=CC=CC=C1,label=式 I][RESARROW][STRUCT:C1C=CC=CC=1,label=式 II][/COMPOSITE]
     含 [RESARROW] 时渲染器自动保留各极限式的显式键级（Kekulé 式不统一芳香化）。

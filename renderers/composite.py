@@ -72,9 +72,10 @@ if __name__ == "__main__":
         hbond_dots_tikz, mech_arrow_between, mech_arrow_origin,
         mol_visual_bbox, mol_visual_bbox_xh, parse_charge_pairs, parse_hbond_pairs, atom_label,
         atom_main_label, bond_segments, bond_segments_for, label_bond_margin,
-        label_edge_point, prepare_mol, scale_mol_coords, symbol_center,
+        label_edge_point, prepare_mol, rotate_mol_coords, scale_mol_coords,
+        symbol_center,
         atom_pos, place_donor_h, place_explicit_hs, place_h_avoiding,
-        adjust_hbond_conformation,
+        adjust_hbond_conformation, lone_pair_angles, _ang_diff,
         _covalent_bond_len,
         partial_charge_pos, split_arrow_condition, split_species_coeff, wrap_format_text,
         is_formula_label, heavy_atom_count,
@@ -92,9 +93,10 @@ else:
         hbond_dots_tikz, mech_arrow_between, mech_arrow_origin,
         mol_visual_bbox, mol_visual_bbox_xh, parse_charge_pairs, parse_hbond_pairs, atom_label,
         atom_main_label, bond_segments, bond_segments_for, label_bond_margin,
-        label_edge_point, prepare_mol, scale_mol_coords, symbol_center,
+        label_edge_point, prepare_mol, rotate_mol_coords, scale_mol_coords,
+        symbol_center,
         atom_pos, place_donor_h, place_explicit_hs, place_h_avoiding,
-        adjust_hbond_conformation,
+        adjust_hbond_conformation, lone_pair_angles, _ang_diff,
         _covalent_bond_len,
         partial_charge_pos, split_arrow_condition, split_species_coeff, wrap_format_text,
         is_formula_label, heavy_atom_count,
@@ -439,6 +441,84 @@ def _collect_components(children):
     return structs, sequence, mech_specs, global_cond, annotations
 
 
+def _pseudo_hbond_lines(info: dict, hbond_toward: dict,
+                        hbond_away: dict) -> list:
+    """孤立原子（被 HBOND 引用）的假骨架：水/氨画完整结构式。
+
+    O：中心 + V 形 2 个 H（键角 104.5°）；N：三角锥 3 个 H（120° 平面）。
+    给体（donor）：第 1 个 H 精确朝受体方向（hbond_toward，X—H···Y 直线）；
+    受体（acceptor）：H 在远离给体方向（hbond_away）两侧对称张开。
+    返回 TikZ 行（全局坐标，含 shift）；H 位置存入 info["hbond_h_pos"]
+    （局部坐标，供 HBOND 点状虚线起点）。
+    """
+    mol = info["mol"]
+    atom = mol.GetAtomWithIdx(0)
+    z = atom.GetAtomicNum()
+    pseudo = info.get("hbond_pseudo", {})
+    role = pseudo.get(0, "donor")
+    if role == "donor" and 0 in hbond_toward:
+        tx, ty = hbond_toward[0]
+        target = math.degrees(math.atan2(ty, tx)) % 360.0
+    elif role == "acceptor" and 0 in hbond_away:
+        ax, ay = hbond_away[0]
+        target = math.degrees(math.atan2(ay, ax)) % 360.0
+    else:
+        target = 180.0  # 兜底：指向左（row 布局给体在左）
+    if z == 8:      # O：2 个 H，V 形（教科书常用 120°）
+        n_h, bond_ang = 2, 120.0
+    elif z == 7:    # N：3 个 H，平面 120°
+        n_h, bond_ang = 3, 120.0
+    else:
+        n_h, bond_ang = 1, 0.0
+    h_len = _covalent_bond_len(atom) * _MOL_SCALE
+    if role == "donor":
+        # 第 1 个 H 精确朝受体，其余按键角依次绕开
+        angles = [(target - k * bond_ang) % 360.0 for k in range(n_h)]
+    else:
+        # 受体：H 在远离给体方向两侧对称（V 形张开）；N（3H）补第 3 个 H
+        # 在角平分线上（沿远离给体方向正中，row 布局下即水平向右）
+        half = bond_ang / 2.0
+        angles = [(target + half) % 360.0,
+                  (target - half) % 360.0]
+        if n_h >= 3:
+            angles.append(target % 360.0)
+        angles = angles[:n_h]
+    cx, cy = atom_pos(mol, 0)
+    sx, sy = cx + info["shift"][0], cy + info["shift"][1]
+    lines = [
+        f"  \\node[fill=white, inner sep=1pt] at ({sx:.2f},{sy:.2f}) "
+        f"{{{atom.GetSymbol()}}};"
+    ]
+    # 键与标签的 gap：复用键线式统一留白（label_bond_margin，
+    # 单字符标签 0.30；与 label_edge_point 同口径）
+    sym_lab = atom.GetSymbol()
+    gap_o = label_bond_margin(sym_lab)
+    gap_h = label_bond_margin("H")
+    h_pos = []
+    for ang in angles:
+        hx = cx + h_len * math.cos(math.radians(ang))
+        hy = cy + h_len * math.sin(math.radians(ang))
+        h_pos.append((hx, hy))
+        gx, gy = hx + info["shift"][0], hy + info["shift"][1]
+        # O 侧：从 O 中心沿 H 方向内缩 gap_o；H 侧：从 H 中心沿 O 方向内缩 gap_h
+        d = math.hypot(hx - cx, hy - cy) or 1.0
+        ux, uy = (hx - cx) / d, (hy - cy) / d
+        ox = sx + ux * gap_o
+        oy = sy + uy * gap_o
+        hx2 = gx - ux * gap_h
+        hy2 = gy - uy * gap_h
+        lines.append(f"  \\draw ({ox:.2f},{oy:.2f}) -- ({hx2:.2f},{hy2:.2f});")
+        lines.append(
+            f"  \\node[fill=white, inner sep=1pt] at ({gx:.2f},{gy:.2f}) {{H}};")
+    info["hbond_h_pos"] = {0: h_pos}
+    label = info.get("label")
+    if label and not is_formula_label(label):
+        lines.append(
+            f"  \\node[below] at ({sx:.2f},{cy + info['shift'][1] - 0.5:.2f}) "
+            f"{{{wrap_format_text(label)}}};")
+    return lines
+
+
 def _molecule_with_annotations_lines(info: dict, *, show_numbers: bool,
                                      show_lone_pairs: bool,
                                      hbond_toward: dict = None,
@@ -458,6 +538,9 @@ def _molecule_with_annotations_lines(info: dict, *, show_numbers: bool,
     hbond_toward = hbond_toward or {}
     hbond_away = hbond_away or {}
     lines = []
+    if info.get("hbond_pseudo"):
+        # 孤立原子假骨架（水/氨完整结构式）：不走骨架/标签/XH 通用逻辑
+        return _pseudo_hbond_lines(info, hbond_toward, hbond_away)
     # 标签风格统一规则（heavy_atom_count）：≤2 重原子小分子结构简式，
     # 其余键线式（带 XH/BOND/HBOND 标注的分子自然落在键线式——标注
     # 聚焦反应位点，碳不标 CHn）
@@ -725,6 +808,47 @@ def render_composite(layout: str, children: list) -> str:
         if a < mol.GetNumAtoms() and b < mol.GetNumAtoms():
             adjust_hbond_conformation(mol, a, b)
 
+    # 孤立原子 + HBOND 引用 → 假骨架模式：水/氨等无骨架小分子画完整结构式
+    # （O 画 V 形 2H、N 画三角锥 3H），方向由氢键几何决定（给体 H 朝受体、
+    # 受体 H 远离给体）。与 XH 的 a#k 机制互斥（假骨架自带 H，不走 XH）。
+    hbond_specs = _parse_hbond_specs(annotations)
+    for ida, a, _k, idb, b in hbond_specs:
+        info_a, info_b = mols.get(ida), mols.get(idb)
+        if info_a is None or info_b is None:
+            continue
+        if info_a["mol"].GetNumAtoms() == 1:
+            info_a.setdefault("hbond_pseudo", {})[a] = "donor"
+        if info_b["mol"].GetNumAtoms() == 1:
+            info_b.setdefault("hbond_pseudo", {})[b] = "acceptor"
+
+    # 受体对齐旋转（分子间单氢键，受体有骨架）：旋转受体分子使受体原子 b
+    # 的孤对电子方向指向给体（row 布局中给体在受体左侧 → 目标为水平向左）。
+    # 简化：仅单行 row 布局（给体/受体水平相邻）下生效；双氢键/多行不旋转
+    # （保守，避免错误旋转）。孤立原子受体（假骨架）不旋转（方向由假骨架处理）。
+    if layout_name == "row" and len(set(el[0] for el in sequence)) == 1:
+        for ida, a, _k, idb, b in hbond_specs:
+            if ida == idb:
+                continue
+            info_a, info_b = mols.get(ida), mols.get(idb)
+            if info_a is None or info_b is None:
+                continue
+            if info_b.get("hbond_pseudo"):
+                continue
+            mol_b = info_b["mol"]
+            if not 0 <= b < mol_b.GetNumAtoms():
+                continue
+            lps = lone_pair_angles(mol_b, b)
+            if not lps:
+                continue
+            # 目标：孤对电子方向 → 水平向左（180°，指向左侧给体）；
+            # 选与 180° 最接近的孤对电子方向旋转对齐
+            lp_ang = min(lps, key=lambda L: _ang_diff(L, 180.0))
+            rotate = (180.0 - lp_ang) % 360.0
+            if rotate > 180.0:
+                rotate -= 360.0
+            rotate_mol_coords(mol_b, rotate,
+                              center=symbol_center(mol_b, b, 0))
+
     if layout_name == "energy":
         energy_child = next((c for c in children if c.type == "ENERGY"), None)
         if energy_child is None or not energy_child.args:
@@ -751,6 +875,13 @@ def render_composite(layout: str, children: list) -> str:
             cnt = {}
             for a in info["xh"]:
                 cnt[a] = cnt.get(a, 0) + 1
+            xh_by_mol[id(info["mol"])] = cnt
+        # 假骨架组件（孤立原子 + HBOND）：H 数按 O=2/N=3 计入 bbox
+        if info.get("hbond_pseudo"):
+            cnt = {}
+            for a in info["hbond_pseudo"]:
+                z = info["mol"].GetAtomWithIdx(a).GetAtomicNum()
+                cnt[a] = 2 if z == 8 else 3
             xh_by_mol[id(info["mol"])] = cnt
 
     def _bbox_with_xh(mol):
@@ -831,7 +962,9 @@ def render_composite(layout: str, children: list) -> str:
         info_a, info_b = mols.get(ida), mols.get(idb)
         if info_a is None or info_b is None:
             continue
-        pts = (info_a.get("xh_points") or {}).get(a) or []
+        # 假骨架组件（孤立原子）：H 位置取自假骨架（hbond_h_pos）；否则 XH
+        pts = ((info_a.get("hbond_h_pos") if info_a.get("hbond_pseudo")
+                else info_a.get("xh_points")) or {}).get(a) or []
         if not (0 <= k - 1 < len(pts)):
             continue  # 对应 XH 未画出（校验已拦截，渲染端兜底跳过）
         mol_b, sh_b = info_b["mol"], info_b["shift"]
@@ -841,8 +974,16 @@ def render_composite(layout: str, children: list) -> str:
         hx = hx0 + info_a["shift"][0]
         hy = hy0 + info_a["shift"][1]
         tx0, ty0 = symbol_center(mol_b, b, 0)
+        # 假骨架受体：标签为单字符 O/N 居中（无 H₂O 等结构简式标签的
+        # 符号中心修正），受体坐标用原子中心与假骨架节点保持一致
+        if info_b.get("hbond_pseudo"):
+            tx0, ty0 = atom_pos(mol_b, b)
         tx, ty = tx0 + sh_b[0], ty0 + sh_b[1]
-        for dot_line in hbond_dots_tikz(hx, hy, tx, ty):
+        # 点线两端内缩：半边长 0.13 标签正方形 + 键线式 gap（label_bond_margin，
+        # 单字符标签 0.30）——避免首/末点压住给体 H 与受体标签
+        inset = _LABEL_SQUARE_HALF + label_bond_margin("H")
+        for dot_line in hbond_dots_tikz(hx, hy, tx, ty,
+                                        inset_start=inset, inset_end=inset):
             lines.append(f"  {dot_line}")
 
     for comp in structs:
