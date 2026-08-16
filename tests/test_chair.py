@@ -16,7 +16,7 @@ pytest.importorskip("rdkit", reason="rdkit 未安装，跳过椅式构象测试"
 
 from core.tag_parser import parse_tags
 from core.tag_validator import validate_tags
-from renderers.chair import render_chair
+from renderers.chair import render_chair, _chair_vertices
 
 
 def _validate(text):
@@ -130,3 +130,66 @@ class TestGeometry:
         line = ang % 180.0
         assert min(abs(line - 15.0), abs(line - 165.0)) < 1.0, \
             f"equatorial 键不平行浅斜骨架: {ang:.1f}°"
+
+
+class TestFlip:
+    def test_parse_flip(self):
+        tags = parse_tags("[CHAIR:C1CCCCC1,flip]")
+        assert tags[0].args == ["C1CCCCC1", "flip"]
+
+    def test_flip_token_position_free(self):
+        tags = parse_tags("[CHAIR:CC1CCCCC1,1:eq,flip]")
+        assert tags[0].args == ["CC1CCCCC1", "1:eq,flip"]
+
+    def test_flip_valid(self, fake_rdkit):
+        _, invalid = _validate("[CHAIR:BrC1CCCCC1,flip,1:ax]")
+        assert len(invalid) == 0
+
+    def test_flip_still_rejects_bad_kind(self):
+        _, invalid = _validate("[CHAIR:BrC1CCCCC1,flip,1:xx]")
+        assert len(invalid) == 1
+        assert "格式错误" in invalid[0].reason
+
+    def test_mirror_is_y_reflection(self):
+        """flip 骨架 = 正常骨架关于水平轴反射（x 不变、y 取反），且闭环。"""
+        normal = _chair_vertices(False)
+        flipped = _chair_vertices(True)
+        assert len(normal) == len(flipped) == 6
+        for (x1, y1), (x2, y2) in zip(normal, flipped):
+            assert abs(x1 - x2) < 1e-9, (x1, x2)
+            assert abs(y1 + y2) < 1e-9, (y1, y2)
+        # 镜像画法第 6 边（闭环）为 +60° 线（240°）
+        ang = math.degrees(math.atan2(flipped[0][1] - flipped[-1][1],
+                                      flipped[0][0] - flipped[-1][0])) % 360.0
+        assert abs(ang - 240.0) < 1e-9, f"镜像闭环边方向异常: {ang:.2f}°"
+
+    def test_flip_three_parallel_pairs(self):
+        """镜像骨架 6 键仍落在 15°/60°/165° 三条线族上（三对平行）。"""
+        angles = _bond_angles(render_chair("C1CCCCC1", "flip"))
+        assert len(angles) == 6
+        for a in angles:
+            assert any(abs(a - t) < 1.0 for t in (15.0, 60.0, 165.0)), \
+                f"镜像骨架意外角度: {a:.1f}°"
+
+    def test_flip_axial_down_at_pos1(self):
+        """镜像画法 1 位竖直键朝下（正常画法朝上，交替翻转）。"""
+        out = render_chair("BrC1CCCCC1", "flip,1:ax")
+        bonds = re.findall(
+            r"\\draw \(([-\d.]+),([-\d.]+)\) -- \(([-\d.]+),([-\d.]+)\);", out)
+        sub = bonds[-1]
+        dx = abs(float(sub[2]) - float(sub[0]))
+        dy = float(sub[3]) - float(sub[1])
+        assert dx < 0.01 and dy < -0.5, f"flip axial 键不朝下: {sub}"
+
+    def test_flip_equatorial_outward_and_parallel(self):
+        """镜像画法 eq 键仍外指（水平分量离环心）且与浅斜骨架平行。"""
+        out = render_chair("CC1CCCCC1", "flip,1:eq")
+        bonds = re.findall(
+            r"\\draw \(([-\d.]+),([-\d.]+)\) -- \(([-\d.]+),([-\d.]+)\);", out)
+        sub = bonds[-1]
+        x1, y1, x2, y2 = map(float, sub)
+        ang = math.degrees(math.atan2(y2 - y1, x2 - x1)) % 360.0
+        line = ang % 180.0
+        assert min(abs(line - 15.0), abs(line - 165.0)) < 1.0, \
+            f"flip equatorial 不平行浅斜骨架: {ang:.1f}°"
+        assert x2 < x1, f"flip equatorial 未指向环外: {sub}"

@@ -981,6 +981,8 @@ def validate_tag(tag: RenderTag) -> ValidationResult:
                     tok = tok.strip()
                     if not tok:
                         continue
+                    if tok.lower() == "flip":
+                        continue    # 镜像画法令牌（翻转对比第二张）
                     m = re.fullmatch(
                         r"(\d+):(ax|eq|axial|equatorial)", tok.lower())
                     if not m:
