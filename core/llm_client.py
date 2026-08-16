@@ -28,7 +28,7 @@ _SEMAPHORE = threading.BoundedSemaphore(settings.llm.max_concurrent)
 # 内容完整性校验：行尾残留的半截渲染标记（如 "[STRUCT:c1ccc" 无闭合 ]）
 _TRUNC_MARK_RE = re.compile(
     r"\[(?:STRUCT|ARROW|REACTION|COMPOSITE|NEWMAN|ENERGY|LEWIS|"
-    r"STEREO|CHARGE|HBOND|RETRO|XH|BOND):[^\]]*$",
+    r"STEREO|CHARGE|HBOND|RETRO|XH|BOND|CHAIR):[^\]]*$",
     re.MULTILINE,
 )
 _ENV_BEGIN_RE = re.compile(r"\\begin\{(\w+)\}")

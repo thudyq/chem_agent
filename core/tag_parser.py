@@ -59,6 +59,7 @@ _OPENERS = {
     "RETRO": "[RETRO:",
     "XH": "[XH:",
     "BOND": "[BOND:",
+    "CHAIR": "[CHAIR:",
 }
 
 # REASONING 配对正则（内容不与括号冲突，可用正则）
@@ -211,6 +212,12 @@ def _parse_content(tag_type: str, content: str) -> list:
         if len(parts) == 1:
             parts.append("")
         return parts
+    if tag_type == "CHAIR":
+        # [CHAIR:SMILES,1:ax,2:eq] → [SMILES, 取代基规格串]
+        parts = content.split(",", 1)
+        smi = parts[0].strip().rstrip(",")
+        spec = parts[1].strip() if len(parts) > 1 else ""
+        return [smi, spec]
     if tag_type in ("MECHARROW", "CONDITION", "RXNARROW"):
         return [content.strip()]
     if tag_type in ("XH", "BOND"):

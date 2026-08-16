@@ -95,6 +95,7 @@ _TAG_NAMES = {
     "RETRO": "逆合成箭头",
     "XH": "显式氢标注",
     "BOND": "键突出标注",
+    "CHAIR": "椅式构象",
 }
 
 # SMILES 字段提取器：输入 RenderTag，返回需要校验的 SMILES 字符串列表。
@@ -956,6 +957,47 @@ def validate_tag(tag: RenderTag) -> ValidationResult:
             reason = _check_xh_h_usage(mol, xh_idxs, "XH ")
             if reason:
                 return ValidationResult(tag, False, reason)
+        return ValidationResult(tag, True)
+    if ttype == "CHAIR":
+        # [CHAIR:SMILES,位:ax/eq,...]：SMILES 合法 + 含环己烷六元碳环 +
+        # 环位 1~6 + ax/eq 格式 + 该环位有非环取代基（真实 rdkit 才查环，
+        # fake mol 无 GetRingInfo 时降级跳过）
+        if not args or not args[0] or not args[0].strip():
+            return ValidationResult(tag, False, "SMILES 为空")
+        smi = args[0].strip()
+        if not _smiles_ok(smi):
+            return ValidationResult(tag, False, f"无效 SMILES「{smi}」")
+        spec = (args[1] if len(args) > 1 else "").strip()
+        if _RDKIT_OK:
+            mol = _parse_mol(smi)
+            if mol is not None and hasattr(mol, "GetRingInfo"):
+                from utils.rdkit_utils import cyclohexane_ring
+                ring = cyclohexane_ring(mol)
+                if ring is None:
+                    return ValidationResult(
+                        tag, False, f"SMILES 中未找到环己烷六元环「{smi}」")
+                ring_set = set(ring)
+                for tok in spec.split(","):
+                    tok = tok.strip()
+                    if not tok:
+                        continue
+                    m = re.fullmatch(
+                        r"(\d+):(ax|eq|axial|equatorial)", tok.lower())
+                    if not m:
+                        return ValidationResult(
+                            tag, False,
+                            f"CHAIR 取代位格式错误「{tok}」（应为 位:ax/eq）")
+                    pos = int(m.group(1))
+                    if not 1 <= pos <= 6:
+                        return ValidationResult(
+                            tag, False, f"CHAIR 环位 {pos} 超出范围 1~6")
+                    has_sub = any(
+                        nbr.GetIdx() not in ring_set
+                        for nbr in mol.GetAtomWithIdx(
+                            ring[pos - 1]).GetNeighbors())
+                    if not has_sub:
+                        return ValidationResult(
+                            tag, False, f"CHAIR 环位 {pos} 无取代基可标注")
         return ValidationResult(tag, True)
 
     # 通用带 SMILES 字段的标记：字段非空 + SMILES 合法

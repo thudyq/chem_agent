@@ -32,6 +32,8 @@ KNOWN_SMILES = {
     # B1（20260812）自由基机理：单原子/小分子组分
     "C": _FakeMol(1), "Cl": _FakeMol(1), "ClCl": _FakeMol(2),
     "[Cl]": _FakeMol(1), "[CH3]": _FakeMol(1),
+    # CHAIR：取代环己烷
+    "BrC1CCCCC1": _FakeMol(7), "CC1CCCCC1": _FakeMol(7),
 }
 
 

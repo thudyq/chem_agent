@@ -160,6 +160,25 @@ def mol_to_formula(smiles: str) -> str:
     return CalcMolFormula(mol)
 
 
+def cyclohexane_ring(mol):
+    """环己烷六元碳环的原子序号列表（按 SMILES 出现顺序）；未找到返回 None。
+
+    供 [CHAIR] 渲染器与校验层共用：取第一个六元全碳环
+    （GetRingInfo 的 AtomRings，遍历序与 SMILES 序一致）。
+    """
+    if mol is None:
+        return None
+    try:
+        rings = mol.GetRingInfo().AtomRings()
+    except Exception:
+        return None
+    for ring in rings:
+        if len(ring) == 6 and all(
+                mol.GetAtomWithIdx(i).GetAtomicNum() == 6 for i in ring):
+            return sorted(ring)
+    return None
+
+
 if __name__ == "__main__":
     # Day 1 完成标志验证：validate_smiles('C') 返回 True
     print("validate_smiles('C') =", validate_smiles("C"))
