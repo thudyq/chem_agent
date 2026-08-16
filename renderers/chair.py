@@ -24,7 +24,7 @@ r"""renderers/chair.py — [CHAIR] 标记渲染器：环己烷椅式构象。
 
 import math
 
-from .mol_primitives import atom_main_label, format_chem_text, prepare_mol
+from .mol_primitives import atom_main_label, format_chem_text, label_bond_margin, prepare_mol
 
 _SIGMA = 15.0       # 浅斜键与水平夹角（Klein 约束解出，视觉校准后可调）
 _STEEP = 60.0       # 陡斜键与水平夹角（Klein 明文 60°）
@@ -135,7 +135,13 @@ def render_chair(smiles: str, spec: str = "") -> str:
         label = _substituent_label(mol, ring[pos - 1], ring_set)
         if not label:
             continue            # 该环位无取代基（校验层已拦截，渲染兜底跳过）
-        lines.append(f"  \\draw ({vx:.2f},{vy:.2f}) -- ({ex:.2f},{ey:.2f});")
+        # 取代基端标签留白：键线终点停在标签占位之外（与骨架键/显式 H 同一
+        # label_bond_margin 口径）；环碳端是键线式顶点（不标 C）无标签不收缩。
+        m = label_bond_margin(label)
+        d = math.hypot(ex - vx, ey - vy) or 1.0
+        ux, uy = (ex - vx) / d, (ey - vy) / d
+        sx, sy = ex - ux * m, ey - uy * m
+        lines.append(f"  \\draw ({vx:.2f},{vy:.2f}) -- ({sx:.2f},{sy:.2f});")
         lines.append(
             f"  \\node[fill=white, inner sep=1pt] at ({ex:.2f},{ey:.2f}) "
             f"{{{format_chem_text(label)}}};")
