@@ -1779,7 +1779,13 @@ def mech_arrow_origin(mol, spec: str, shift=(0.0, 0.0),
         return None
     x, y = atom_pos(mol, ia)
     atom = mol.GetAtomWithIdx(ia)
-    if lone_pair_offset and atom.GetAtomicNum() != 6:
+    # 电子点分支：lone_pair_offset 且非碳原子（孤对/单电子），或 碳自由基
+    # （鱼钩 prefer_single 且原子带单电子）——碳自由基的单电子点是合法
+    # 鱼钩起点（B1）；碳无孤对电子，进攻箭头（非 prefer_single）对碳
+    # 保持原子中心；lone_pair_offset=False（目标端）不落电子点。
+    has_radical = atom.GetNumRadicalElectrons() > 0
+    if (lone_pair_offset and atom.GetAtomicNum() != 6) \
+            or (prefer_single and has_radical):
         if prefer_single:
             angles = single_electron_angles(mol, ia)
         else:

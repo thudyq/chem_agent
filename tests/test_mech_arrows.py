@@ -47,6 +47,25 @@ def test_draw_mech_arrows_fishhook():
     assert any("red" in ln and "controls" in ln for ln in lines)
 
 
+def test_carbon_radical_fishhook_starts_at_single_electron():
+    """碳自由基（·CH3）的鱼钩起点落在单电子点上（on_electron），
+    而非 C 原子中心——回归锚点（20260815：mech_arrow_origin 的
+    电子点分支原排除全部碳原子，碳自由基起点退化为原子中心）。"""
+    from renderers.mol_primitives import (
+        lone_pair_dot_groups, mech_arrow_origin,
+    )
+    mol = prepare_mol("[CH3]")
+    scale_mol_coords(mol, 0.8)
+    p = mech_arrow_origin(mol, "0", (0.0, 0.0), prefer_single=True)
+    assert p[3] is True and p[4] is False      # 落在单电子点，未吸附标签
+    # 起点沿 180° 槽位外移（单电子点之外 _ARROW_POINT_GAP）
+    sx, sy = lone_pair_dot_groups(mol, 0)[1][0]
+    assert abs(p[0] - sx) < 0.01 or abs(p[1] - sy) < 0.01 or p[0] < sx
+    # 进攻箭头（非鱼钩）对碳：保持原子中心（碳无孤对，非供体）
+    q = mech_arrow_origin(mol, "0", (0.0, 0.0), prefer_single=False)
+    assert q[3] is False and abs(q[0]) < 0.01
+
+
 def test_draw_mech_arrows_bond_break():
     """断键箭头（起点为 a-b 键中点）绘制，向下弯曲。"""
     mols = _mols("CCl", "CO")
