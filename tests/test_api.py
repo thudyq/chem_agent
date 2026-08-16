@@ -372,8 +372,11 @@ def test_image_without_vision_config(client, monkeypatch):
     assert "VISION_MODEL" in captured["q"]
 
 
-def test_validate_download_url_ssrf():
+def test_validate_download_url_ssrf(monkeypatch):
     """B1 SSRF 防护：内网/元数据/危险主机名/非 http 拒绝，公网放行。"""
+    # mock DNS：公网域名在沙箱/无网环境可能解析到保留段导致误判
+    monkeypatch.setattr(api.socket, "getaddrinfo",
+                        lambda *a, **k: [(2, 1, 6, "", ("93.184.216.34", 0))])
     assert api._validate_download_url("https://example.com/a.png")
     assert api._validate_download_url("http://www.baidu.com/f.txt")
     assert not api._validate_download_url("http://127.0.0.1/x")
