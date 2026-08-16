@@ -728,7 +728,9 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
         if not ok:
             return False, f"组件 {cid}: {reason}"
 
-    if not comps:
+    # row 布局允许无 [STRUCT]（纯箭头/条件/连接符序列也合法）；reaction_mech /
+    # energy 仍要求至少一个组件（机理引用与驻点挂靠都依赖组件）
+    if not comps and layout_name != "row":
         return False, "容器内缺少 [STRUCT] 组件"
 
     # energy 布局：每个 STRUCT 必须有 at= 且不越界

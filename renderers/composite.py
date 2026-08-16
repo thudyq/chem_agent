@@ -768,7 +768,9 @@ def render_composite(layout: str, children: list) -> str:
 
     structs, sequence, mech_specs, global_cond, annotations = _collect_components(children)
 
-    if not structs:
+    # row 布局允许无 [STRUCT]（纯箭头/条件/连接符序列也合法，校验层已同步豁免）；
+    # reaction_mech / energy 仍要求至少一个组件
+    if not structs and layout_name != "row":
         return "（COMPOSITE 渲染失败：容器内缺少 [STRUCT] 组件）"
     if layout_name == "reaction_mech" and not any(el[0] == "arrow" for el in sequence):
         return "（COMPOSITE 渲染失败：reaction_mech 布局需要 [RXNARROW] 标记主反应箭头位置）"

@@ -445,9 +445,16 @@ def test_mech_arrow_origin_label_snap():
 
 
 def test_error_no_struct():
-    """错误处理1：容器内缺少 STRUCT。"""
-    out = _render("[COMPOSITE:row][PLUS][/COMPOSITE]")
+    """非 row 布局（reaction_mech/energy）无 STRUCT 仍拦截。"""
+    out = _render("[COMPOSITE:reaction_mech][RXNARROW][/COMPOSITE]")
     assert "缺少 [STRUCT]" in out
+
+
+def test_row_without_struct_renders():
+    """row 布局允许无 [STRUCT]（纯箭头/连接符序列也合法），不再要求必须含 STRUCT。"""
+    out = _render("[COMPOSITE:row][PLUS][RXNARROW:条件][/COMPOSITE]")
+    assert out.startswith("\\begin{tikzpicture}")
+    assert "缺少 [STRUCT]" not in out
 
 
 def test_error_missing_rxnarrow():

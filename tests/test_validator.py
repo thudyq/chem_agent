@@ -141,8 +141,20 @@ def test_composite_unknown_layout_rejected():
 
 
 def test_composite_no_struct_rejected():
-    _, invalid = _validate("[COMPOSITE:row][PLUS][/COMPOSITE]")
+    """非 row 布局无 STRUCT 仍拦截（reaction_mech 需要组件供机理引用）。"""
+    _, invalid = _validate("[COMPOSITE:reaction_mech][RXNARROW][/COMPOSITE]")
     assert len(invalid) == 1
+    assert "缺少 [STRUCT]" in invalid[0].reason
+
+
+def test_composite_row_without_struct_passes():
+    """row 布局允许无 [STRUCT]（纯箭头/条件/连接符序列合法）——要求已删除。"""
+    _, invalid = _validate("[COMPOSITE:row][PLUS][RXNARROW:条件][/COMPOSITE]")
+    assert len(invalid) == 0
+    # row 无组件时 MECHARROW 引用仍拦截（无组件可引用）
+    _, invalid2 = _validate("[COMPOSITE:row][MECHARROW:r0:0>r0:1][/COMPOSITE]")
+    assert len(invalid2) == 1
+    assert "未知组件" in invalid2[0].reason
 
 
 def test_composite_energy_at_out_of_range(fake_rdkit):
