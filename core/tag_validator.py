@@ -814,16 +814,47 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
                 idxs = [int(x) for x in re.findall(r"(\d+):", pairs)]
                 if not idxs:
                     return False, f"CHARGE 标注格式错误「{pairs}」（应为 原子:δ± 列表）"
+                if _RDKIT_OK:
+                    n = atom_counts.get(ref, 0)
+                    for i in idxs:
+                        if not 0 <= i < n:
+                            return False, f"CHARGE 原子编号 {i} 超出组件 {ref} 范围 0~{n - 1}"
             else:
-                hb_pairs = re.findall(r"(\d+)-(\d+)", pairs)
-                if not hb_pairs:
+                # HBOND：单组件 from-to 与跨组件 from>idB:to 混合支持。
+                # 跨组件：给体组件为 ref（args[0]），受体组件为 idB。
+                idxs = []   # (组件, 原子) 待查范围
+                found = 0
+                for tok in pairs.split(","):
+                    tok = tok.strip()
+                    if not tok:
+                        continue
+                    m_i = re.fullmatch(r"(\d+)>([A-Za-z0-9_]+):(\d+)", tok)
+                    if m_i:
+                        fi, idb, ti = int(m_i.group(1)), m_i.group(2), \
+                            int(m_i.group(3))
+                        if idb not in comps:
+                            return False, f"HBOND 引用未知组件「{idb}」"
+                        idxs.append((ref, fi))
+                        idxs.append((idb, ti))
+                        found += 1
+                        continue
+                    m = re.fullmatch(r"(\d+)-(\d+)", tok)
+                    if m:
+                        fi, ti = int(m.group(1)), int(m.group(2))
+                        idxs.append((ref, fi))
+                        idxs.append((ref, ti))
+                        found += 1
+                        continue
+                    return False, (f"HBOND 标注格式错误「{tok}」"
+                                   f"（应为 from-to 或 from>组件id:to）")
+                if not found:
                     return False, f"HBOND 标注格式错误「{pairs}」（应为 from-to 列表）"
-                idxs = [int(x) for t in hb_pairs for x in t]
-            if _RDKIT_OK:
-                n = atom_counts.get(ref, 0)
-                for i in idxs:
-                    if not 0 <= i < n:
-                        return False, f"{ctype} 原子编号 {i} 超出组件 {ref} 范围 0~{n - 1}"
+                if _RDKIT_OK:
+                    for ref2, i in idxs:
+                        n = atom_counts.get(ref2, 0)
+                        if not 0 <= i < n:
+                            return False, (f"HBOND 原子编号 {i} 超出组件 "
+                                           f"{ref2} 范围 0~{n - 1}")
         elif ctype == "XH" and len(child.args) >= 2:
             ref = child.args[0].strip()
             if ref not in comps:

@@ -191,6 +191,10 @@ def _parse_content(tag_type: str, content: str) -> list:
         if "|" in content:
             smi, _, pairs = content.partition("|")
             return [_strip_fake_label(smi), pairs.strip()]
+        if ">" in content:
+            # 跨组件紧凑写法 HBOND:idA:from>idB:to（无 |）→ [idA, "from>idB:to"]
+            ida, _, rest = content.partition(":")
+            return [ida.strip(), rest.strip()]
         return [_strip_fake_label(content), ""]
     if tag_type == "ARROW":
         parts = content.split(",", 2)

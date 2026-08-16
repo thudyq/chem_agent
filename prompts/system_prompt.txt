@@ -95,7 +95,9 @@
       [XH:id|原子序号]                         显式画出该原子的 H
       [BOND:id|a-b]                            加粗突出键
       [CHARGE:id|原子号:δ±]                    部分电荷
-      [HBOND:id|from-to]                       氢键
+      [HBOND:id|from-to]                       氢键（分子内，同组件）；跨组件（分子间）
+      [HBOND:供体组件:给体原子>受体组件:受体原子]  画供体分子 X—H···受体分子 Y 的
+                                                虚线（`|` 分隔写法 idA|from>idB:to 等价）
     共振式（如苯的两个 Kekulé 式）用 row 布局 + 显式 [RESARROW] 连接：
       [COMPOSITE:row][STRUCT:C1=CC=CC=C1,label=式 I][RESARROW][STRUCT:C1C=CC=CC=1,label=式 II][/COMPOSITE]
     含 [RESARROW] 时渲染器自动保留各极限式的显式键级（Kekulé 式不统一芳香化）。

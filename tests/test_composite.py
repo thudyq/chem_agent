@@ -987,3 +987,65 @@ def test_registry_dispatch_and_injection():
     assert "\\begin{tikzpicture}" in out
     assert out.startswith("SN2 反应机理如下：")
     assert out.endswith("以上。")
+
+
+# ---------- 跨组件（分子间）氢键 ----------
+
+_INTER_HB_BASE = (
+    "[COMPOSITE:row]"
+    "[STRUCT:CC(=O)O,id=a,label=乙酸]"
+    "[STRUCT:CC(=O)O,id=b,label=乙酸]"
+)
+
+
+def test_hbond_inter_parser_both_forms():
+    """跨组件 HBOND 两种写法（`id|from>idB:to` 与紧凑 `id:from>idB:to`）
+    解析结果一致：args = [给体组件 id, "from>idB:to"]。"""
+    for spec in ("[HBOND:a|3>b:2]", "[HBOND:a:3>b:2]"):
+        tags = parse_tags(_INTER_HB_BASE + spec + "[/COMPOSITE]")
+        comp = tags[0]
+        hbond = [c for c in comp.args[1] if c.type == "HBOND"][0]
+        assert hbond.args == ["a", "3>b:2"]
+
+
+def test_hbond_inter_validation():
+    """跨组件 HBOND 校验：合法通过；未知组件/越界/格式错拦截。"""
+    from core.tag_validator import validate_tags
+
+    def check(spec):
+        tags = parse_tags(_INTER_HB_BASE + spec + "[/COMPOSITE]")
+        _, invalid = validate_tags(tags)
+        return invalid
+
+    assert not check("[HBOND:a|3>b:2]")
+    r = check("[HBOND:a|3>ghost:2]")
+    assert r and "引用未知组件" in r[0].reason
+    r = check("[HBOND:a|99>b:2]")
+    assert r and "超出组件 a" in r[0].reason
+    r = check("[HBOND:a|3>b:99]")
+    assert r and "超出组件 b" in r[0].reason
+    r = check("[HBOND:a|bad>]")
+    assert r and "标注格式错误" in r[0].reason
+
+
+def test_hbond_inter_renders_dots():
+    """跨组件氢键渲染：给体 X—H 实线 + H 节点 + teal 点状虚线 + 两分子。"""
+    text = _INTER_HB_BASE + "[HBOND:a|3>b:2][/COMPOSITE]"
+    tags = parse_tags(text)
+    out = render_composite(*tags[0].args)
+    assert out.startswith("\\begin{tikzpicture}")
+    assert "\\fill[teal]" in out          # H···Y 点状虚线（圆点）
+    assert out.count("\\fill[teal]") >= 3
+    assert out.count("{H}") == 1          # 给体显式 H（受体不画 H）
+    assert out.count("{乙酸}") == 2       # 两分子 label 都在
+
+
+def test_hbond_intra_unchanged():
+    """单组件（分子内）HBOND 行为不变：`id|from-to` 仍只画该组件内氢键。"""
+    text = ("[COMPOSITE:row][STRUCT:OCCO,id=g,label=乙二醇]"
+            "[HBOND:g|0-3][/COMPOSITE]")
+    tags = parse_tags(text)
+    out = render_composite(*tags[0].args)
+    assert out.startswith("\\begin{tikzpicture}")
+    assert "\\fill[teal]" in out
+    assert out.count("{H}") == 2   # 给体 H + 受体显式 H（分子内受体有 H）

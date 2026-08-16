@@ -128,6 +128,28 @@ _MECH_ARROW_RE = re.compile(
 
 _SUPPORTED_LAYOUTS = ("reaction_mech", "row", "energy")
 
+# 跨组件氢键 spec：from>idB:to（给体原子 from 与组件 idB 的原子 to 成氢键）
+_INTER_HBOND_RE = re.compile(r"^(\d+)>([A-Za-z0-9_]+):(\d+)$")
+
+
+def _parse_inter_hbonds(annotations: dict) -> list:
+    """容器内跨组件氢键 spec → [(idA, from, idB, to), ...]。
+
+    从各组件 anno["hbond"] 中提取含 ">" 的 spec（单组件 from-to 不在此）；
+    渲染时给体组件为 idA（spec 所在组件）、受体组件为 idB。
+    """
+    out = []
+    for ida, anno in annotations.items():
+        for tok in (anno.get("hbond", "") or "").split(","):
+            tok = tok.strip()
+            if not tok or ">" not in tok:
+                continue
+            m = _INTER_HBOND_RE.match(tok)
+            if m:
+                out.append((ida, int(m.group(1)), m.group(2),
+                            int(m.group(3))))
+    return out
+
 
 def _rects_intersect(a: tuple, b: tuple, pad: float = 0.15) -> bool:
     """两个 (min_x, min_y, max_x, max_y) 矩形是否相交（含 pad 间距）。"""
@@ -615,6 +637,12 @@ def render_composite(layout: str, children: list) -> str:
             explicit_hs[fi] = explicit_hs.get(fi, 0) + 1
         for _, ti in parse_hbond_pairs(anno.get("hbond", "")):
             explicit_hs[ti] = explicit_hs.get(ti, 0) + 1
+        # 跨组件氢键（分子间）：给体原子 H 显式画出（受体不画 H，多为羰基 O）
+        for tok in (anno.get("hbond", "") or "").split(","):
+            m = _INTER_HBOND_RE.match(tok.strip())
+            if m:
+                explicit_hs[int(m.group(1))] = \
+                    explicit_hs.get(int(m.group(1)), 0) + 1
         mols[comp["id"]] = {
             "mol": mol,
             "label": comp["label"],
@@ -704,6 +732,32 @@ def render_composite(layout: str, children: list) -> str:
         lines.extend(_molecule_with_annotations_lines(
             mols[comp["id"]], show_numbers=show_numbers,
             show_lone_pairs=show_lone_pairs))
+
+    # 跨组件氢键（分子间）：全局坐标画给体 X—H 实线 + H···受体 Y 点状虚线。
+    # 给体 H 显式画出并朝向受体；受体不画显式 H（分子间受体多为羰基 O 等）。
+    for ida, fi, idb, ti in _parse_inter_hbonds(annotations):
+        info_a, info_b = mols.get(ida), mols.get(idb)
+        if info_a is None or info_b is None:
+            continue
+        mol_a, sh_a = info_a["mol"], info_a["shift"]
+        mol_b, sh_b = info_b["mol"], info_b["shift"]
+        if not (0 <= fi < mol_a.GetNumAtoms()
+                and 0 <= ti < mol_b.GetNumAtoms()):
+            continue
+        # 受体全局坐标（place_donor_h 只取方位角，平移不变）
+        tx0, ty0 = symbol_center(mol_b, ti, 0)
+        tx, ty = tx0 + sh_b[0], ty0 + sh_b[1]
+        # 给体 X—H：H 朝向受体，给体原子 H 扣减（显式画出）
+        lab_a = lambda a: atom_label(a, 1 if a.GetIdx() == fi else 0)
+        hx0, hy0 = place_donor_h(mol_a, fi, (tx, ty))
+        sx0, sy0 = label_edge_point(mol_a, fi, (hx0, hy0), labeler=lab_a)
+        hx, hy = hx0 + sh_a[0], hy0 + sh_a[1]
+        sx, sy = sx0 + sh_a[0], sy0 + sh_a[1]
+        lines.append(f"  \\draw ({sx:.2f},{sy:.2f}) -- ({hx:.2f},{hy:.2f});")
+        lines.append(
+            f"  \\node[fill=white, inner sep=1pt] at ({hx:.2f},{hy:.2f}) {{H}};")
+        for dot_line in hbond_dots_tikz(hx, hy, tx, ty):
+            lines.append(f"  {dot_line}")
 
     for comp in structs:
         info = mols[comp["id"]]
