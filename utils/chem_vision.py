@@ -164,15 +164,19 @@ def crop_blocks(image_path: str, blocks: list[dict], pad: float = 0.02) -> list[
 
 def _molscribe_model_path() -> str | None:
     """MolScribe 权重路径：CHEM_VISION_MOLSCRIBE_MODEL 配置优先；
-    否则探测常见下载位置（ckpt/molscribe.pth、~/molscribe/ 等）。"""
+    否则探测常见下载位置（官方权重名 swin_base_char_aux_1m.pth，
+    出自 Space app.py 的 hf_hub_download 用法）。"""
     cfg = settings.chem_vision.molscribe_model
     if cfg:
         return cfg
-    cands = [
-        Path.cwd() / "ckpt" / "molscribe.pth",
-        Path.home() / "molscribe" / "ckpt" / "molscribe.pth",
-        Path.home() / "molscribe_model" / "molscribe.pth",
-    ]
+    names = ("swin_base_char_aux_1m.pth", "molscribe.pth")
+    cands = []
+    for name in names:
+        cands += [
+            Path.cwd() / "ckpt" / name,
+            Path.home() / "molscribe" / "ckpt" / name,
+            Path.home() / "molscribe_model" / name,
+        ]
     for p in cands:
         if p.exists():
             return str(p)
