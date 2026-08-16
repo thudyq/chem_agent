@@ -162,13 +162,54 @@ def crop_blocks(image_path: str, blocks: list[dict], pad: float = 0.02) -> list[
 
 # --------------------------------------------------- MolScribe / RxnScribe
 
-_MOLSCRIBE_CODE = (
-    "import sys, json\n"
-    "from molscribe import MolScribe\n"
-    "m = MolScribe()\n"
-    "smi = m.predict_image_file(sys.argv[1])\n"
-    "print(json.dumps({'smiles': smi}))\n"
-)
+def _molscribe_model_path() -> str | None:
+    """MolScribe 权重路径：CHEM_VISION_MOLSCRIBE_MODEL 配置优先；
+    否则探测常见下载位置（ckpt/molscribe.pth、~/molscribe/ 等）。"""
+    cfg = settings.chem_vision.molscribe_model
+    if cfg:
+        return cfg
+    cands = [
+        Path.cwd() / "ckpt" / "molscribe.pth",
+        Path.home() / "molscribe" / "ckpt" / "molscribe.pth",
+        Path.home() / "molscribe_model" / "molscribe.pth",
+    ]
+    for p in cands:
+        if p.exists():
+            return str(p)
+    return None
+
+
+def _molscribe_code() -> str:
+    """MolScribe subprocess 脚本：model_path 必须显式传入（接口要求）。"""
+    mp = _molscribe_model_path()
+    if not mp:
+        return ""
+    return (
+        "import sys, json\n"
+        "from molscribe import MolScribe\n"
+        f"m = MolScribe(model_path={mp!r})\n"
+        "smi = m.predict_image_file(sys.argv[1])\n"
+        "print(json.dumps({'smiles': smi}))\n"
+    )
+
+
+def predict_molscribe(image_path: str) -> str | None:
+    """MolScribe 单分子识别 → SMILES；失败/不可用返回 None。"""
+    code = _molscribe_code()
+    if not code:
+        return None
+    out = _run_python(code, image_path,
+                      settings.chem_vision.molscribe_timeout)
+    if not out:
+        return None
+    try:
+        d = json.loads(out)
+    except json.JSONDecodeError:
+        return None
+    smi = d.get("smiles") if isinstance(d, dict) else None
+    if not smi:
+        return None
+    return str(smi).strip() or None
 
 _RXNSCRIBE_CODE = (
     "import sys, json\n"
@@ -216,22 +257,6 @@ def _run_python(code: str, image_path: str, timeout: int) -> str | None:
         return None
     out = (r.stdout or "").strip()
     return out or None
-
-
-def predict_molscribe(image_path: str) -> str | None:
-    """MolScribe 单分子识别 → SMILES；失败/不可用返回 None。"""
-    out = _run_python(_MOLSCRIBE_CODE, image_path,
-                      settings.chem_vision.molscribe_timeout)
-    if not out:
-        return None
-    try:
-        d = json.loads(out)
-    except json.JSONDecodeError:
-        return None
-    smi = d.get("smiles") if isinstance(d, dict) else None
-    if not smi:
-        return None
-    return str(smi).strip() or None
 
 
 def predict_rxnscribe(image_path: str) -> str | None:

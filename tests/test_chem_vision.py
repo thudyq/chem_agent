@@ -77,12 +77,17 @@ def test_env_python(monkeypatch):
 
 
 def test_predict_molscribe(monkeypatch):
-    """MolScribe subprocess 输出解析；失败/不可用返回 None。"""
+    """MolScribe subprocess 输出解析；权重缺失/失败/不可用返回 None。"""
+    monkeypatch.setattr(cv, "_molscribe_model_path",
+                        lambda: "C:/models/molscribe.pth")
     monkeypatch.setattr(cv, "_run_python", lambda *a, **k: '{"smiles": "c1ccccc1"}')
     assert cv.predict_molscribe("x.png") == "c1ccccc1"
     monkeypatch.setattr(cv, "_run_python", lambda *a, **k: None)
     assert cv.predict_molscribe("x.png") is None
     monkeypatch.setattr(cv, "_run_python", lambda *a, **k: "not json")
+    assert cv.predict_molscribe("x.png") is None
+    # 权重未配置（探测不到）→ None
+    monkeypatch.setattr(cv, "_molscribe_model_path", lambda: None)
     assert cv.predict_molscribe("x.png") is None
 
 
@@ -95,6 +100,7 @@ def test_process_image_routing(monkeypatch, tmp_workdir):
 
     monkeypatch.setattr(cv, "_call_vision", lambda *a, **k: _layout_json())
     # MolScribe/RxnScribe 不可用 → 回退 describe_block（mock 文本）
+    monkeypatch.setattr(cv, "_molscribe_model_path", lambda: None)
     monkeypatch.setattr(cv, "_run_python", lambda *a, **k: None)
     monkeypatch.setattr(cv, "describe_block",
                         lambda t, im: f"描述:{t}")
@@ -110,6 +116,8 @@ def test_process_image_routing(monkeypatch, tmp_workdir):
         assert b["text"]  # 非空
 
     # 识别可用：结构式走 MolScribe → SMILES
+    monkeypatch.setattr(cv, "_molscribe_model_path",
+                        lambda: "C:/models/molscribe.pth")
     monkeypatch.setattr(cv, "_run_python",
                         lambda *a, **k: '{"smiles": "c1ccccc1"}')
     res2 = cv.process_image(str(p), tmpdir=str(tmp_workdir / "tmp2"))

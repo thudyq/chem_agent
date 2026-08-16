@@ -160,8 +160,14 @@ class ChemVisionConfig:
     """
 
     python_path: str = field(default_factory=lambda: _get_str("CHEM_VISION_PYTHON"))
+    # MolScribe 权重文件路径（环境变量 CHEM_VISION_MOLSCRIBE_MODEL）：
+    # MolScribe 接口要求显式传入 model_path（molscribe.pth，从项目 README/
+    # HuggingFace 下载，约 100-200MB）。未配置时尝试常见位置探测。
+    molscribe_model: str = field(
+        default_factory=lambda: _get_str("CHEM_VISION_MOLSCRIBE_MODEL")
+    )
     # 单次 subprocess 识别的最长等待（MolScribe/RxnScribe 首次加载模型慢）
-    molscribe_timeout: int = 120
+    molscribe_timeout: int = 180
     rxnscribe_timeout: int = 120
 
 
