@@ -128,26 +128,27 @@ _MECH_ARROW_RE = re.compile(
 
 _SUPPORTED_LAYOUTS = ("reaction_mech", "row", "energy")
 
-# 跨组件氢键 spec：from>idB:to（给体原子 from 与组件 idB 的原子 to 成氢键）
-_INTER_HBOND_RE = re.compile(r"^(\d+)>([A-Za-z0-9_]+):(\d+)$")
+# 氢键 spec：a#k>idB:b（给体组件的第 k 个显式 H 与组件 idB 的原子 b 成氢键）。
+# 分子内/分子间统一：分子内时 idB 与给体组件同 id。氢由 [XH] 负责绘制。
+_HBOND_RE = re.compile(r"^(\d+)#(\d+)>([A-Za-z0-9_]+):(\d+)$")
 
 
-def _parse_inter_hbonds(annotations: dict) -> list:
-    """容器内跨组件氢键 spec → [(idA, from, idB, to), ...]。
+def _parse_hbond_specs(annotations: dict) -> list:
+    """容器内 HBOND spec（a#k>idB:b）→ [(idA, a, k, idB, b), ...]。
 
-    从各组件 anno["hbond"] 中提取含 ">" 的 spec（单组件 from-to 不在此）；
-    渲染时给体组件为 idA（spec 所在组件）、受体组件为 idB。
+    从各组件 anno["hbond"] 提取；给体组件为 idA（spec 所在组件）、受体
+    组件为 idB（分子内时同 id）。
     """
     out = []
     for ida, anno in annotations.items():
         for tok in (anno.get("hbond", "") or "").split(","):
             tok = tok.strip()
-            if not tok or ">" not in tok:
+            if not tok:
                 continue
-            m = _INTER_HBOND_RE.match(tok)
+            m = _HBOND_RE.match(tok)
             if m:
-                out.append((ida, int(m.group(1)), m.group(2),
-                            int(m.group(3))))
+                out.append((ida, int(m.group(1)), int(m.group(2)),
+                            m.group(3), int(m.group(4))))
     return out
 
 
@@ -475,38 +476,6 @@ def _molecule_with_annotations_lines(info: dict, *, show_numbers: bool,
             f"  \\node[font=\\small, red] at ({x:.2f},{y:.2f}) "
             f"{{{format_partial_charge(raw_label)}}};"
         )
-    for fi, ti in info["hbonds"]:
-        if fi >= mol.GetNumAtoms() or ti >= mol.GetNumAtoms():
-            continue
-        # X—H 实线（从标签边缘起笔，不压标签）+ H···Y 点状虚线
-        tx, ty = symbol_center(mol, ti, hs.get(ti, 0))
-        hx, hy = place_donor_h(mol, fi, (tx, ty))
-        sx, sy = label_edge_point(mol, fi, (hx, hy), labeler=labeler)
-        tx += info["shift"][0]
-        ty += info["shift"][1]
-        hx += info["shift"][0]
-        hy += info["shift"][1]
-        sx += info["shift"][0]
-        sy += info["shift"][1]
-        lines.append(f"  \\draw ({sx:.2f},{sy:.2f}) -- ({hx:.2f},{hy:.2f});")
-        lines.append(
-            f"  \\node[fill=white, inner sep=1pt] at ({hx:.2f},{hy:.2f}) {{H}};"
-        )
-        for dot_line in hbond_dots_tikz(hx, hy, tx, ty):
-            lines.append(f"  {dot_line}")
-        # 受体显式 H：朝向远离给体方向（避开氢键点线），标签已扣减
-        ax, ay = atom_pos(mol, ti)
-        ahx, ahy = place_explicit_hs(mol, ti, 1,
-                                     toward=(2 * ax - tx, 2 * ay - ty))[0]
-        asx, asy = label_edge_point(mol, ti, (ahx, ahy), labeler=labeler)
-        ahx += info["shift"][0]
-        ahy += info["shift"][1]
-        asx += info["shift"][0]
-        asy += info["shift"][1]
-        lines.append(f"  \\draw ({asx:.2f},{asy:.2f}) -- ({ahx:.2f},{ahy:.2f});")
-        lines.append(
-            f"  \\node[fill=white, inner sep=1pt] at ({ahx:.2f},{ahy:.2f}) {{H}};"
-        )
     # [XH] 显式氢：标签已按 explicit_hs 扣减，此处画出 X—H 实线 + H 节点
     xh_counts = {}
     for a in info["xh"]:
@@ -712,38 +681,28 @@ def render_composite(layout: str, children: list) -> str:
             return f"（COMPOSITE 渲染失败：无效 SMILES「{comp['smiles']}」（组件 {comp['id']}）"
         scale_mol_coords(mol, _MOL_SCALE)
         anno = annotations.get(comp["id"], {})
-        # 显式 H 对账：XH 子标记 + 氢键给体/受体，标签 H 计数自动扣减
+        # 显式 H 对账：仅 [XH] 子标记（氢的显示由 XH 负责，HBOND 只画点）
         explicit_hs = {}
         for a in anno.get("xh", []):
             explicit_hs[a] = explicit_hs.get(a, 0) + 1
-        for fi, _ in parse_hbond_pairs(anno.get("hbond", "")):
-            explicit_hs[fi] = explicit_hs.get(fi, 0) + 1
-        for _, ti in parse_hbond_pairs(anno.get("hbond", "")):
-            explicit_hs[ti] = explicit_hs.get(ti, 0) + 1
-        # 跨组件氢键（分子间）：给体原子 H 显式画出（受体不画 H，多为羰基 O）
-        for tok in (anno.get("hbond", "") or "").split(","):
-            m = _INTER_HBOND_RE.match(tok.strip())
-            if m:
-                explicit_hs[int(m.group(1))] = \
-                    explicit_hs.get(int(m.group(1)), 0) + 1
         mols[comp["id"]] = {
             "mol": mol,
             "label": comp["label"],
             "coeff": comp.get("coeff", 1.0),
             "shift": (0.0, 0.0),
             "charges": parse_charge_pairs(anno.get("charge", "")),
-            "hbonds": parse_hbond_pairs(anno.get("hbond", "")),
             "xh": anno.get("xh", []),
             "bonds": anno.get("bonds", []),
             "explicit_hs": explicit_hs,
         }
 
-    # 氢键场景构象调整（布局前）：给体与受体折到主链同一侧
-    for comp in structs:
-        mol = mols[comp["id"]]["mol"]
-        for fi, ti in mols[comp["id"]]["hbonds"]:
-            if fi < mol.GetNumAtoms() and ti < mol.GetNumAtoms():
-                adjust_hbond_conformation(mol, fi, ti)
+    # 氢键场景构象调整（布局前）：分子内氢键给体/受体折到主链同一侧
+    for ida, a, _k, idb, b in _parse_hbond_specs(annotations):
+        if ida != idb:
+            continue
+        mol = mols[ida]["mol"]
+        if a < mol.GetNumAtoms() and b < mol.GetNumAtoms():
+            adjust_hbond_conformation(mol, a, b)
 
     if layout_name == "energy":
         energy_child = next((c for c in children if c.type == "ENERGY"), None)
@@ -816,29 +775,24 @@ def render_composite(layout: str, children: list) -> str:
             mols[comp["id"]], show_numbers=show_numbers,
             show_lone_pairs=show_lone_pairs))
 
-    # 跨组件氢键（分子间）：全局坐标画给体 X—H 实线 + H···受体 Y 点状虚线。
-    # 给体 H 显式画出并朝向受体；受体不画显式 H（分子间受体多为羰基 O 等）。
-    for ida, fi, idb, ti in _parse_inter_hbonds(annotations):
+    # 氢键点状虚线（分子内/分子间统一）：H 位置取自 [XH] 画的显式 H
+    # （xh_points，MECHARROW a#k 同机制），受体为组件 idB 的原子 b——
+    # HBOND 只画 H···Y 点；X—H 实线与 H 节点由 [XH] 负责。
+    for ida, a, k, idb, b in _parse_hbond_specs(annotations):
         info_a, info_b = mols.get(ida), mols.get(idb)
         if info_a is None or info_b is None:
             continue
-        mol_a, sh_a = info_a["mol"], info_a["shift"]
+        pts = (info_a.get("xh_points") or {}).get(a) or []
+        if not (0 <= k - 1 < len(pts)):
+            continue  # 对应 XH 未画出（校验已拦截，渲染端兜底跳过）
         mol_b, sh_b = info_b["mol"], info_b["shift"]
-        if not (0 <= fi < mol_a.GetNumAtoms()
-                and 0 <= ti < mol_b.GetNumAtoms()):
+        if not 0 <= b < mol_b.GetNumAtoms():
             continue
-        # 受体全局坐标（place_donor_h 只取方位角，平移不变）
-        tx0, ty0 = symbol_center(mol_b, ti, 0)
+        hx0, hy0 = pts[k - 1]
+        hx = hx0 + info_a["shift"][0]
+        hy = hy0 + info_a["shift"][1]
+        tx0, ty0 = symbol_center(mol_b, b, 0)
         tx, ty = tx0 + sh_b[0], ty0 + sh_b[1]
-        # 给体 X—H：H 朝向受体，给体原子 H 扣减（显式画出）
-        lab_a = lambda a: atom_label(a, 1 if a.GetIdx() == fi else 0)
-        hx0, hy0 = place_donor_h(mol_a, fi, (tx, ty))
-        sx0, sy0 = label_edge_point(mol_a, fi, (hx0, hy0), labeler=lab_a)
-        hx, hy = hx0 + sh_a[0], hy0 + sh_a[1]
-        sx, sy = sx0 + sh_a[0], sy0 + sh_a[1]
-        lines.append(f"  \\draw ({sx:.2f},{sy:.2f}) -- ({hx:.2f},{hy:.2f});")
-        lines.append(
-            f"  \\node[fill=white, inner sep=1pt] at ({hx:.2f},{hy:.2f}) {{H}};")
         for dot_line in hbond_dots_tikz(hx, hy, tx, ty):
             lines.append(f"  {dot_line}")
 

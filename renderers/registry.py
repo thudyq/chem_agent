@@ -14,7 +14,6 @@ from .lewis import render_lewis
 from .energy import render_energy
 from .stereo import render_stereo
 from .charge import render_charge
-from .hbond import render_hbond
 from .retro import render_retro
 from .xh_bond import render_bond, render_xh
 from .chair import render_chair
@@ -29,7 +28,6 @@ RENDERER_REGISTRY = {
     "ENERGY": render_energy,
     "STEREO": render_stereo,
     "CHARGE": render_charge,
-    "HBOND": render_hbond,
     "RETRO": render_retro,
     "XH": render_xh,
     "BOND": render_bond,

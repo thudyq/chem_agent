@@ -548,102 +548,80 @@ def test_charge_annotation_child():
     assert px < sx and py > sy
 
 
-def test_hbond_annotation_child():
-    """R-2：HBOND 子标记——O—H 实线 + H 标签 + 3~10 个均匀 teal 点。"""
-    out = _render(
+def _hbond_render(extra=""):
+    """乙二醇分子内氢键（语义分离后）：[XH] 画给体 H + [HBOND] 只画点。"""
+    return _render(
         "[COMPOSITE:row]"
         "[STRUCT:OCCO,label=乙二醇,id=diol]"
-        "[HBOND:diol|0-3]"
-        "[/COMPOSITE]"
+        "[XH:diol|0]"
+        "[HBOND:diol:0#1>diol:3]"
+        + extra + "[/COMPOSITE]"
     )
-    # 供体 O—H 共价键用实线画出并带 H 标签（规范第 4 条）
-    assert re.search(r"\\node\[fill=white, inner sep=1pt\] at \([-\d.]+,[-\d.]+\) \{H\}", out)
+
+
+def test_hbond_annotation_child():
+    """HBOND（语义分离）：只画 3~10 个均匀 teal 点；X—H 实线与 H 节点由 [XH] 负责。"""
+    out = _hbond_render()
     dots = re.findall(r"\\fill\[teal\] \(([-\d.]+),([-\d.]+)\) circle", out)
     assert 3 <= len(dots) <= 10                 # 点数 3~10（不过密）
-    # 点间距一致（规范：全图点大小、点间距完全一致）
     dists = [math.hypot(float(dots[i+1][0]) - float(dots[i][0]),
                         float(dots[i+1][1]) - float(dots[i][1]))
              for i in range(len(dots) - 1)]
-    assert max(dists) - min(dists) < 0.02
+    assert max(dists) - min(dists) < 0.02       # 点间距一致
+    # 只有给体 H（[XH] 画），受体不画 H
+    h_nodes = re.findall(
+        r"\\node\[fill=white, inner sep=1pt\] at \([-\d.]+,[-\d.]+\) \{H\}", out)
+    assert len(h_nodes) == 1
 
 
 def test_hbond_donor_label_no_double_h():
-    """氢键给体与受体标签 H 计数 -1：显式 H 不与标签 H 重复（双 H bug 修复）。"""
-    out = _render(
-        "[COMPOSITE:row]"
-        "[STRUCT:OCCO,label=乙二醇,id=diol]"
-        "[HBOND:diol|0-3]"
-        "[/COMPOSITE]"
-    )
-    # 给体 O(0) 与受体 O(3) 的标签均应为 "O"（H 已显式画出），不是 "OH"
-    labels = re.findall(r"\\node\[fill=white, inner sep=1pt\] at \([-\d.]+,[-\d.]+\) \{(OH|O)\}", out)
-    assert labels.count("OH") == 0               # 无残留 OH 标签
-    assert labels.count("O") == 2                # 给体一个 O + 受体一个 O
-    # 两个显式 H 节点：给体 H（朝受体）+ 受体 H（远离给体）
-    h_nodes = re.findall(r"\\node\[fill=white, inner sep=1pt\] at \(([-\d.]+),([-\d.]+)\) \{H\}", out)
-    assert len(h_nodes) == 2
+    """给体标签 H 扣减（[XH] 显式画出后给体标签为 O 而非 OH）；受体未画 H 保持 OH。"""
+    out = _hbond_render()
+    labels = re.findall(
+        r"\\node\[fill=white, inner sep=1pt\] at \([-\d.]+,[-\d.]+\) \{(OH|O)\}", out)
+    assert "O" in labels                        # 给体 O（H 已由 XH 画出，不重复）
+    assert "OH" in labels                       # 受体 O 未画 H → OH 正常
+    h_nodes = re.findall(
+        r"\\node\[fill=white, inner sep=1pt\] at \([-\d.]+,[-\d.]+\) \{H\}", out)
+    assert len(h_nodes) == 1                    # 仅给体 H（XH 画）
 
 
-def test_hbond_acceptor_h_away_from_donor():
-    """受体羟基同样画成 -O-H：受体 H 朝向远离给体方向（避开氢键点线）。"""
-    import renderers.mol_primitives as mp
-    out = _render(
-        "[COMPOSITE:row]"
-        "[STRUCT:OCCO,label=乙二醇,id=diol]"
-        "[HBOND:diol|0-3]"
-        "[/COMPOSITE]"
-    )
-    mol = mp.prepare_mol("OCCO")
-    mp.scale_mol_coords(mol, 0.8)
-    mp.adjust_hbond_conformation(mol, 0, 3)
-    shift = re.search(
-        r"\\begin\{scope\}\[shift=\{\(([-\d.]+),([-\d.]+)\)\}\]", out)
-    sx, sy = float(shift.group(1)), float(shift.group(2))
-    ax, ay = mp.atom_pos(mol, 3)
-    dx, dy = mp.atom_pos(mol, 0)[0] - ax, mp.atom_pos(mol, 0)[1] - ay
-    # 受体 H 节点 = 离给体 O(0) 最远的 H 节点（给体 H 沿 O(0)→O(3) 方向，
-    # 键长化后可能比受体 H 更靠近 O(3)，不能再按"离 O(3) 最近"识别）
-    h_nodes = [(float(x), float(y)) for x, y in re.findall(
-        r"\\node\[fill=white, inner sep=1pt\] at \(([-\d.]+),([-\d.]+)\) \{H\}", out)]
-    assert len(h_nodes) == 2
-    ah = max(h_nodes, key=lambda p: math.hypot(
-        p[0] - sx - mp.atom_pos(mol, 0)[0], p[1] - sy - mp.atom_pos(mol, 0)[1]))
-    v = (ah[0] - sx - ax, ah[1] - sy - ay)
-    cos = (v[0] * -dx + v[1] * -dy) / (math.hypot(*v) * math.hypot(dx, dy) or 1.0)
-    assert cos > 0.5                      # 受体 H 指向远离给体的一侧
-    # O—H 键长 = 普通骨架键长（受体 O(3) 到其邻居 C(2) 的键长）
-    bx, by = mp.atom_pos(mol, 2)
-    assert abs(math.hypot(*v) - math.hypot(ax - bx, ay - by)) < 0.01
+def test_hbond_acceptor_no_h():
+    """受体不自动画 H——氢的显示统一由 [XH] 决定（语义分离）。"""
+    out = _hbond_render()
+    h_nodes = re.findall(
+        r"\\node\[fill=white, inner sep=1pt\] at \([-\d.]+,[-\d.]+\) \{H\}", out)
+    assert len(h_nodes) == 1
 
 
 def test_hbond_first_dot_inset_from_h():
     """氢键首点内缩：不落在给体 H 标签中心（起点沿 H→Y 外移 ≥0.15）。"""
-    out = _render(
-        "[COMPOSITE:row]"
-        "[STRUCT:OCCO,label=乙二醇,id=diol]"
-        "[HBOND:diol|0-3]"
-        "[/COMPOSITE]"
-    )
+    out = _hbond_render()
     h_nodes = [(float(x), float(y)) for x, y in re.findall(
         r"\\node\[fill=white, inner sep=1pt\] at \(([-\d.]+),([-\d.]+)\) \{H\}", out)]
     dots = re.findall(r"\\fill\[teal\] \(([-\d.]+),([-\d.]+)\) circle", out)
-    assert h_nodes and len(dots) >= 3
-    donor_h = min(h_nodes, key=lambda p: min(
-        math.hypot(p[0] - float(d[0]), p[1] - float(d[1])) for d in dots))
+    assert len(h_nodes) == 1 and len(dots) >= 3
+    donor_h = h_nodes[0]
     dists = sorted(math.hypot(donor_h[0] - float(d[0]), donor_h[1] - float(d[1]))
                    for d in dots)
     assert dists[0] >= 0.15              # 首点距 H 标签中心至少 0.15
 
 
+def test_hbond_requires_xh():
+    """语义分离强制：HBOND 引用 a#k 但未先 [XH] 画 H → 校验拦截。"""
+    from core.tag_validator import validate_tags
+    text = ("[COMPOSITE:row][STRUCT:OCCO,id=diol]"
+            "[HBOND:diol:0#1>diol:3][/COMPOSITE]")
+    tags = parse_tags(text)
+    _, invalid = validate_tags(tags)
+    assert len(invalid) == 1
+    assert "HBOND 给体端点" in invalid[0].reason
+    assert "XH" in invalid[0].reason
+
+
 def test_static_composite_no_lone_pairs():
     """静态键线式（XH/BOND/HBOND，无机理箭头）默认不画孤对电子点。"""
-    out = _render(
-        "[COMPOSITE:row]"
-        "[STRUCT:OCCO,label=乙二醇,id=diol]"
-        "[HBOND:diol|0-3]"
-        "[XH:diol|0]"
-        "[/COMPOSITE]"
-    )
+    out = _hbond_render()
     # 孤对电子点是裸 \fill；氢键点是 \fill[teal]，二者需区分
     assert "\\fill (" not in out and "\\fill  (" not in out
     assert out.count("\\fill[teal]") >= 3
@@ -989,7 +967,7 @@ def test_registry_dispatch_and_injection():
     assert out.endswith("以上。")
 
 
-# ---------- 跨组件（分子间）氢键 ----------
+# ---------- 氢键（分子内/分子间统一：XH 画氢、HBOND 只画点） ----------
 
 _INTER_HB_BASE = (
     "[COMPOSITE:row]"
@@ -998,18 +976,16 @@ _INTER_HB_BASE = (
 )
 
 
-def test_hbond_inter_parser_both_forms():
-    """跨组件 HBOND 两种写法（`id|from>idB:to` 与紧凑 `id:from>idB:to`）
-    解析结果一致：args = [给体组件 id, "from>idB:to"]。"""
-    for spec in ("[HBOND:a|3>b:2]", "[HBOND:a:3>b:2]"):
-        tags = parse_tags(_INTER_HB_BASE + spec + "[/COMPOSITE]")
-        comp = tags[0]
-        hbond = [c for c in comp.args[1] if c.type == "HBOND"][0]
-        assert hbond.args == ["a", "3>b:2"]
+def test_hbond_inter_parser():
+    """跨组件 HBOND 解析：args = [给体组件 id, "a#k>idB:b"]。"""
+    tags = parse_tags(_INTER_HB_BASE + "[HBOND:a:3#1>b:2][/COMPOSITE]")
+    comp = tags[0]
+    hbond = [c for c in comp.args[1] if c.type == "HBOND"][0]
+    assert hbond.args == ["a", "3#1>b:2"]
 
 
 def test_hbond_inter_validation():
-    """跨组件 HBOND 校验：合法通过；未知组件/越界/格式错拦截。"""
+    """跨组件 HBOND 校验：未画 XH 拦截（a#k 强制配对）；未知组件/越界/格式错拦截。"""
     from core.tag_validator import validate_tags
 
     def check(spec):
@@ -1017,35 +993,43 @@ def test_hbond_inter_validation():
         _, invalid = validate_tags(tags)
         return invalid
 
-    assert not check("[HBOND:a|3>b:2]")
-    r = check("[HBOND:a|3>ghost:2]")
+    r = check("[HBOND:a:3#1>b:2]")            # 无 [XH:a|3] → a#k 未配对
+    assert r and "给体端点" in r[0].reason and "XH" in r[0].reason
+    r = check("[XH:a|3][HBOND:a:3#1>ghost:2]")
     assert r and "引用未知组件" in r[0].reason
-    r = check("[HBOND:a|99>b:2]")
-    assert r and "超出组件 a" in r[0].reason
-    r = check("[HBOND:a|3>b:99]")
-    assert r and "超出组件 b" in r[0].reason
-    r = check("[HBOND:a|bad>]")
+    r = check("[XH:a|3][HBOND:a:99#1>b:2]")
+    assert r and "给体端点" in r[0].reason
+    r = check("[XH:a|3][HBOND:a:3#1>b:99]")
+    assert r and "受体原子编号" in r[0].reason
+    r = check("[HBOND:a:bad>b:2]")
     assert r and "标注格式错误" in r[0].reason
+    r = check("[XH:a|3][HBOND:a:3#1>b:2]")    # XH + HBOND 成对 → 通过
+    assert not r
 
 
 def test_hbond_inter_renders_dots():
-    """跨组件氢键渲染：给体 X—H 实线 + H 节点 + teal 点状虚线 + 两分子。"""
-    text = _INTER_HB_BASE + "[HBOND:a|3>b:2][/COMPOSITE]"
+    """跨组件氢键渲染：[XH] 画给体 H + teal 点状虚线 + 两分子（受体不画 H）。"""
+    from core.tag_validator import validate_tags
+    text = _INTER_HB_BASE + "[XH:a|3][HBOND:a:3#1>b:2][/COMPOSITE]"
     tags = parse_tags(text)
+    _, invalid = validate_tags(tags)
+    assert not invalid
     out = render_composite(*tags[0].args)
     assert out.startswith("\\begin{tikzpicture}")
-    assert "\\fill[teal]" in out          # H···Y 点状虚线（圆点）
-    assert out.count("\\fill[teal]") >= 3
-    assert out.count("{H}") == 1          # 给体显式 H（受体不画 H）
-    assert out.count("{乙酸}") == 2       # 两分子 label 都在
+    assert out.count("\\fill[teal]") >= 3     # H···Y 点状虚线（圆点）
+    assert out.count("{H}") == 1              # 给体 XH 画的 H（受体不画 H）
+    assert out.count("{乙酸}") == 2           # 两分子 label 都在
 
 
-def test_hbond_intra_unchanged():
-    """单组件（分子内）HBOND 行为不变：`id|from-to` 仍只画该组件内氢键。"""
+def test_hbond_intra_unified():
+    """分子内氢键同一套语法（同 id 写两次）：[XH] + [HBOND:g:0#1>g:3]。"""
+    from core.tag_validator import validate_tags
     text = ("[COMPOSITE:row][STRUCT:OCCO,id=g,label=乙二醇]"
-            "[HBOND:g|0-3][/COMPOSITE]")
+            "[XH:g|0][HBOND:g:0#1>g:3][/COMPOSITE]")
     tags = parse_tags(text)
+    _, invalid = validate_tags(tags)
+    assert not invalid
     out = render_composite(*tags[0].args)
     assert out.startswith("\\begin{tikzpicture}")
-    assert "\\fill[teal]" in out
-    assert out.count("{H}") == 2   # 给体 H + 受体显式 H（分子内受体有 H）
+    assert out.count("\\fill[teal]") >= 3
+    assert out.count("{H}") == 1              # 仅给体 H（受体不画 H）

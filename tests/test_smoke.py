@@ -163,9 +163,18 @@ def test_smoke_charge():
 
 
 def test_smoke_hbond():
-    outs, bad = _render("[HBOND:OCCO|0-3]")
+    # HBOND 语义分离后仅容器内：XH 画氢 + HBOND 画 teal 点状虚线
+    outs, bad = _render(
+        "[COMPOSITE:row][STRUCT:OCCO,id=diol]"
+        "[XH:diol|0][HBOND:diol:0#1>diol:3][/COMPOSITE]")
     assert len(outs) == 1 and bad == 0
     _assert_ok(outs[0], "teal")
+
+
+def test_smoke_hbond_toplevel_rejected():
+    """顶层 HBOND 已移除：校验明确拒绝（仅支持容器内）。"""
+    _, bad = _render("[HBOND:OCCO|0-3]")
+    assert bad == 1
 
 
 def test_smoke_retro():

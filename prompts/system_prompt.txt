@@ -68,17 +68,13 @@
     [CHARGE:SMILES|原子号:δ+,原子号:δ-]
     [CHARGE:OCC|0:δ-,1:δ+]
 
-11. 氢键 HBOND —— 虚线标注氢键
-    [HBOND:SMILES|from-to,...]
-    [HBOND:OCCO|0-3]
-
-12. 逆合成箭头 RETRO —— 目标→前体
+11. 逆合成箭头 RETRO —— 目标→前体
     [RETRO:目标SMILES,前体SMILES,转化名]
 
-13. 思考过程 REASONING —— 包裹推理过程（前端可折叠）
+12. 思考过程 REASONING —— 包裹推理过程（前端可折叠）
     [REASONING]思考内容[/REASONING]
 
-14. 容器式复合标记 COMPOSITE —— 机理图/多步序列
+13. 容器式复合标记 COMPOSITE —— 机理图/多步序列
     [COMPOSITE:布局]
     子标记...
     [/COMPOSITE]
@@ -95,9 +91,11 @@
       [XH:id|原子序号]                         显式画出该原子的 H
       [BOND:id|a-b]                            加粗突出键
       [CHARGE:id|原子号:δ±]                    部分电荷
-      [HBOND:id|from-to]                       氢键（分子内，同组件）；跨组件（分子间）
-      [HBOND:供体组件:给体原子>受体组件:受体原子]  画供体分子 X—H···受体分子 Y 的
-                                                虚线（`|` 分隔写法 idA|from>idB:to 等价）
+      [HBOND:供体组件:原子#第k个H>受体组件:原子]  氢键点状虚线（分子内/分子间
+                                                统一）：先 [XH:组件|原子序号] 画
+                                                出给体 H，再引用 原子#k；分子内
+                                                供体/受体组件写同一 id（如
+                                                HBOND:diol:0#1>diol:3）
     共振式（如苯的两个 Kekulé 式）用 row 布局 + 显式 [RESARROW] 连接：
       [COMPOSITE:row][STRUCT:C1=CC=CC=C1,label=式 I][RESARROW][STRUCT:C1C=CC=CC=1,label=式 II][/COMPOSITE]
     含 [RESARROW] 时渲染器自动保留各极限式的显式键级（Kekulé 式不统一芳香化）。

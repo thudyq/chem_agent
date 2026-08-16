@@ -820,41 +820,37 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
                         if not 0 <= i < n:
                             return False, f"CHARGE 原子编号 {i} 超出组件 {ref} 范围 0~{n - 1}"
             else:
-                # HBOND：单组件 from-to 与跨组件 from>idB:to 混合支持。
-                # 跨组件：给体组件为 ref（args[0]），受体组件为 idB。
-                idxs = []   # (组件, 原子) 待查范围
+                # HBOND（语义分离后）：仅 HBOND:idA:a#k>idB:b
+                # 给体 H 由 XH:idA|a 画出（a#k 强制配对，复用 MECHARROW 规则），
+                # 受体为 idB 组件的原子 b；分子内/分子间同一套逻辑。
                 found = 0
                 for tok in pairs.split(","):
                     tok = tok.strip()
                     if not tok:
                         continue
-                    m_i = re.fullmatch(r"(\d+)>([A-Za-z0-9_]+):(\d+)", tok)
-                    if m_i:
-                        fi, idb, ti = int(m_i.group(1)), m_i.group(2), \
-                            int(m_i.group(3))
-                        if idb not in comps:
-                            return False, f"HBOND 引用未知组件「{idb}」"
-                        idxs.append((ref, fi))
-                        idxs.append((idb, ti))
-                        found += 1
-                        continue
-                    m = re.fullmatch(r"(\d+)-(\d+)", tok)
-                    if m:
-                        fi, ti = int(m.group(1)), int(m.group(2))
-                        idxs.append((ref, fi))
-                        idxs.append((ref, ti))
-                        found += 1
-                        continue
-                    return False, (f"HBOND 标注格式错误「{tok}」"
-                                   f"（应为 from-to 或 from>组件id:to）")
+                    m = re.fullmatch(r"(\d+)#(\d+)>([A-Za-z0-9_]+):(\d+)", tok)
+                    if not m:
+                        return False, (f"HBOND 标注格式错误「{tok}」"
+                                       f"（应为 原子#第k个H>组件id:原子，如 0#1>w2:1）")
+                    a, k, idb, b = int(m.group(1)), int(m.group(2)), \
+                        m.group(3), int(m.group(4))
+                    if idb not in comps:
+                        return False, f"HBOND 引用未知组件「{idb}」"
+                    found += 1
+                    if _RDKIT_OK:
+                        # 给体 H 端点 a#k：必须先写 XH:idA|a（a#k 与 XH 成对）
+                        reason = _validate_mech_arrow_pt(
+                            f"{a}#{k}", atom_counts.get(ref, 0),
+                            xh_count.get(ref), comp_mols.get(ref))
+                        if reason:
+                            return False, f"HBOND 给体端点「{ref}:{a}#{k}」{reason}"
+                        # 受体原子范围
+                        nb = atom_counts.get(idb, 0)
+                        if not 0 <= b < nb:
+                            return False, (f"HBOND 受体原子编号 {b} 超出组件 "
+                                           f"{idb} 范围 0~{nb - 1}")
                 if not found:
-                    return False, f"HBOND 标注格式错误「{pairs}」（应为 from-to 列表）"
-                if _RDKIT_OK:
-                    for ref2, i in idxs:
-                        n = atom_counts.get(ref2, 0)
-                        if not 0 <= i < n:
-                            return False, (f"HBOND 原子编号 {i} 超出组件 "
-                                           f"{ref2} 范围 0~{n - 1}")
+                    return False, f"HBOND 标注格式错误「{pairs}」（应为 a#k>idB:b 列表）"
         elif ctype == "XH" and len(child.args) >= 2:
             ref = child.args[0].strip()
             if ref not in comps:
@@ -907,6 +903,13 @@ def validate_tag(tag: RenderTag) -> ValidationResult:
         ok, reason = _validate_composite(args[0], args[1]) if len(args) >= 2 \
             else (False, "COMPOSITE 缺少容器参数")
         return ValidationResult(tag, ok, reason)
+    if ttype == "HBOND":
+        # 顶层 HBOND 已移除（2026-08-15 语义分离）：氢由 [XH] 画、HBOND 只画
+        # 点状虚线，且仅支持容器内 HBOND:idA:a#k>idB:b
+        return ValidationResult(
+            tag, False,
+            "HBOND 仅支持容器内使用（格式：供体组件:原子#第k个H>受体组件:原子），"
+            "氢原子请先用 XH 画出")
     if ttype == "ENERGY":
         ok, reason = _validate_energy(args)
         return ValidationResult(tag, ok, reason)

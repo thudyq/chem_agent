@@ -47,7 +47,7 @@ _DEMO_MODULES = [
     "renderers.structure", "renderers.arrow", "renderers.reaction",
     "renderers.composite", "renderers.energy", "renderers.newman",
     "renderers.lewis", "renderers.stereo", "renderers.charge",
-    "renderers.hbond", "renderers.retro", "renderers.layout",
+    "renderers.retro", "renderers.layout",
     "core.tag_parser", "core.tag_validator",
 ]
 
