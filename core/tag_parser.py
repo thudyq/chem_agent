@@ -174,8 +174,9 @@ def _parse_content(tag_type: str, content: str) -> list:
             label = content[lab_start:min(after)] if after else content[lab_start:]
         # LLM 偶发写出尾逗号（如 [STRUCT:CC[OH2+],]），归一化去掉
         return [smi.strip().rstrip(","), label]
-    if tag_type == "STEREO":
-        # 支持可选 ,label=名称（与 STRUCT 同构；LLM 高频误加的写法，契约化）
+    if tag_type in ("STEREO", "LEWIS"):
+        # 支持可选 ,label=名称（与 STRUCT 同构；LLM 高频误加的写法，契约化。
+        # LEWIS 为同款扩展——Drawbacks B 节第 2 条记录的原契约缺口）
         smi, label = content, None
         li = content.find(",label=")
         if li != -1:

@@ -11,12 +11,15 @@
 
 from .mol_primitives import (
     atom_main_label, atom_pos, bond_segments, charge_tikz, label_bond_margin,
-    lone_pair_tikz, prepare_mol,
+    lone_pair_tikz, mol_visual_bbox, prepare_mol, wrap_format_text,
 )
 
 
-def render_lewis(smiles: str) -> str:
-    """[LEWIS] 渲染：SMILES → 含孤对电子的 Lewis 结构式 TikZ。失败返回错误提示。"""
+def render_lewis(smiles: str, label: str = None) -> str:
+    """[LEWIS] 渲染：SMILES → 含孤对电子的 Lewis 结构式 TikZ。失败返回错误提示。
+
+    label 可选：置于结构下方（如 水、H₂O——中文/化学式名称）。
+    """
     try:
         from rdkit import Chem
     except ImportError:
@@ -51,6 +54,16 @@ def render_lewis(smiles: str) -> str:
     for atom in mol.GetAtoms():
         for dot_line in lone_pair_tikz(mol, atom.GetIdx()):
             lines.append(f"  {dot_line}")
+
+    if label:
+        # label 置于结构正下方（含孤对电子点外延——底部有电子点时 label 不压点）
+        min_x, min_y, max_x, _ = mol_visual_bbox(mol, include_lone_pairs=True)
+        text = wrap_format_text(label)
+        align = "align=center, " if "\\\\" in text else ""
+        lines.append(
+            f"  \\node[{align}below] at ({(min_x + max_x) / 2.0:.2f},{min_y - 0.15:.2f}) "
+            f"{{{text}}};"
+        )
 
     lines.append("\\end{tikzpicture}")
     return "\n".join(lines)

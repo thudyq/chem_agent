@@ -43,7 +43,7 @@
    [ENERGY:0,108,-20]
 
 5. Lewis 结构式 LEWIS —— 含孤对电子的完整电子式
-   [LEWIS:SMILES]
+   [LEWIS:SMILES] 或 [LEWIS:SMILES,label=名称]
    [LEWIS:O]
 
 6. 楔形式 STEREO —— 含手性中心的立体结构
