@@ -59,6 +59,16 @@ def test_stereo_with_label():
     assert t.args[1] == "(R)-乳酸"
 
 
+def test_lewis_with_label():
+    """LEWIS 支持可选 ,label=名称（与 STEREO 同款扩展，Drawbacks B 节第 2 条）。"""
+    tags = parse_tags("[LEWIS:O,label=水]")
+    assert len(tags) == 1
+    t = tags[0]
+    assert t.type == "LEWIS"
+    assert t.args[0] == "O"
+    assert t.args[1] == "水"
+
+
 def test_composite_prose_mention_not_swallowed():
     """正文文字提及 [COMPOSITE:...]（如"用 [COMPOSITE:row] 展示"）时不应
     与后面的真容器贪婪配对——真容器必须正常解析，不被幻影容器吞掉。"""

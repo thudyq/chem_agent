@@ -156,6 +156,12 @@ def test_smoke_lewis():
     _assert_ok(outs[0], "\\fill")
 
 
+def test_smoke_lewis_with_label():
+    outs, bad = _render("[LEWIS:O,label=水]")
+    assert len(outs) == 1 and bad == 0
+    _assert_ok(outs[0], "\\node[below]")
+
+
 def test_smoke_charge():
     outs, bad = _render("[CHARGE:OCC|0:δ-,1:δ+]")
     assert len(outs) == 1 and bad == 0
