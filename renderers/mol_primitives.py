@@ -469,6 +469,25 @@ def label_edge_point(mol, idx: int, toward: tuple[float, float], *,
     return x + ux * m, y + uy * m
 
 
+def h_label_edge_point(hx: float, hy: float, toward: tuple[float, float],
+                       margin_fn=label_bond_margin) -> tuple[float, float]:
+    """显式 H 节点指向原子方向的标签边缘点（X—H 键 H 端留白）。
+
+    与原子端 label_edge_point 同一留白口径：H 节点是几何放置的伪标签
+    （单字符 "H"，label_bond_margin("H")=0.30），X—H 键线终点停在 H
+    标签占位之外，不再画到 H 中心靠 fill=white 遮盖。假骨架水/氨的
+    X—H 已用此口径（composite._pseudo_hbond_lines 的 gap_h），普通
+    [XH]（顶层与容器内）补齐——三处绘制统一。
+    toward 为原子 idx 的坐标（X 端）；返回从 H 向 X 收缩 margin 的点。
+    """
+    tx, ty = toward
+    dx, dy = hx - tx, hy - ty
+    L = math.hypot(dx, dy) or 1.0
+    ux, uy = dx / L, dy / L
+    m = margin_fn("H")
+    return hx - ux * m, hy - uy * m
+
+
 def hbond_dots_tikz(fx: float, fy: float, tx: float, ty: float, *,
                     spacing: float = 0.3, radius: float = 0.028,
                     inset_start: float = 0.18, inset_end: float = 0.25,

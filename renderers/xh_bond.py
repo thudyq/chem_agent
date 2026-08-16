@@ -18,7 +18,7 @@
 from .collide import Occupancy
 from .mol_primitives import (
     atom_label, atom_pos, bond_segments, bond_segments_for, charge_tikz,
-    label_bond_margin, label_edge_point, label_visual_width,
+    h_label_edge_point, label_bond_margin, label_edge_point, label_visual_width,
     place_explicit_hs, place_h_avoiding, prepare_mol,
 )
 
@@ -67,12 +67,15 @@ def _draw_annotated_mol(smiles: str, spec: str, kind: str) -> str:
         if charge:
             lines.append(f"  {charge}")
 
-    # XH：实线（标签边缘起笔，不压标签）+ H 节点（撞键/标签时旋转避障）
+    # XH：实线（两端都按标签留白，不压标签）+ H 节点（撞键/标签时旋转避障）
     for a, count in xh_counts.items():
         for hx, hy in place_explicit_hs(mol, a, count):
             hx, hy = place_h_avoiding(mol, a, (hx, hy), occ)
             sx, sy = label_edge_point(mol, a, (hx, hy), labeler=labeler)
-            lines.append(f"  \\draw ({sx:.2f},{sy:.2f}) -- ({hx:.2f},{hy:.2f});")
+            # H 端同规则留白（label_bond_margin("H")=0.30）：键线终点停在
+            # H 节点占位之外，不画到 H 中心靠 fill=white 遮盖（与假骨架水/氨一致）
+            ex, ey = h_label_edge_point(hx, hy, atom_pos(mol, a))
+            lines.append(f"  \\draw ({sx:.2f},{sy:.2f}) -- ({ex:.2f},{ey:.2f});")
             lines.append(
                 f"  \\node[fill=white, inner sep=1pt] at ({hx:.2f},{hy:.2f}) {{H}};")
 

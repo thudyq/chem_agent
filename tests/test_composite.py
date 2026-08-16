@@ -640,13 +640,26 @@ def test_xh_explicit_hydrogen():
     assert "{CH}" not in out
     # 显式 H 节点存在（实线 + H 标签）
     assert re.search(r"\\node\[fill=white, inner sep=1pt\] at \([-\d.]+,[-\d.]+\) \{H\}", out)
-    # X—H 实线从 α-碳原子中心起笔（无标签无留白），落在 H 节点上
+    # X—H 实线：起点 = α-碳原子中心（键线式无标签无留白）；
+    # 终点 = H 节点向 α-碳方向收缩 label_bond_margin("H")=0.30
+    # （H 端与原子端同一标签留白规则，不再画到 H 中心靠 fill=white 遮盖）
     h_node = re.search(r"\\node\[fill=white, inner sep=1pt\] at \(([-\d.]+),([-\d.]+)\) \{H\}", out)
     assert h_node is not None
-    # 找出终点与 H 节点重合的 \draw（X—H 实线；骨架键不与该 H 节点重合）
-    xh_end = f"({float(h_node.group(1)):.2f},{float(h_node.group(2)):.2f})"
-    xh_line = re.search(r"\\draw \(([-\d.]+),([-\d.]+)\) -- " + re.escape(xh_end) + ";", out)
+    import renderers.mol_primitives as mp
+    mol = mp.prepare_mol("CCC=O")
+    mp.scale_mol_coords(mol, 0.8)
+    shift = re.search(
+        r"\\begin\{scope\}\[shift=\{\(([-\d.]+),([-\d.]+)\)\}\]", out)
+    sx, sy = float(shift.group(1)), float(shift.group(2))
+    ax, ay = mp.atom_pos(mol, 1)
+    ex, ey = mp.h_label_edge_point(
+        float(h_node.group(1)), float(h_node.group(2)), (ax + sx, ay + sy))
+    xh_end = f"({ex:.2f},{ey:.2f})"
+    xh_line = re.search(
+        r"\\draw \(([-\d.]+),([-\d.]+)\) -- " + re.escape(xh_end) + ";", out)
     assert xh_line is not None
+    x1, y1 = float(xh_line.group(1)), float(xh_line.group(2))
+    assert abs(x1 - (ax + sx)) < 0.02 and abs(y1 - (ay + sy)) < 0.02  # 起点 = α-碳中心
 
 
 def test_xh_stacking_multiple():

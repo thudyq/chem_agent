@@ -10,8 +10,8 @@
 """
 
 from .mol_primitives import (
-    atom_main_label, atom_pos, bond_segments, charge_tikz, lone_pair_tikz,
-    prepare_mol,
+    atom_main_label, atom_pos, bond_segments, charge_tikz, label_bond_margin,
+    lone_pair_tikz, prepare_mol,
 )
 
 
@@ -28,8 +28,12 @@ def render_lewis(smiles: str) -> str:
 
     lines = ["\\begin{tikzpicture}"]
 
-    # 键（Lewis 使用更大的标签边距和键间距）
-    for segs in bond_segments(mol, label_margin=0.30, bond_gap=0.09):
+    # 键：与标签绘制端同一 labeler（atom_main_label）计算留白——否则键线式
+    # 口径（atom_label）对非环碳返回 None → 碳标签 "C" 无留白、键线从标签
+    # 中心穿出；留白按 label_bond_margin 分档（单字符 0.30），Lewis 标签
+    # 基本为单/双字符，数值与原固定 0.30 一致（碳标签是新获得留白者）。
+    for segs in bond_segments(mol, labeler=atom_main_label,
+                              margin_fn=label_bond_margin, bond_gap=0.09):
         for x1, y1, x2, y2 in segs:
             lines.append(f"  \\draw ({x1:.2f},{y1:.2f}) -- ({x2:.2f},{y2:.2f});")
 

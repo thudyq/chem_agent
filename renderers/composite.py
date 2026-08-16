@@ -72,7 +72,7 @@ if __name__ == "__main__":
         hbond_dots_tikz, mech_arrow_between, mech_arrow_origin,
         mol_visual_bbox, mol_visual_bbox_xh, parse_charge_pairs, parse_hbond_pairs, atom_label,
         atom_main_label, bond_segments, bond_segments_for, label_bond_margin,
-        label_edge_point, prepare_mol, rotate_mol_coords, scale_mol_coords,
+        label_edge_point, h_label_edge_point, prepare_mol, rotate_mol_coords, scale_mol_coords,
         symbol_center,
         atom_pos, place_donor_h, place_explicit_hs, place_h_avoiding,
         adjust_hbond_conformation, lone_pair_angles, _ang_diff,
@@ -93,7 +93,7 @@ else:
         hbond_dots_tikz, mech_arrow_between, mech_arrow_origin,
         mol_visual_bbox, mol_visual_bbox_xh, parse_charge_pairs, parse_hbond_pairs, atom_label,
         atom_main_label, bond_segments, bond_segments_for, label_bond_margin,
-        label_edge_point, prepare_mol, rotate_mol_coords, scale_mol_coords,
+        label_edge_point, h_label_edge_point, prepare_mol, rotate_mol_coords, scale_mol_coords,
         symbol_center,
         atom_pos, place_donor_h, place_explicit_hs, place_h_avoiding,
         adjust_hbond_conformation, lone_pair_angles, _ang_diff,
@@ -598,11 +598,16 @@ def _molecule_with_annotations_lines(info: dict, *, show_numbers: bool,
             # R-8 避障：规则位置撞键/标签/电荷圈/电子点时绕原子旋转取候选
             hx, hy = place_h_avoiding(mol, a, (hx, hy), occ)
             sx, sy = label_edge_point(mol, a, (hx, hy), labeler=labeler)
+            # H 端同规则留白（label_bond_margin("H")=0.30）：键线终点停在
+            # H 节点占位之外，不画到 H 中心（与假骨架水/氨一致）
+            ex, ey = h_label_edge_point(hx, hy, atom_pos(mol, a))
             hx += info["shift"][0]
             hy += info["shift"][1]
             sx += info["shift"][0]
             sy += info["shift"][1]
-            lines.append(f"  \\draw ({sx:.2f},{sy:.2f}) -- ({hx:.2f},{hy:.2f});")
+            ex += info["shift"][0]
+            ey += info["shift"][1]
+            lines.append(f"  \\draw ({sx:.2f},{sy:.2f}) -- ({ex:.2f},{ey:.2f});")
             lines.append(
                 f"  \\node[fill=white, inner sep=1pt] at ({hx:.2f},{hy:.2f}) {{H}};"
             )
