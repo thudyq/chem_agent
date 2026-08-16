@@ -243,19 +243,32 @@ def draw_mech_arrows(mols: dict, arrows: list,
                       or "#" in src_pt)
         inset_start = (_ARROW_POINT_GAP if bond_break
                        else (0.0 if (p0[2] or p0[3] or p0[4]) else 0.15))
-        # aim_end 只对纯原子终点生效：吸附到元素标签边缘并退让。
-        # "a#k" 终点是 H 节点本身（不是元素标签），不触发标签退让。
-        aim_end = ("-" not in dst_pt and "#" not in dst_pt and p1[4])
-        # p1[4]（on_label）：目标端已吸附到标签（碳与杂原子统一）。
-        # aim_end 让 mech_arrow_tikz 沿末端切线退让到标签外、切线指向元素符号。
+        # aim_end（末端沿切线退让到标签正方形外 0.05）：纯原子终点（元素标签）
+        # 与 a#k 终点（H 节点标签）都启用——H 节点在渲染中同为 \node{H}
+        # （fill=white, inner sep=1pt），占位约边长 0.26（_LABEL_SQUARE_HALF=0.13），
+        # 箭头尖端沿切线退到正方形边缘外 _MECH_LABEL_GAP（20260815：
+        # 原 a#k 只沿箭头方向内缩 0.05，斜向入射仍压 H 占位）。
         tb = None
-        if aim_end:
-            da = dm["mol"].GetAtomWithIdx(int(dst_pt))
-            ax, ay = symbol_center(dm["mol"], int(dst_pt))
-            # 末端退让基于"标签所占位置"正方形（中心=符号中心、边长 0.26），
-            # 由 mech_arrow_tikz 沿切线退到正方形边缘外 inset_end(_MECH_LABEL_GAP)。
-            tb = (ax + dm["shift"][0], ay + dm["shift"][1],
-                  _LABEL_SQUARE_HALF, _LABEL_SQUARE_HALF)
+        aim_end = False
+        if p1[4] and "-" not in dst_pt:
+            if "#" in dst_pt:
+                a_id, _, k_s = dst_pt.partition("#")
+                try:
+                    ia, ik = int(a_id), int(k_s)
+                except ValueError:
+                    ia, ik = -1, -1
+                pts = dm.get("xh_points", {}).get(ia)
+                if pts and 1 <= ik <= len(pts):
+                    hx, hy = pts[ik - 1]
+                    tb = (hx + dm["shift"][0], hy + dm["shift"][1],
+                          _LABEL_SQUARE_HALF, _LABEL_SQUARE_HALF)
+                    aim_end = True
+            else:
+                da = dm["mol"].GetAtomWithIdx(int(dst_pt))
+                ax, ay = symbol_center(dm["mol"], int(dst_pt))
+                tb = (ax + dm["shift"][0], ay + dm["shift"][1],
+                      _LABEL_SQUARE_HALF, _LABEL_SQUARE_HALF)
+                aim_end = True
         inset_end = (_MECH_LABEL_GAP if aim_end
                      else (0.0 if p1[4] else 0.10))
         lines.extend(
