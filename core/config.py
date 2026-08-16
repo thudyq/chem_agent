@@ -150,6 +150,22 @@ class VisionConfig:
 
 
 @dataclass(frozen=True)
+class ChemVisionConfig:
+    """化学视觉管线（utils/chem_vision.py）配置。
+
+    python_path: MolScribe/RxnScribe 所在 Python 解释器（环境变量
+        CHEM_VISION_PYTHON，如 conda my-rdkit-env 的 python.exe）——
+        精确结构/反应识别走独立环境 subprocess，主 venv 零污染；
+        未配置或不可用时自动回退视觉 LLM 通用描述。
+    """
+
+    python_path: str = field(default_factory=lambda: _get_str("CHEM_VISION_PYTHON"))
+    # 单次 subprocess 识别的最长等待（MolScribe/RxnScribe 首次加载模型慢）
+    molscribe_timeout: int = 120
+    rxnscribe_timeout: int = 120
+
+
+@dataclass(frozen=True)
 class CompToxConfig:
     """EPA CompTox API 配置。"""
 
@@ -203,6 +219,7 @@ class Settings:
 
     llm: LLMConfig = field(default_factory=LLMConfig)
     vision: VisionConfig = field(default_factory=VisionConfig)
+    chem_vision: ChemVisionConfig = field(default_factory=ChemVisionConfig)
     comptox: CompToxConfig = field(default_factory=CompToxConfig)
     service: ServiceConfig = field(default_factory=ServiceConfig)
     prompt: PromptConfig = field(default_factory=PromptConfig)
