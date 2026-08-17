@@ -76,17 +76,32 @@ def test_env_python(monkeypatch):
     assert p is None or isinstance(p, str)
 
 
+class _FakeWorker:
+    """MolScribe 常驻 worker 替身。"""
+
+    def __init__(self, results):
+        self._results = list(results)
+        self.calls = 0
+
+    def predict(self, *a, **k):
+        self.calls += 1
+        if not self._results:
+            return None
+        return self._results.pop(0)
+
+
 def test_predict_molscribe(monkeypatch):
-    """MolScribe subprocess 输出解析；权重缺失/失败/不可用返回 None。"""
+    """MolScribe 经常驻 worker：结果解析；权重缺失/失败/不可用返回 None。"""
     monkeypatch.setattr(cv, "_molscribe_model_path",
-                        lambda: "C:/models/molscribe.pth")
-    monkeypatch.setattr(cv, "_run_python", lambda *a, **k: '{"smiles": "c1ccccc1"}')
+                        lambda: "C:/models/swin_base_char_aux_1m.pth")
+    w = _FakeWorker(["c1ccccc1"])
+    monkeypatch.setattr(cv.MolScribeWorker, "get", lambda: w)
     assert cv.predict_molscribe("x.png") == "c1ccccc1"
-    monkeypatch.setattr(cv, "_run_python", lambda *a, **k: None)
+    # worker 返回 None（识别失败/超时）
+    w2 = _FakeWorker([None])
+    monkeypatch.setattr(cv.MolScribeWorker, "get", lambda: w2)
     assert cv.predict_molscribe("x.png") is None
-    monkeypatch.setattr(cv, "_run_python", lambda *a, **k: "not json")
-    assert cv.predict_molscribe("x.png") is None
-    # 权重未配置（探测不到）→ None
+    # 权重未配置（探测不到）→ 不启动 worker
     monkeypatch.setattr(cv, "_molscribe_model_path", lambda: None)
     assert cv.predict_molscribe("x.png") is None
 
@@ -117,9 +132,9 @@ def test_process_image_routing(monkeypatch, tmp_workdir):
 
     # 识别可用：结构式走 MolScribe → SMILES
     monkeypatch.setattr(cv, "_molscribe_model_path",
-                        lambda: "C:/models/molscribe.pth")
-    monkeypatch.setattr(cv, "_run_python",
-                        lambda *a, **k: '{"smiles": "c1ccccc1"}')
+                        lambda: "C:/models/swin_base_char_aux_1m.pth")
+    monkeypatch.setattr(cv.MolScribeWorker, "get",
+                        lambda: _FakeWorker(["c1ccccc1", "CCO", "O=C(O)O"]))
     res2 = cv.process_image(str(p), tmpdir=str(tmp_workdir / "tmp2"))
     s = next(b for b in res2["blocks"] if b["type"] == "结构式")
     assert "c1ccccc1" in s["text"]

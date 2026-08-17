@@ -19,12 +19,14 @@ my-rdkit-env）subprocess 调用——主 venv 零污染；未配置/超时/失�
     # → {"blocks": [{"type": "结构式", "text": "c1ccccc1", "bbox_px": [...]}, ...]}
 """
 
+import atexit
 import base64
 import json
 import os
 import re
 import subprocess
 import sys
+import threading
 from io import BytesIO
 from pathlib import Path
 
@@ -183,37 +185,190 @@ def _molscribe_model_path() -> str | None:
     return None
 
 
-def _molscribe_code() -> str:
-    """MolScribe subprocess 脚本：model_path 必须显式传入（接口要求）。"""
+def _ascii_copy(image_path: str) -> str:
+    """中文/非 ASCII 路径 → 复制到 ASCII 临时文件（MolScribe 的 OpenCV
+    imread 在 Windows 上读不了非 ASCII 路径）。返回临时路径。"""
+    p = str(image_path)
+    if all(ord(c) < 128 for c in p):
+        return p
+    import tempfile
+    fd, tmp = tempfile.mkstemp(suffix=Path(p).suffix or ".png")
+    os.close(fd)
+    try:
+        import shutil
+        shutil.copyfile(p, tmp)
+    except Exception:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return p
+    return tmp
+
+
+_WORKER_CODE = (
+    "import sys, json\n"
+    "from molscribe import MolScribe\n"
+    "m = MolScribe(model_path={mp!r})\n"
+    "print(json.dumps({{'ready': True}}), flush=True)\n"
+    "for line in sys.stdin:\n"
+    "    line = line.strip()\n"
+    "    if not line:\n"
+    "        continue\n"
+    "    try:\n"
+    "        req = json.loads(line)\n"
+    "        res = m.predict_image_file(req['img'])\n"
+    "        smi = res.get('smiles') if isinstance(res, dict) else res\n"
+    "        print(json.dumps({{'id': req.get('id'), 'smiles': smi}}), flush=True)\n"
+    "    except Exception as e:\n"
+    "        print(json.dumps({{'id': req.get('id'), 'error': str(e)}}), flush=True)\n"
+)
+
+
+def _worker_code() -> str:
+    """常驻 worker 脚本：加载 MolScribe 一次，stdin/stdout 行协议逐张识别。
+
+    协议：主进程写 {"id": n, "img": path} 一行；worker 回
+    {"id": n, "smiles": ...} 或 {"id": n, "error": ...}。
+    """
     mp = _molscribe_model_path()
     if not mp:
         return ""
-    return (
-        "import sys, json\n"
-        "from molscribe import MolScribe\n"
-        f"m = MolScribe(model_path={mp!r})\n"
-        "smi = m.predict_image_file(sys.argv[1])\n"
-        "print(json.dumps({'smiles': smi}))\n"
-    )
+    return _WORKER_CODE.format(mp=mp)
+
+
+class MolScribeWorker:
+    """MolScribe 常驻子进程（一次加载模型，多张图复用，避免每张 30s 加载）。
+
+    行协议 stdin/stdout JSON；读线程持续收响应；单请求超时返回 None
+    （worker 卡住不重启——下一条仍可处理；进程崩溃则下次自动重启）。
+    """
+
+    _instance = None
+    _inst_lock = threading.Lock()
+
+    def __init__(self):
+        self._proc = None
+        self._reader = None
+        self._ready = threading.Event()
+        self._lock = threading.Lock()      # 保护 stdin 写入与 id 分配
+        self._pending = {}                 # id -> (Event, slot dict)
+        self._next_id = 0
+        self._shutdown = False
+        atexit.register(self.close)
+
+    @classmethod
+    def get(cls) -> "MolScribeWorker":
+        with cls._inst_lock:
+            if cls._instance is None:
+                cls._instance = cls()
+            return cls._instance
+
+    def _read_loop(self):
+        try:
+            for line in self._proc.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    msg = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if msg.get("ready"):
+                    self._ready.set()
+                    continue
+                rid = msg.get("id")
+                if rid is None:
+                    continue
+                with self._lock:
+                    ev, slot = self._pending.pop(rid, (None, None))
+                if ev is not None:
+                    slot["msg"] = msg
+                    ev.set()
+        except Exception:
+            pass
+
+    def _ensure_started(self) -> bool:
+        if self._shutdown:
+            return False
+        if self._proc is not None and self._proc.poll() is None:
+            return True
+        code = _worker_code()
+        py = _env_python()
+        if not code or not py:
+            return False
+        try:
+            self._proc = subprocess.Popen(
+                [py, "-c", code],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL, text=True,
+                encoding="utf-8", errors="replace", bufsize=1)
+        except OSError:
+            self._proc = None
+            return False
+        self._ready.clear()
+        self._reader = threading.Thread(target=self._read_loop, daemon=True)
+        self._reader.start()
+        # 等待模型加载完成（首次 ~30s）
+        if not self._ready.wait(timeout=90):
+            return False
+        return True
+
+    def predict(self, image_path: str, timeout: float = 30.0) -> str | None:
+        """单张识别：发请求等响应；超时/崩溃/错误返回 None。"""
+        if not self._ensure_started():
+            return None
+        with self._lock:
+            self._next_id += 1
+            rid = self._next_id
+            ev = threading.Event()
+            slot: dict = {}
+            self._pending[rid] = (ev, slot)
+            try:
+                self._proc.stdin.write(
+                    json.dumps({"id": rid, "img": str(image_path)}) + "\n")
+                self._proc.stdin.flush()
+            except (BrokenPipeError, OSError, ValueError):
+                self._pending.pop(rid, None)
+                self._proc = None
+                return None
+        if not ev.wait(timeout):
+            with self._lock:
+                self._pending.pop(rid, None)
+            return None
+        msg = slot.get("msg", {})
+        if not msg or "error" in msg:
+            return None
+        smi = msg.get("smiles")
+        return str(smi).strip() or None if smi else None
+
+    def close(self):
+        self._shutdown = True
+        if self._proc is not None and self._proc.poll() is None:
+            try:
+                self._proc.terminate()
+            except OSError:
+                pass
+        self._proc = None
 
 
 def predict_molscribe(image_path: str) -> str | None:
-    """MolScribe 单分子识别 → SMILES；失败/不可用返回 None。"""
-    code = _molscribe_code()
-    if not code:
+    """MolScribe 单分子识别 → SMILES（常驻 worker，一次加载多张复用）。
+
+    失败/超时/不可用返回 None——调用方回退视觉 LLM 描述。
+    """
+    if not _molscribe_model_path():
         return None
-    out = _run_python(code, image_path,
-                      settings.chem_vision.molscribe_timeout)
-    if not out:
-        return None
+    ascii_path = _ascii_copy(image_path)
     try:
-        d = json.loads(out)
-    except json.JSONDecodeError:
-        return None
-    smi = d.get("smiles") if isinstance(d, dict) else None
-    if not smi:
-        return None
-    return str(smi).strip() or None
+        return MolScribeWorker.get().predict(
+            ascii_path, timeout=settings.chem_vision.molscribe_timeout)
+    finally:
+        if ascii_path != image_path:
+            try:
+                os.remove(ascii_path)
+            except OSError:
+                pass
 
 _RXNSCRIBE_CODE = (
     "import sys, json\n"
