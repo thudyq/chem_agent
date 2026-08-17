@@ -77,7 +77,7 @@ if __name__ == "__main__":
         atom_pos, place_donor_h, place_explicit_hs, place_h_avoiding,
         adjust_hbond_conformation, lone_pair_angles, _ang_diff,
         _covalent_bond_len,
-        partial_charge_pos, split_arrow_condition, split_species_coeff, wrap_format_text,
+        partial_charge_pos, main_arrow_lines, split_species_coeff, wrap_format_text,
         is_formula_label, heavy_atom_count,
     )
     from renderers.layout import (
@@ -98,7 +98,7 @@ else:
         atom_pos, place_donor_h, place_explicit_hs, place_h_avoiding,
         adjust_hbond_conformation, lone_pair_angles, _ang_diff,
         _covalent_bond_len,
-        partial_charge_pos, split_arrow_condition, split_species_coeff, wrap_format_text,
+        partial_charge_pos, main_arrow_lines, split_species_coeff, wrap_format_text,
         is_formula_label, heavy_atom_count,
     )
     from .layout import (
@@ -1017,19 +1017,9 @@ def render_composite(layout: str, children: list) -> str:
         lines.append(f"  \\node[font=\\large] at ({rx:.2f},{-yoff:.2f}) {{$\\leftrightarrow$}};")
 
     for x1, x2, cond, yoff in main_arrows:
-        above, below = split_arrow_condition(cond)
-        arrow_node = f"  \\draw[->, very thick] ({x1:.2f},{-yoff:.2f}) -- ({x2:.2f},{-yoff:.2f})"
-        parts = []
-        for text, pos in ((above, "above"), (below, "below")):
-            t = wrap_format_text(text)
-            if not t:
-                continue
-            align = "align=center, " if "\\\\" in t else ""
-            parts.append(f"node[midway, {align}{pos}] {{{t}}}")
-        if parts:
-            lines.append(arrow_node + " " + " ".join(parts) + ";")
-        else:
-            lines.append(arrow_node + ";")
+        # 主反应箭头（单向 → / 双向 ⇌ 统一）：共享函数与 reaction/arrow 三处
+        # 共用（三合一，20260816）；⇌ 令牌在条件中识别并剥离
+        lines.extend(main_arrow_lines(x1, x2, cond, y=-yoff))
 
     # 加号实际坐标（y 取负：布局 yoff 向下为正，渲染取反）——供成键空位避让
     plus_xy = [(px, -yoff) for px, yoff in plus_positions]

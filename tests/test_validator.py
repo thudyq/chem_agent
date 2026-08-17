@@ -502,6 +502,22 @@ class TestCoeffAndBalanceRules:
             "[REACTION:CC(=O)O;CCO|CC(=O)OCC|浓H2SO4, Δ, -H2O]")
         assert len(invalid) == 0
 
+    def test_reaction_2b_reversible_token_ignored(self):
+        """可逆令牌 ⇌ 不影响 2b 补足：与无 ⇌ 的配平结果一致（⇌ 无法解析
+        为化学式，被补足逻辑自然忽略）。"""
+        pytest.importorskip("rdkit")
+        _, invalid = _validate(
+            "[REACTION:CC(=O)O;CCO|CC(=O)OCC|浓H2SO4, Δ, ⇌, -H2O]")
+        assert len(invalid) == 0
+        _, invalid2 = _validate(
+            "[REACTION:CC(=O)O;CCO|CC(=O)OCC|浓H2SO4, Δ, -H2O]")
+        assert len(invalid2) == 0
+        # 未配平 + ⇌ 仍拦截（⇌ 不是配平物质）
+        _, invalid3 = _validate(
+            "[REACTION:CC(=O)O;CCO|CC(=O)OCC|⇌]")
+        assert len(invalid3) == 1
+        assert "化学校验" in invalid3[0].reason
+
     def test_reaction_2b_hydrolysis(self):
         """2b 水解：无符号 H2O 补反应物侧（催化剂 NaOH 不误判）。"""
         pytest.importorskip("rdkit")

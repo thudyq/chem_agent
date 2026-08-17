@@ -315,6 +315,48 @@ def test_row_layout_four_step_sequence():
     assert xs == sorted(xs)                     # 分子按序列从左到右递增
 
 
+def test_row_rxnarrow_reversible():
+    """row 布局 [RXNARROW:⇌]：双向箭头四段拼成（两条横线 y=±0.05 + 两个尖），
+    ⇌ 剥离、无 -> 箭头样式。"""
+    out = _render(
+        "[COMPOSITE:row]"
+        "[STRUCT:C=C,label=乙烯][RXNARROW:⇌]"
+        "[STRUCT:CCO,label=乙醇]"
+        "[/COMPOSITE]"
+    )
+    segs = [(float(a), float(b), float(c), float(d)) for a, b, c, d in
+            re.findall(r"(?m)^  \\draw \(([-\d.]+),([-\d.]+)\) -- "
+                       r"\(([-\d.]+),([-\d.]+)\)", out)]
+    bars = [s for s in segs if abs(s[1] - s[3]) < 1e-9]
+    tips = [s for s in segs if abs(s[1] - s[3]) > 1e-9]
+    assert len(bars) == 2 and len(tips) == 2
+    ys = sorted(round(s[1], 2) for s in bars)
+    assert ys == [-0.05, 0.05]              # 横线间距 0.10
+    assert "\\draw[->" not in out           # 四段裸 \draw 拼成
+    assert "⇌" not in out
+
+
+def test_row_condition_reversible():
+    """row 布局 [CONDITION:⇌] 填充主箭头：同样渲染双向（四段）。"""
+    out = _render(
+        "[COMPOSITE:row]"
+        "[STRUCT:C=C,label=乙烯][RXNARROW]"
+        "[STRUCT:CCO,label=乙醇]"
+        "[CONDITION:⇌]"
+        "[/COMPOSITE]"
+    )
+    bars = re.findall(r"(?m)^  \\draw \(([-\d.]+),([-\d.]+)\) -- "
+                      r"\(([-\d.]+),([-\d.]+)\)", out)
+    # 横线 = 两端 y 相同且 = ±0.05（尖的起点 y 也是 ±0.05，需排除）
+    y_plus = sum(1 for m in bars if abs(float(m[1]) - 0.05) < 0.001
+                 and abs(float(m[1]) - float(m[3])) < 0.001)
+    y_minus = sum(1 for m in bars if abs(float(m[1]) + 0.05) < 0.001
+                  and abs(float(m[1]) - float(m[3])) < 0.001)
+    assert y_plus == 1 and y_minus == 1     # 上/下横线各一
+    assert "\\draw[->" not in out
+    assert "⇌" not in out
+
+
 def test_fishhook_arrows():
     """正例3：鱼钩箭头（单电子）生成半边 barb。自由基加成到 π 键（范本三鱼钩）：
     ①Br· 单电子→Br 与近端碳 C0 之间的空白成键位置（上弯）；②π 键一个电子→

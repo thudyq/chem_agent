@@ -179,3 +179,88 @@ def test_layout_text_item_no_overlap():
     assert len(all_x) == 4
     # 各组件 x 坐标严格递增（加号/箭头占位隔开，无重叠）
     assert all(b - a > 0.5 for a, b in zip(all_x, all_x[1:]))
+
+
+# ---------- 可逆反应（双向箭头 ⇌，20260816） ----------
+
+
+def _rev_bars_and_tips(out):
+    """解析双向箭头四段：返回 (横线, 尖)（浮点线段列表）。
+
+    只匹配顶层（行首 2 空格）裸 \draw——分子 scope 内骨架键为 4 空格缩进，
+    不混入。横线 = 两端 y 相同；尖 = 端点 y 差 0.10（±0.10 偏移，45°）。
+    """
+    segs = [(float(a), float(b), float(c), float(d)) for a, b, c, d in
+            re.findall(r"(?m)^  \\draw \(([-\d.]+),([-\d.]+)\) -- "
+                       r"\(([-\d.]+),([-\d.]+)\)", out)]
+    bars = [s for s in segs if abs(s[1] - s[3]) < 1e-9]
+    tips = [s for s in segs if abs(s[1] - s[3]) > 1e-9]
+    return bars, tips
+
+
+def test_reaction_reversible_double_arrow():
+    """REACTION 条件含 ⇌：双向箭头四段裸 \draw 拼成——两条等长横线
+    （间距 0.10，y=±0.05）+ 两个 45° 尖（偏移 ±0.10：上尖右上、下尖左下）。"""
+    out = render_reaction("CC(=O)O;CCO", "CC(=O)OCC", "浓H2SO4, Δ, ⇌, -H2O")
+    bars, tips = _rev_bars_and_tips(out)
+    assert len(bars) == 2 and len(tips) == 2
+    # 横线 y = ±0.05（间距 0.10）；上尖右上、下尖左下（±0.10 偏移）
+    up_bar = [s for s in bars if s[1] > 0][0]
+    dn_bar = [s for s in bars if s[1] < 0][0]
+    assert round(up_bar[1], 2) == 0.05 and round(dn_bar[1], 2) == -0.05
+    up_tip = [s for s in tips if s[1] > 0][0]
+    dn_tip = [s for s in tips if s[1] < 0][0]
+    # 上尖起点 = 上横线右端，终点偏移 (+x?) → (x2-0.10, 0.15)：向右上回折
+    assert (round(up_tip[0], 2), round(up_tip[1], 2)) == \
+        (round(up_bar[2], 2), round(up_bar[3], 2))
+    assert round(up_tip[2], 2) == round(up_tip[0], 2) - 0.10
+    assert abs(up_tip[3] - (up_tip[1] + 0.10)) < 0.005      # 终点 y = 起点 + 0.10
+    # 下尖起点 = 下横线左端，终点偏移 → (x1+0.10, -0.15)：向左下回折
+    assert (round(dn_tip[0], 2), round(dn_tip[1], 2)) == \
+        (round(dn_bar[0], 2), round(dn_bar[1], 2))
+    assert round(dn_tip[2], 2) == round(dn_tip[0], 2) + 0.10
+    assert abs(dn_tip[3] - (dn_tip[1] - 0.10)) < 0.005      # 终点 y = 起点 - 0.10
+    # 不用 -> 箭头样式（四段裸 \draw 拼成）
+    assert "\\draw[->" not in out
+    # 条件分挂：正条件在上条 above、-H2O 在下条 below
+    assert "node[midway, above] {浓H$_2$SO$_4$, $\\Delta$}" in out
+    assert "node[midway, below] {-H$_2$O}" in out
+    # ⇌ 令牌已剥离
+    assert "⇌" not in out
+
+
+def test_reaction_reversible_no_condition():
+    """REACTION 仅 ⇌（无条件）：两条裸横线 + 两个尖，无节点。"""
+    out = render_reaction("CCO", "CC=O", "⇌")
+    bars, tips = _rev_bars_and_tips(out)
+    assert len(bars) == 2 and len(tips) == 2
+    assert "node[midway" not in out
+    assert "⇌" not in out
+
+
+def test_reaction_single_arrow_unchanged():
+    """回归锚点：无 ⇌ 时单向输出与迁移前逐字符一致（单条箭头 + above 条件）。"""
+    out = render_reaction("c1ccccc1;[O-][N+](=O)O",
+                          "O=[N+]([O-])c1ccccc1;O", "H2SO4, Δ")
+    assert out.count("\\draw[->, very thick]") == 1
+    assert "node[midway, above] {H$_2$SO$_4$, $\\Delta$}" in out
+    assert "node[midway, below]" not in out
+
+
+def test_arrow_reversible():
+    """ARROW 条件含 ⇌：双向四段（无 -> 样式），类型文本在上条。"""
+    out = render_arrow("CCO", "CC=O", "Cu, ⇌")
+    bars, tips = _rev_bars_and_tips(out)
+    assert len(bars) == 2 and len(tips) == 2
+    assert "\\draw[->" not in out
+    assert "node[midway, above] {Cu}" in out
+    assert "⇌" not in out
+
+
+def test_parse_arrow_kind():
+    """parse_arrow_kind：⇌ 识别并剥离，其余原样。"""
+    from renderers.mol_primitives import parse_arrow_kind
+    assert parse_arrow_kind("⇌") == ("reversible", "")
+    assert parse_arrow_kind("H2SO4, Δ, ⇌") == ("reversible", "H2SO4, Δ")
+    assert parse_arrow_kind("H2SO4, Δ") == ("single", "H2SO4, Δ")
+    assert parse_arrow_kind("") == ("single", "")

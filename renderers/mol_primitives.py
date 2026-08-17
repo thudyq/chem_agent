@@ -1677,6 +1677,64 @@ def split_arrow_condition(cond: str) -> tuple:
     return ", ".join(above), ", ".join(below)
 
 
+# 可逆令牌：仅 ⇌（20260816 用户决策）。写在条件字段中切换双向箭头，
+# 渲染时从显示文本剥离；校验层（_arrow_supplement_tokens）无法把 ⇌ 解析
+# 为化学式，自动忽略，无需改动。
+_REV_ARROW_TOKENS = re.compile(r"⇌")
+
+
+def parse_arrow_kind(cond: str) -> tuple:
+    """识别条件文本中的可逆令牌 ⇌ 并剥离。
+
+    返回 (kind, 剥离后的条件文本)。kind ∈ {"single", "reversible"}；
+    ⇌ 不进入条件显示文本（条件节点只显示实际条件）。
+    """
+    if _REV_ARROW_TOKENS.search(cond or ""):
+        return "reversible", _REV_ARROW_TOKENS.sub("", cond or "").strip(" ,，")
+    return "single", cond
+
+
+def main_arrow_lines(x1: float, x2: float, condition: str = "", *,
+                     y: float = 0.0, style: str = "very thick") -> list:
+    """主反应箭头 TikZ 行——单向 → / 双向 ⇌ 统一（reaction/arrow/composite 共用）。
+
+    单向：一条右箭头；条件经 split_arrow_condition 上下分挂（正条件/无 - 前缀
+    在 above、-X 补足在 below），输出与迁移前逐字符一致（回归锚点）。
+    双向（条件含 ⇌，parse_arrow_kind 剥离）：两条半箭头水平交错上下排列——
+    上条右指覆盖右侧 ~2/3（尖端在 x2）、下条左指覆盖左侧 ~2/3（尖端在 x1），
+    教科书平衡符号；条件同上分挂（正条件挂上条 above、-X 挂下条 below）。
+    """
+    kind, cond = parse_arrow_kind(condition)
+    above, below = split_arrow_condition(cond)
+
+    def _node(text: str, pos: str) -> str:
+        t = wrap_format_text(text)
+        if not t:
+            return ""
+        align = "align=center, " if "\\\\" in t else ""
+        return f" node[midway, {align}{pos}] {{{t}}}"
+
+    if kind == "reversible":
+        # 双向（⇌）按 fast_latex_test.tex 参考写法：四段裸 \draw 拼成，
+        # 不用 -> 箭头样式——两条等长横线（间距 0.10，y=±0.05）+ 两个
+        # 45° 箭头尖（偏移 ±0.10：上尖在右端右上、下尖在左端左下）。
+        # 横线长度 = x2-x1（布局决定，可调）。
+        h, t = 0.05, 0.10
+        return [
+            f"  \\draw ({x1:.2f},{y + h:.2f}) -- ({x2:.2f},{y + h:.2f})"
+            f"{_node(above, 'above')};",
+            f"  \\draw ({x2:.2f},{y + h:.2f}) -- ({x2 - t:.2f},{y + h + t:.2f});",
+            f"  \\draw ({x1:.2f},{y - h:.2f}) -- ({x2:.2f},{y - h:.2f})"
+            f"{_node(below, 'below')};",
+            f"  \\draw ({x1:.2f},{y - h:.2f}) -- ({x1 + t:.2f},{y - h - t:.2f});",
+        ]
+    node = _node(above, "above") + _node(below, "below")
+    return [
+        f"  \\draw[->, {style}] ({x1:.2f},{y:.2f}) -- "
+        f"({x2:.2f},{y:.2f}){node};",
+    ]
+
+
 # 物种系数前缀：整数（2CCO）或 n/2（1/2O2、3/2O2）；与 core.tag_validator
 # 的 _parse_coeff 规则一致（渲染端独立实现，避免跨包导入）。
 _SP_COEFF_RE = re.compile(r"^(-?\d+)(?:/(\d+))?")

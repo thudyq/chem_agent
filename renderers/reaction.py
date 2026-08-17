@@ -29,12 +29,12 @@ if __name__ == "__main__":
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from renderers.mol_primitives import prepare_mol, scale_mol_coords, \
-        split_arrow_condition, split_species_coeff, wrap_format_text, \
+        split_species_coeff, wrap_format_text, main_arrow_lines, \
         is_formula_label
     from renderers.layout import layout_row, molecule_scope_lines
 else:
     from .mol_primitives import prepare_mol, scale_mol_coords, \
-        split_arrow_condition, split_species_coeff, wrap_format_text, \
+        split_species_coeff, wrap_format_text, main_arrow_lines, \
         is_formula_label
     from .layout import layout_row, molecule_scope_lines
 
@@ -129,20 +129,10 @@ def render_reaction(reactants_str: str, products_str: str, conditions: str = "")
         lines.append(f"  \\node at ({px:.2f},0) {{$+$}};")
 
     main_arrow = layout.arrows[0]
-    above, below = split_arrow_condition(main_arrow.condition)
-    arrow_node = f"  \\draw[->, very thick] ({main_arrow.x1:.2f},0) -- ({main_arrow.x2:.2f},0)"
-    # 条件分上下：-X 补足（产物侧）在箭头下方，其余在上方（上方末尾无逗号）
-    parts = []
-    for text, pos in ((above, "above"), (below, "below")):
-        t = wrap_format_text(text)
-        if not t:
-            continue
-        align = "align=center, " if "\\\\" in t else ""
-        parts.append(f"node[midway, {align}{pos}] {{{t}}}")
-    if parts:
-        lines.append(arrow_node + " " + " ".join(parts) + ";")
-    else:
-        lines.append(arrow_node + ";")
+    # 主反应箭头（单向 → / 双向 ⇌ 统一）：共享函数与 arrow/composite 三处
+    # 共用（三合一，20260816）；⇌ 令牌在条件中识别并剥离
+    lines.extend(main_arrow_lines(main_arrow.x1, main_arrow.x2,
+                                  main_arrow.condition))
 
     lines.append(r"\end{tikzpicture}")
     return "\n".join(lines)
