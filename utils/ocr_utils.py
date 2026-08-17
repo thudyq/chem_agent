@@ -39,37 +39,14 @@ def _parse_description(text: str) -> dict:
 def describe_image(image_path: str) -> dict | None:
     """上传图片 → 视觉 LLM 理解 → {"type": ..., "content": ...}。
 
-    优先走化学视觉分层路由（utils.chem_vision.process_image：版面分析 →
-    裁剪 → 结构式走 MolScribe / 反应式走 RxnScribe / 势能面·纽曼走领域
-    提示词），失败/不可用/无结果时回退整图一次视觉 LLM 描述。
+    单模型整图描述（glm-4.6v 等）：关闭深度思考（thinking disabled）让
+    模型直接输出 content——glm-4.6v 思考型行为会把回答吞进 reasoning_content
+    致 content 为空（20260817 实测：本地失败/智谱平台成功即此差异）；
+    个别端点不识别 thinking 参数或 content 仍空时，回退 reasoning_content。
 
     需配置 VISION_MODEL + VISION_BASE_URL + VISION_API_KEY（或回退到主配置）。
-    失败（未配置/网络/思考过长无 content/内容为空）返回 None。
+    失败（未配置/网络/无 content）返回 None。
     """
-    # ① 分层路由（图文混排图片更准：分块识别 + MolScribe 精确 SMILES）
-    try:
-        from utils.chem_vision import process_image
-        res = process_image(image_path)
-        if res and res.get("blocks"):
-            parts = []
-            for b in res["blocks"]:
-                t, text = b.get("type", "其他"), (b.get("text") or "").strip()
-                if not text:
-                    continue
-                parts.append(f"【{t}】{text}")
-            if parts:
-                n = len(res["blocks"])
-                return {"type": "混合" if n > 1 else res["blocks"][0]["type"],
-                        "content": "\n".join(parts)}
-    except Exception:
-        pass  # 分层路由任何异常 → 回退整图描述
-
-    # ② 回退：原整图一次视觉 LLM 描述
-    return _describe_image_legacy(image_path)
-
-
-def _describe_image_legacy(image_path: str) -> dict | None:
-    """原 describe_image 逻辑（整图一次视觉 LLM）。"""
     config = settings.vision
     if not config.is_configured:
         print("[ocr] 未配置 VISION_MODEL/VISION_BASE_URL/VISION_API_KEY")
@@ -99,20 +76,37 @@ def _describe_image_legacy(image_path: str) -> dict | None:
             ],
         }],
         "temperature": 0.1,
-        "max_tokens": 800,
+        # 800 → 2000：复杂图（教材文字+反应式）描述长，避免思考/回答被截断
+        "max_tokens": 2000,
+        # 关闭深度思考（智谱 thinking 参数）：直接输出 content，避免
+        # 回答进 reasoning_content 致 content 空（20260817 本地失败根因）
+        "thinking": {"type": "disabled"},
     }
 
     print(f"[ocr] 调用视觉模型 {model} 理解图片 ...")
     try:
-        resp = requests.post(url, headers=headers, json=payload, timeout=90)
+        resp = requests.post(url, headers=headers, json=payload, timeout=120)
     except requests.exceptions.RequestException as e:
         print(f"[ocr] 请求异常: {e}")
         return None
 
+    # 端点不识别 thinking 参数（如 Gemini OpenAI 兼容端点报
+    # 'Unknown name "thinking"'）→ 去掉该参数重试一次（自适应：
+    # 智谱带 thinking disabled，Gemini 等不带）
+    if resp.status_code == 400 and "thinking" in (resp.text or ""):
+        print("[ocr] 端点不识别 thinking 参数，去掉重试 ...")
+        payload.pop("thinking", None)
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=120)
+        except requests.exceptions.RequestException as e:
+            print(f"[ocr] 请求异常: {e}")
+            return None
+
     if resp.status_code != 200:
         print(f"[ocr] HTTP {resp.status_code}: {resp.text[:200]}")
         if resp.status_code in (400, 404):
-            print("[ocr] 该模型可能不支持视觉输入，请在 .env 中设置 VISION_MODEL 为支持图片的模型（如 GLM-4.6V）。")
+            print("[ocr] 该模型可能不支持视觉输入，请在 .env 中"
+                  "设置 VISION_MODEL 为支持图片的模型（如 GLM-4.6V）。")
         return None
 
     try:
@@ -120,9 +114,16 @@ def _describe_image_legacy(image_path: str) -> dict | None:
     except (KeyError, ValueError):
         return None
     content = msg.get("content") or ""
-    # 不回退 reasoning_content：视觉模型思考过长时 content 为空，此时返回 None，
-    # 而不是把思考过程当图片描述。
+    # 思考型模型兜底：content 为空但 reasoning_content 有内容时回退提取
+    # （thinking disabled 生效时 content 直接有值，此分支为兼容不识别
+    # 该参数的端点）
     if not content.strip():
-        return None
+        reasoning = msg.get("reasoning_content") or ""
+        if reasoning.strip():
+            print("[ocr] content 为空，回退 reasoning_content")
+            content = reasoning
+        else:
+            return None
     desc = _parse_description(content)
     return desc if desc["content"] else None
+
