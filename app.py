@@ -19,7 +19,31 @@ _ROLE_LABELS = {
     "反应物", "产物", "中间体", "底物", "亲核试剂", "亲电试剂",
     "过渡态", "离去基团", "溶剂", "催化剂", "加成产物", "σ络合物",
     "σ 络合物", "氧负离子", "碳正离子", "自由基",
+    # 扩充：常见角色/流程词（中英文）
+    "原料", "生成物", "副产物", "主产物", "目标产物", "氧化产物",
+    "还原产物", "脱水产物", "氧化剂", "还原剂", "酸碱", "配体",
+    "反应中间体", "反应物A", "产物B", "异构体", "对映体",
+    "非对映体", "过渡金属", "官能团", "取代基", "盐", "溶剂分子",
+    "product", "reactant", "substrate", "reagent", "catalyst",
+    "solvent", "intermediate", "nucleophile", "electrophile",
+    "radical", "byproduct", "transition state", "starting material",
+    "leaving group", "oxidant", "reductant", "ligand",
+    "final product", "main product",
 }
+# 包含匹配的角色词（label 含任一即视为角色/流程词——"主产物/自由基
+# 中间体/亲核试剂/氧化产物"等组合，避免无意义的翻译 + PubChem 查询）
+_ROLE_SUBSTRINGS = (
+    "产物", "中间体", "过渡态", "试剂", "催化剂", "溶剂", "自由基",
+    "底物", "亲核", "亲电", "离去基团", "氧化剂", "还原剂", "配体",
+    "原料", "生成物", "加成产物", "副产物", "主产物", "异构体",
+    "对映体", "非对映体", "络合物",
+)
+
+
+def _is_role_label(label: str) -> bool:
+    """label 是否为角色/流程词（精确或包含），是则不做 PubChem 查询。"""
+    return bool(label) and (
+        label in _ROLE_LABELS or any(s in label for s in _ROLE_SUBSTRINGS))
 
 # 难题预判关键词（未配置 UPGRADE_KEYWORDS 时的内置默认）：
 # 用户问题命中任一关键词 → 跳过主模型首跑、直接走升级模型。
@@ -59,7 +83,7 @@ def _extract_chem_labels(failures: list) -> list:
         if tag.type != "STRUCT" or len(tag.args) < 2:
             continue
         label = str(tag.args[1]).strip() if tag.args[1] else ""
-        if not label or label in _ROLE_LABELS:
+        if not label or _is_role_label(label):
             continue
         labels.append((label, err))
     return labels
@@ -82,7 +106,7 @@ def _extract_names_from_question(question: str) -> list:
         # 中文名（≥2 字）或英文名（含字母）
         if (re.fullmatch(r"[\u4e00-\u9fff]{2,10}", tok)
                 or re.fullmatch(r"[A-Za-z][A-Za-z0-9\- ]{1,20}", tok)):
-            if tok not in _ROLE_LABELS and not any(
+            if not _is_role_label(tok) and not any(
                     k in tok for k in ("反应", "机理", "方程", "氧化数")):
                 names.append(tok)
     return names[:3]
