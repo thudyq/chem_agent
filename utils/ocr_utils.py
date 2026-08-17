@@ -39,9 +39,37 @@ def _parse_description(text: str) -> dict:
 def describe_image(image_path: str) -> dict | None:
     """上传图片 → 视觉 LLM 理解 → {"type": ..., "content": ...}。
 
+    优先走化学视觉分层路由（utils.chem_vision.process_image：版面分析 →
+    裁剪 → 结构式走 MolScribe / 反应式走 RxnScribe / 势能面·纽曼走领域
+    提示词），失败/不可用/无结果时回退整图一次视觉 LLM 描述。
+
     需配置 VISION_MODEL + VISION_BASE_URL + VISION_API_KEY（或回退到主配置）。
     失败（未配置/网络/思考过长无 content/内容为空）返回 None。
     """
+    # ① 分层路由（图文混排图片更准：分块识别 + MolScribe 精确 SMILES）
+    try:
+        from utils.chem_vision import process_image
+        res = process_image(image_path)
+        if res and res.get("blocks"):
+            parts = []
+            for b in res["blocks"]:
+                t, text = b.get("type", "其他"), (b.get("text") or "").strip()
+                if not text:
+                    continue
+                parts.append(f"【{t}】{text}")
+            if parts:
+                n = len(res["blocks"])
+                return {"type": "混合" if n > 1 else res["blocks"][0]["type"],
+                        "content": "\n".join(parts)}
+    except Exception:
+        pass  # 分层路由任何异常 → 回退整图描述
+
+    # ② 回退：原整图一次视觉 LLM 描述
+    return _describe_image_legacy(image_path)
+
+
+def _describe_image_legacy(image_path: str) -> dict | None:
+    """原 describe_image 逻辑（整图一次视觉 LLM）。"""
     config = settings.vision
     if not config.is_configured:
         print("[ocr] 未配置 VISION_MODEL/VISION_BASE_URL/VISION_API_KEY")

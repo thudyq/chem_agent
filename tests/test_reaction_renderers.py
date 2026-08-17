@@ -187,7 +187,7 @@ def test_layout_text_item_no_overlap():
 def _rev_bars_and_tips(out):
     """解析双向箭头四段：返回 (横线, 尖)（浮点线段列表）。
 
-    只匹配顶层（行首 2 空格）裸 \draw——分子 scope 内骨架键为 4 空格缩进，
+    只匹配顶层（行首 2 空格）裸 \\draw——分子 scope 内骨架键为 4 空格缩进，
     不混入。横线 = 两端 y 相同；尖 = 端点 y 差 0.10（±0.10 偏移，45°）。
     """
     segs = [(float(a), float(b), float(c), float(d)) for a, b, c, d in
@@ -199,7 +199,7 @@ def _rev_bars_and_tips(out):
 
 
 def test_reaction_reversible_double_arrow():
-    """REACTION 条件含 ⇌：双向箭头四段裸 \draw 拼成——两条等长横线
+    """REACTION 条件含 ⇌：双向箭头四段裸 \\draw 拼成——两条等长横线
     （间距 0.10，y=±0.05）+ 两个 45° 尖（偏移 ±0.10：上尖右上、下尖左下）。"""
     out = render_reaction("CC(=O)O;CCO", "CC(=O)OCC", "浓H2SO4, Δ, ⇌, -H2O")
     bars, tips = _rev_bars_and_tips(out)

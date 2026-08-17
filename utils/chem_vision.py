@@ -208,9 +208,19 @@ def _ascii_copy(image_path: str) -> str:
 
 _WORKER_CODE = (
     "import sys, json\n"
+    "import os\n"
+    "import torch\n"
     "from molscribe import MolScribe\n"
-    "m = MolScribe(model_path={mp!r})\n"
-    "print(json.dumps({{'ready': True}}), flush=True)\n"
+    # 默认自动 CUDA（torch≥2.7 支持 Blackwell sm_120）；CHEM_VISION_CUDA=0 强制 CPU
+    "_use_cuda = os.environ.get('CHEM_VISION_CUDA', '1') != '0' and torch.cuda.is_available()\n"
+    "_dev = torch.device('cuda' if _use_cuda else 'cpu')\n"
+    "import inspect\n"
+    "_sig = inspect.signature(MolScribe.__init__)\n"
+    "if 'device' in _sig.parameters:\n"
+    "    m = MolScribe(model_path={mp!r}, device=_dev)\n"
+    "else:\n"
+    "    m = MolScribe(model_path={mp!r})\n"
+    "print(json.dumps({{'ready': True, 'device': str(_dev)}}), flush=True)\n"
     "for line in sys.stdin:\n"
     "    line = line.strip()\n"
     "    if not line:\n"
@@ -335,6 +345,9 @@ class MolScribeWorker:
         if not ev.wait(timeout):
             with self._lock:
                 self._pending.pop(rid, None)
+            # 超时即终止 worker（推理卡死，如 CUDA 死锁）——下次 predict
+            # 自动重启（_ensure_started）；避免卡死 worker 连续拖垮请求
+            self._terminate()
             return None
         msg = slot.get("msg", {})
         if not msg or "error" in msg:
@@ -342,14 +355,18 @@ class MolScribeWorker:
         smi = msg.get("smiles")
         return str(smi).strip() or None if smi else None
 
-    def close(self):
-        self._shutdown = True
+    def _terminate(self):
+        """终止 worker 进程（不设 _shutdown，下次 predict 可重启）。"""
         if self._proc is not None and self._proc.poll() is None:
             try:
                 self._proc.terminate()
             except OSError:
                 pass
         self._proc = None
+
+    def close(self):
+        self._shutdown = True
+        self._terminate()
 
 
 def predict_molscribe(image_path: str) -> str | None:
