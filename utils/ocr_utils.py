@@ -9,6 +9,7 @@
 
 import base64
 import re
+import time
 
 import requests
 
@@ -25,6 +26,11 @@ _DESCRIBE_PROMPT = """请描述这张图片的内容，供后续化学问答使�
 类型：文字题 | 结构式 | 反应式 | 机理图 | 混合 | 其他
 内容：<按上述要求的转录与描述>"""
 
+# 视觉调用总尝试次数：初始 1 次 + 失败重试 2 次（连接不稳定场景，20260818）
+_VISION_MAX_ATTEMPTS = 3
+# 重试间隔秒数（避免瞬时限流/抖动时立即连打）
+_RETRY_DELAY = 1.0
+
 
 def _parse_description(text: str) -> dict:
     """解析"类型：/内容："两行格式；不合格式时整体作为 content（type=未分类）。"""
@@ -36,13 +42,81 @@ def _parse_description(text: str) -> dict:
     return {"type": ctype, "content": content}
 
 
-def describe_image(image_path: str) -> dict | None:
+def _read_image_b64(image_path: str) -> str | None:
+    """读图片文件 → base64 字符串；失败返回 None。"""
+    try:
+        with open(image_path, "rb") as f:
+            return base64.b64encode(f.read()).decode()
+    except Exception as e:
+        print(f"[ocr] 读图失败: {e}")
+        return None
+
+
+def _describe_once(url: str, headers: dict, payload: dict,
+                   model: str) -> tuple:
+    """单次视觉调用。返回 (desc, retryable)：
+
+    - desc 非 None：本次成功；
+    - retryable=True：本次失败但值得重试（网络异常 / 5xx / 空响应）；
+    - retryable=False：配置性失败（400/404 不支持视觉），重试无意义。
+    """
+    print(f"[ocr] 调用视觉模型 {model} 理解图片 ...")
+    try:
+        resp = requests.post(url, headers=headers, json=payload, timeout=120)
+    except requests.exceptions.RequestException as e:
+        print(f"[ocr] 请求异常: {e}")
+        return None, True
+
+    # 端点不识别 thinking 参数（如 Gemini OpenAI 兼容端点报
+    # 'Unknown name "thinking"'）→ 去掉该参数重试一次（自适应：
+    # 智谱带 thinking disabled，Gemini 等不带）
+    if resp.status_code == 400 and "thinking" in (resp.text or ""):
+        print("[ocr] 端点不识别 thinking 参数，去掉重试 ...")
+        payload.pop("thinking", None)
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=120)
+        except requests.exceptions.RequestException as e:
+            print(f"[ocr] 请求异常: {e}")
+            return None, True
+
+    if resp.status_code != 200:
+        print(f"[ocr] HTTP {resp.status_code}: {resp.text[:200]}")
+        if resp.status_code in (400, 404):
+            print("[ocr] 该模型可能不支持视觉输入，请在 .env 中"
+                  "设置 VISION_MODEL 为支持图片的模型（如 GLM-4.6V）。")
+            return None, False  # 配置性错误，重试无意义
+        return None, True  # 5xx/429 等服务端/限流错误，可重试
+
+    try:
+        msg = resp.json()["choices"][0]["message"]
+    except (KeyError, ValueError):
+        return None, True
+    content = msg.get("content") or ""
+    # 思考型模型兜底：content 为空但 reasoning_content 有内容时回退提取
+    # （thinking disabled 生效时 content 直接有值，此分支为兼容不识别
+    # 该参数的端点）
+    if not content.strip():
+        reasoning = msg.get("reasoning_content") or ""
+        if reasoning.strip():
+            print("[ocr] content 为空，回退 reasoning_content")
+            content = reasoning
+        else:
+            return None, True  # 空响应（瞬时抖动），可重试
+    desc = _parse_description(content)
+    return (desc if desc["content"] else None), True
+
+
+def describe_image(image_path: str, max_attempts: int = _VISION_MAX_ATTEMPTS) -> dict | None:
     """上传图片 → 视觉 LLM 理解 → {"type": ..., "content": ...}。
 
     单模型整图描述（glm-4.6v 等）：关闭深度思考（thinking disabled）让
     模型直接输出 content——glm-4.6v 思考型行为会把回答吞进 reasoning_content
     致 content 为空（20260817 实测：本地失败/智谱平台成功即此差异）；
     个别端点不识别 thinking 参数或 content 仍空时，回退 reasoning_content。
+
+    连接不稳定容错（20260818）：失败（网络异常 / 5xx / 空响应）自动重试，
+    默认最多 max_attempts=3 次（初始 1 次 + 重试 2 次）；配置性失败
+    （未配置 / 400/404 不支持视觉 / 本地读图失败）不重试直接返回 None。
 
     需配置 VISION_MODEL + VISION_BASE_URL + VISION_API_KEY（或回退到主配置）。
     失败（未配置/网络/无 content）返回 None。
@@ -53,11 +127,8 @@ def describe_image(image_path: str) -> dict | None:
         return None
     api_key, base_url, model = config.api_key, config.base_url, config.model_name
 
-    try:
-        with open(image_path, "rb") as f:
-            b64 = base64.b64encode(f.read()).decode()
-    except Exception as e:
-        print(f"[ocr] 读图失败: {e}")
+    b64 = _read_image_b64(image_path)
+    if b64 is None:
         return None
 
     ext = str(image_path).rsplit(".", 1)[-1].lower()
@@ -83,47 +154,13 @@ def describe_image(image_path: str) -> dict | None:
         "thinking": {"type": "disabled"},
     }
 
-    print(f"[ocr] 调用视觉模型 {model} 理解图片 ...")
-    try:
-        resp = requests.post(url, headers=headers, json=payload, timeout=120)
-    except requests.exceptions.RequestException as e:
-        print(f"[ocr] 请求异常: {e}")
-        return None
-
-    # 端点不识别 thinking 参数（如 Gemini OpenAI 兼容端点报
-    # 'Unknown name "thinking"'）→ 去掉该参数重试一次（自适应：
-    # 智谱带 thinking disabled，Gemini 等不带）
-    if resp.status_code == 400 and "thinking" in (resp.text or ""):
-        print("[ocr] 端点不识别 thinking 参数，去掉重试 ...")
-        payload.pop("thinking", None)
-        try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=120)
-        except requests.exceptions.RequestException as e:
-            print(f"[ocr] 请求异常: {e}")
+    for attempt in range(1, max_attempts + 1):
+        desc, retryable = _describe_once(url, headers, dict(payload), model)
+        if desc:
+            return desc
+        if not retryable or attempt >= max_attempts:
             return None
-
-    if resp.status_code != 200:
-        print(f"[ocr] HTTP {resp.status_code}: {resp.text[:200]}")
-        if resp.status_code in (400, 404):
-            print("[ocr] 该模型可能不支持视觉输入，请在 .env 中"
-                  "设置 VISION_MODEL 为支持图片的模型（如 GLM-4.6V）。")
-        return None
-
-    try:
-        msg = resp.json()["choices"][0]["message"]
-    except (KeyError, ValueError):
-        return None
-    content = msg.get("content") or ""
-    # 思考型模型兜底：content 为空但 reasoning_content 有内容时回退提取
-    # （thinking disabled 生效时 content 直接有值，此分支为兼容不识别
-    # 该参数的端点）
-    if not content.strip():
-        reasoning = msg.get("reasoning_content") or ""
-        if reasoning.strip():
-            print("[ocr] content 为空，回退 reasoning_content")
-            content = reasoning
-        else:
-            return None
-    desc = _parse_description(content)
-    return desc if desc["content"] else None
+        print(f"[ocr] 第 {attempt} 次尝试失败，重试（{attempt + 1}/{max_attempts}）...")
+        time.sleep(_RETRY_DELAY)
+    return None
 

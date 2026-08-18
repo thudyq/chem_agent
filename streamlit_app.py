@@ -546,9 +546,18 @@ def _describe_image_bytes(data: bytes, name: str) -> dict | None:
             pass
 
 
-def _merge_image_question(question_text: str, desc: dict) -> str:
+def _merge_image_question(question_text: str, desc: dict | None) -> str:
     """用户文字 + 图片描述合并为发给 LLM 的完整问题（仅提示词层使用，
-    不进展示气泡——气泡由 display 字段承载，解 9c/10c）。"""
+    不进展示气泡——气泡由 display 字段承载，解 9c/10c）。
+
+    desc 为空（图片识别失败）：空内容 + 用户文字照常传给主 LLM，并明确
+    告知"图片识别失败"（视觉重试已耗尽，仍继续问答流程）。
+    """
+    if not desc or not desc.get("content"):
+        tip = ("（用户上传了一张图片，但图片识别失败：视觉模型多次尝试仍"
+               "无法获取图片内容。请基于文字内容作答，并提示用户重新上传"
+               "图片或改用文字描述）")
+        return f"{question_text}\n{tip}".strip() if question_text.strip() else tip
     if question_text.strip():
         return f"{question_text}\n（附图内容（{desc['type']}）：{desc['content']}）"
     return (f"用户上传了一张图片，图片内容（{desc['type']}）如下：\n"
@@ -573,9 +582,20 @@ def _ask_with_image(sessions: list, session_id: str, *, name: str,
               if hasattr(st, "status") else None)
     desc = _describe_image_bytes(data, name)
     if not desc or not desc.get("content"):
+        # 识别失败：不中止——空内容 + 用户文字照常传给主 LLM，并明确
+        # 告知"图片识别失败"（视觉模型已按 describe_image 内部重试耗尽）
         if status:
-            status.update(label="图片理解失败", state="error")
-        st.error("图片理解失败。请在 .env 中配置 VISION_MODEL 为支持视觉的模型（如 GLM-4.6V）。")
+            status.update(label="图片理解失败（已重试），改用文字继续…",
+                          state="warning")
+        st.warning("图片识别失败：视觉模型多次尝试仍无法理解图片。"
+                   "已基于文字内容继续生成，如需图片内容请重新上传或改用文字描述。")
+        question = _merge_image_question(question_text, None)
+        msg["content"] = question       # 回填完整提示词（供多轮历史沿用；不进气泡）
+        _save_sessions(sessions)
+        if status:
+            status.update(label="正在思考并绘制化学图示…", state="running")
+        _generate_answer(sessions, cur, question, history, is_first,
+                         status=status)
         return
     question = _merge_image_question(question_text, desc)
     msg["content"] = question       # 回填完整提示词（供多轮历史沿用；不进气泡）

@@ -335,7 +335,13 @@ def _build_question(text: str, images: list, audios: list, files: list,
                     )
                 else:
                     print(f"[api] 视觉模型未能理解图片: {url[:80]}")
-                    parts.append("（一张图片理解失败，已忽略）")
+                    # 识别失败：空内容 + 用户文字照常传给主 LLM，并明确
+                    # 告知"图片识别失败"（视觉重试已耗尽，仍继续问答流程）
+                    parts.append(
+                        f"（用户上传的图片 {i} 识别失败：视觉模型多次尝试仍"
+                        "无法理解图片内容，图片内容不可用。请基于文字内容"
+                        "作答，并提示用户重新上传图片或改用文字描述）"
+                    )
     for url, fmt in audios:
         print(f"[api] 收到音频输入（{fmt or '未知格式'}），暂不支持: {url[:80]}")
         parts.append("（用户上传了一段音频，本服务暂不支持音频输入，请改用文字描述）")
