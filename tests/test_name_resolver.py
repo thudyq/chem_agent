@@ -9,8 +9,16 @@
 import pytest
 
 from utils.name_resolver import (
-    COMMON_CN_EN, _is_valid_smiles, name_to_smiles,
+    COMMON_CN_EN, _NEGATIVE_CACHE, _is_valid_smiles, name_to_smiles,
 )
+
+
+@pytest.fixture(autouse=True)
+def _clear_negative_cache():
+    """每个用例前清空失败负缓存（模块级状态，避免用例间污染）。"""
+    _NEGATIVE_CACHE.clear()
+    yield
+    _NEGATIVE_CACHE.clear()
 
 
 class _FakeResp:
@@ -91,6 +99,76 @@ def test_name_to_smiles_empty():
     assert name_to_smiles("") is None
     assert name_to_smiles(None) is None
     assert name_to_smiles("   ") is None
+
+
+def test_name_to_smiles_negative_cache_404(monkeypatch):
+    """404（未收录）确定性失败 → 缓存；再次调用不再发 HTTP。"""
+    calls = {"n": 0}
+
+    def fake_get(url, timeout=10, retries_503=3):
+        calls["n"] += 1
+        return _FakeResp(404)
+
+    monkeypatch.setattr("utils.name_resolver.http_get", fake_get)
+    assert name_to_smiles("no-such-compound-xyz") is None
+    assert name_to_smiles("no-such-compound-xyz") is None
+    assert calls["n"] == 1  # 第二次命中缓存
+
+
+def test_name_to_smiles_negative_cache_no_valid_line(monkeypatch):
+    """200 但无合法 SMILES → 确定性失败 → 缓存。"""
+    calls = {"n": 0}
+
+    def fake_get(url, timeout=10, retries_503=3):
+        calls["n"] += 1
+        return _FakeResp(200, "garbage\nnot-smiles\n")
+
+    monkeypatch.setattr("utils.name_resolver.http_get", fake_get)
+    assert name_to_smiles("zzz-unknown") is None
+    assert name_to_smiles("zzz-unknown") is None
+    assert calls["n"] == 1
+
+
+def test_name_to_smiles_network_error_not_cached(monkeypatch):
+    """网络异常（暂时性问题）不缓存，下次重试。"""
+    calls = {"n": 0}
+
+    def boom(url, timeout=10, retries_503=3):
+        calls["n"] += 1
+        raise OSError("network down")
+
+    monkeypatch.setattr("utils.name_resolver.http_get", boom)
+    assert name_to_smiles("ethanol") is None
+    assert name_to_smiles("ethanol") is None
+    assert calls["n"] == 2  # 不缓存，每次都重试
+
+
+def test_name_to_smiles_use_cache_false_bypasses(monkeypatch):
+    """use_cache=False 绕过失败缓存（重新发起查询）。"""
+    calls = {"n": 0}
+
+    def fake_get(url, timeout=10, retries_503=3):
+        calls["n"] += 1
+        return _FakeResp(404)
+
+    monkeypatch.setattr("utils.name_resolver.http_get", fake_get)
+    assert name_to_smiles("no-such-compound-xyz") is None      # 缓存 404
+    assert name_to_smiles("no-such-compound-xyz", use_cache=False) is None
+    assert calls["n"] == 2  # use_cache=False 仍发请求
+
+
+def test_name_to_smiles_success_not_cached(monkeypatch):
+    """成功查询不缓存：再次调用照常发请求（名称→SMILES 保持可查）。"""
+    calls = {"n": 0}
+
+    def fake_get(url, timeout=10, retries_503=3):
+        calls["n"] += 1
+        return _FakeResp(200, "CCO\n")
+
+    monkeypatch.setattr("utils.name_resolver.http_get", fake_get)
+    assert name_to_smiles("ethanol") == "CCO"
+    assert name_to_smiles("ethanol") == "CCO"
+    assert calls["n"] == 2
 
 
 def test_is_valid_smiles():

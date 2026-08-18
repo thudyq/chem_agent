@@ -12,6 +12,14 @@ import app
 from core.tag_parser import parse_tags
 
 
+@pytest.fixture(autouse=True)
+def _clear_pubchem_fail_cache():
+    """每个用例前清空 PubChem 兜底失败缓存（模块级状态，避免污染）。"""
+    app._PUBCHEM_FAIL_CACHE.clear()
+    yield
+    app._PUBCHEM_FAIL_CACHE.clear()
+
+
 def _failure(raw: str, reason: str):
     tag = parse_tags(raw)[0]
     return [(tag, reason)]
@@ -108,6 +116,78 @@ def test_fetch_pubchem_references_role_labels_skipped(monkeypatch):
         "utils.name_resolver.name_to_smiles", lambda name: "CCO")
     fails = _failure("[STRUCT:CCO,label=底物]", "无效 SMILES")
     assert app._fetch_pubchem_references(fails) == ""
+
+
+def test_fetch_pubchem_references_caches_miss(monkeypatch):
+    """PubChem 查不到的 label 缓存失败：第二次不再翻译（不调 LLM）。"""
+    calls = {"llm": 0}
+
+    def fake_ask_llm(*a, **k):
+        calls["llm"] += 1
+        return "UnknownXYZ"
+
+    monkeypatch.setattr(app, "ask_llm", fake_ask_llm)
+    monkeypatch.setattr(
+        "utils.name_resolver.name_to_smiles", lambda name: None)
+    fails = _failure("[STRUCT:XYZbad,label=未知物]", "无效 SMILES")
+    assert app._fetch_pubchem_references(fails) == ""
+    assert app._fetch_pubchem_references(fails) == ""
+    assert calls["llm"] == 1  # 第二次命中失败缓存，不再翻译
+
+
+def test_fetch_pubchem_references_caches_translate_failure(monkeypatch):
+    """翻译失败同样缓存：第二次不再调 LLM。"""
+    calls = {"llm": 0}
+
+    def fake_ask_llm(*a, **k):
+        calls["llm"] += 1
+        return None
+
+    monkeypatch.setattr(app, "ask_llm", fake_ask_llm)
+    monkeypatch.setattr(
+        "utils.name_resolver.name_to_smiles", lambda name: "CCO")
+    fails = _failure("[STRUCT:XYZbad,label=某中文物]", "无效 SMILES")
+    assert app._fetch_pubchem_references(fails) == ""
+    assert app._fetch_pubchem_references(fails) == ""
+    assert calls["llm"] == 1
+
+
+def test_fetch_pubchem_references_success_not_cached(monkeypatch):
+    """成功查询不缓存：再次调用照常翻译 + 查询。"""
+    calls = {"llm": 0}
+
+    def fake_ask_llm(*a, **k):
+        calls["llm"] += 1
+        return "Aspirin"
+
+    monkeypatch.setattr(app, "ask_llm", fake_ask_llm)
+    monkeypatch.setattr(
+        "utils.name_resolver.name_to_smiles",
+        lambda name: "CC(=O)OC1=CC=CC=C1C(=O)O")
+    fails = _failure("[STRUCT:XYZbad,label=阿司匹林]", "无效 SMILES")
+    assert app._fetch_pubchem_references(fails) != ""
+    assert app._fetch_pubchem_references(fails) != ""
+    assert calls["llm"] == 2  # 成功不缓存，照常重查
+
+
+def test_fetch_pubchem_references_caches_by_label(monkeypatch):
+    """失败缓存按 label 隔离：不同 label 互不影响。"""
+    calls = {"llm": 0}
+
+    def fake_ask_llm(*a, **k):
+        calls["llm"] += 1
+        return "Known" if a[0] == "已知物" else "UnknownXYZ"
+
+    monkeypatch.setattr(app, "ask_llm", fake_ask_llm)
+    monkeypatch.setattr(
+        "utils.name_resolver.name_to_smiles",
+        lambda name: "CCO" if name == "Known" else None)
+    fail_unknown = _failure("[STRUCT:A,label=未知物]", "无效 SMILES")
+    fail_known = _failure("[STRUCT:B,label=已知物]", "无效 SMILES")
+    assert app._fetch_pubchem_references(fail_unknown) == ""
+    assert app._fetch_pubchem_references(fail_known) != ""   # 已知物不受影响
+    assert app._fetch_pubchem_references(fail_unknown) == ""  # 命中缓存
+    assert calls["llm"] == 2  # 未知物 1 次 + 已知物 1 次
 
 
 def test_build_correction_prompt_includes_pubchem_ref(monkeypatch):

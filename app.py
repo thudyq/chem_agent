@@ -131,6 +131,12 @@ def _translate_name_zh2en(name: str) -> str | None:
     return None
 
 
+# PubChem 兜底失败缓存：label 全链路（翻译 → 查询）失败后不再重复尝试
+# （修正循环多轮处理同一失败标记时，避免反复触发 flash 翻译 + PubChem 查询；
+# 成功查询不缓存，照常重查）。name_resolver 层另有网络负缓存兜底。
+_PUBCHEM_FAIL_CACHE: set = set()
+
+
 def _fetch_pubchem_references(failures: list, user_question: str = "",
                               limit: int = 2) -> str:
     """校验失败 → PubChem 兜底：提取 label/问题名 → 翻译 → 查 SMILES → 参考。
@@ -156,15 +162,21 @@ def _fetch_pubchem_references(failures: list, user_question: str = "",
         seen.add(label)
         if len(refs) >= limit:
             break
+        if label in _PUBCHEM_FAIL_CACHE:
+            continue  # 该 label 此前全链路失败，不再重复翻译/查询
         en = _translate_name_zh2en(label)
         if not en:
+            _PUBCHEM_FAIL_CACHE.add(label)
             continue
         try:
             smi = name_to_smiles(en)
         except Exception:
+            _PUBCHEM_FAIL_CACHE.add(label)
             continue
         if smi:
             refs.append(f"「{label}」的 PubChem 标准 SMILES：`{smi}`")
+        else:
+            _PUBCHEM_FAIL_CACHE.add(label)
     if not refs:
         return ""
     return ("\nPubChem 参考（权威 SMILES，可对照修正你的标记）：\n"
