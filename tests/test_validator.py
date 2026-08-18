@@ -224,6 +224,95 @@ def test_composite_mode_restriction():
     assert len(invalid3) == 1
 
 
+# ---------- 大一统架构：reaction 布局（20260819） ----------
+
+
+def test_reaction_single_to_single_equivalent():
+    """reaction 布局单→单：C 当量（原 ARROW 逻辑）；不等拦截。"""
+    _, invalid = _validate(
+        "[COMPOSITE:reaction][STRUCT:CCO,id=A][ARROW:type=single]"
+        "[STRUCT:CC=O,id=B][/COMPOSITE]")
+    assert len(invalid) == 0
+    _, invalid2 = _validate(
+        "[COMPOSITE:reaction][STRUCT:CCO,id=A][ARROW:type=single]"
+        "[STRUCT:CCC,id=B][/COMPOSITE]")
+    assert len(invalid2) == 1
+    assert "C 原子数不等" in invalid2[0].reason
+
+
+def test_reaction_multi_full_balance():
+    """reaction 布局任一边 ≥2：完整原子+电荷守恒（原 REACTION 2a）。"""
+    _, invalid = _validate(
+        "[COMPOSITE:reaction][STRUCT:CC(=O)O,id=A][PLUS][STRUCT:CCO,id=B]"
+        "[ARROW:type=single,浓H2SO4]"
+        "[STRUCT:CC(=O)OCC,id=C][PLUS][STRUCT:O,id=D][/COMPOSITE]")
+    assert len(invalid) == 0
+    _, invalid2 = _validate(
+        "[COMPOSITE:reaction][STRUCT:CC(=O)O,id=A][PLUS][STRUCT:CCO,id=B]"
+        "[ARROW:type=single]"
+        "[STRUCT:CC(=O)OCC,id=C][/COMPOSITE]")
+    assert len(invalid2) == 1
+    assert "化学校验" in invalid2[0].reason
+
+
+def test_reaction_sup_attachment_balance():
+    """sup 附件参与补足：副反应物(+E)计左侧、副产物(-F)计右侧。"""
+    _, invalid = _validate(
+        "[COMPOSITE:reaction][STRUCT:CC(=O)O,id=A][PLUS][STRUCT:CCO,id=B]"
+        "[STRUCT:O,id=w,arrow]"
+        "[ARROW:type=single,sup=-w,浓H2SO4]"
+        "[STRUCT:CC(=O)OCC,id=C][/COMPOSITE]")
+    assert len(invalid) == 0
+    # 附件未声明 arrow 令牌 → 拦截
+    _, invalid2 = _validate(
+        "[COMPOSITE:reaction][STRUCT:CC(=O)O,id=A][PLUS][STRUCT:CCO,id=B]"
+        "[STRUCT:O,id=w]"
+        "[ARROW:type=single,sup=-w]"
+        "[STRUCT:CC(=O)OCC,id=C][/COMPOSITE]")
+    assert len(invalid2) == 1
+    assert "arrow 令牌" in invalid2[0].reason
+
+
+def test_reaction_arrow_type_invalid():
+    """ARROW type 非法枚举拦截。"""
+    _, invalid = _validate(
+        "[COMPOSITE:reaction][STRUCT:CCl,id=A][ARROW:type=foo]"
+        "[STRUCT:CO,id=B][/COMPOSITE]")
+    assert len(invalid) == 1
+    assert "ARROW 类型" in invalid[0].reason
+
+
+def test_reaction_block_balance():
+    """BLOCK 共振块作为单一结构参与每步守恒（块分子式 = 首个 STRUCT）。"""
+    _, invalid = _validate(
+        "[COMPOSITE:reaction][STRUCT:c1ccccc1,id=A]"
+        "[ARROW:type=single,条件]"
+        "[BLOCK][STRUCT:C1=CC=CC=C1,id=B1][ARROW:type=resonance]"
+        "[STRUCT:C1C=CC=CC=1,id=B2][/BLOCK]"
+        "[ARROW:type=single,条件]"
+        "[STRUCT:O=[N+]([O-])c1ccccc1,id=C][/COMPOSITE]")
+    assert len(invalid) == 0
+    # 块内箭头非 resonance → 拦截
+    _, invalid2 = _validate(
+        "[COMPOSITE:reaction][BLOCK][STRUCT:C1=CC=CC=C1,id=B1]"
+        "[ARROW:type=single][STRUCT:C1C=CC=CC=1,id=B2][/BLOCK][/COMPOSITE]")
+    assert len(invalid2) == 1
+    assert "resonance" in invalid2[0].reason
+
+
+def test_reaction_retro_balance():
+    """逆合成箭头：宽松当量（前体 C 数 ≤ 目标；断键不增碳）。"""
+    _, invalid = _validate(
+        "[COMPOSITE:reaction][STRUCT:O=Cc1ccccc1,id=T]"
+        "[ARROW:type=retro,formylation][STRUCT:c1ccccc1,id=P][/COMPOSITE]")
+    assert len(invalid) == 0
+    _, invalid2 = _validate(
+        "[COMPOSITE:reaction][STRUCT:c1ccccc1,id=T]"
+        "[ARROW:type=retro][STRUCT:CCc1ccccc1,id=P][/COMPOSITE]")
+    assert len(invalid2) == 1
+    assert "前体 C" in invalid2[0].reason
+
+
 def test_composite_row_without_struct_passes():
     """row 布局允许无 [STRUCT]（纯箭头/条件/连接符序列合法）——要求已删除。"""
     _, invalid = _validate("[COMPOSITE:row][PLUS][RXNARROW:条件][/COMPOSITE]")

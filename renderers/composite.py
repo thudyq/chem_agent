@@ -128,7 +128,7 @@ _MECH_ARROW_RE = re.compile(
     r"(?:\s*\+\s*([A-Za-z0-9_]+)\s*:\s*(\d+))?\s*$"
 )
 
-_SUPPORTED_LAYOUTS = ("reaction_mech", "row", "energy")
+_SUPPORTED_LAYOUTS = ("reaction_mech", "reaction", "row", "energy")
 
 # 氢键 spec：a#k>idB:b（给体组件的第 k 个显式 H 与组件 idB 的原子 b 成氢键）。
 # 分子内/分子间统一：分子内时 idB 与给体组件同 id。氢由 [XH] 负责绘制。
@@ -394,6 +394,7 @@ def _collect_components(children):
     mech_specs = []
     global_cond = ""
     annotations = {}
+    blocks = []   # 大一统架构 [BLOCK] 共振块（内部子标记列表）
     for child in children:
         if child.type == "STRUCT":
             cid = child.attrs.get("id") or f"r{len(structs)}"
@@ -410,8 +411,12 @@ def _collect_components(children):
                 # 分子家族重构（20260818）：容器内 mode ∈ {skeleton, lewis}
                 # （校验层限制）；mode=lewis 时该组件显示孤对电子点
                 "mode": child.attrs.get("mode", "skeleton"),
+                # 大一统架构（20260819）：arrow 令牌 = 箭头上附件（副反应物/
+                # 副产物），不参与主序列，由 ARROW 的 sup= 参数引用
+                "arrow": bool(child.attrs.get("arrow")),
             })
-            sequence.append(("mol", len(structs) - 1))
+            if not child.attrs.get("arrow"):
+                sequence.append(("mol", len(structs) - 1))
         elif child.type == "PLUS":
             sequence.append(("plus",))
         elif child.type == "RESARROW":
@@ -419,8 +424,19 @@ def _collect_components(children):
         elif child.type == "NEWLINE":
             sequence.append(("newline",))
         elif child.type == "RXNARROW":
+            # 旧箭头标记（兼容保留）：正向 + 条件；kind=None 让主箭头函数
+            # 按条件中的 ⇌ 令牌自动识别（可逆）
             cond = child.args[0].strip() if child.args else ""
-            sequence.append(("arrow", cond))
+            sequence.append(("arrow", cond, None, []))
+        elif child.type == "ARROW":
+            # 大一统架构箭头：type= 类型、sup= 附件列表、其余为条件
+            kind = (child.args[0] if child.args else "") or "single"
+            sup = child.args[1] if len(child.args) > 1 else []
+            cond = child.args[2] if len(child.args) > 2 else ""
+            sequence.append(("arrow", cond, kind, sup))
+        elif child.type == "BLOCK":
+            blocks.append(child.args[0] if child.args else [])
+            sequence.append(("block", len(blocks) - 1))
         elif child.type == "CONDITION":
             if child.args and not global_cond:
                 global_cond = child.args[0].strip()
@@ -441,7 +457,7 @@ def _collect_components(children):
             ref = child.args[0].strip()
             annotations.setdefault(ref, {}).setdefault("bonds", []).append(
                 child.args[1].strip())
-    return structs, sequence, mech_specs, global_cond, annotations
+    return structs, sequence, mech_specs, global_cond, annotations, blocks
 
 
 def _pseudo_hbond_lines(info: dict, hbond_toward: dict,
@@ -769,11 +785,12 @@ def render_composite(layout: str, children: list) -> str:
         )
     show_numbers = "numbering" in flags
 
-    structs, sequence, mech_specs, global_cond, annotations = _collect_components(children)
+    structs, sequence, mech_specs, global_cond, annotations, blocks = \
+        _collect_components(children)
 
     # row 布局允许无 [STRUCT]（纯箭头/条件/连接符序列也合法，校验层已同步豁免）；
-    # reaction_mech / energy 仍要求至少一个组件
-    if not structs and layout_name != "row":
+    # reaction_mech / reaction / energy 仍要求至少一个组件（reaction 允许仅 BLOCK）
+    if not structs and not blocks and layout_name != "row":
         return "（COMPOSITE 渲染失败：容器内缺少 [STRUCT] 组件）"
     if layout_name == "reaction_mech" and not any(el[0] == "arrow" for el in sequence):
         return "（COMPOSITE 渲染失败：reaction_mech 布局需要 [RXNARROW] 标记主反应箭头位置）"
@@ -784,7 +801,8 @@ def render_composite(layout: str, children: list) -> str:
     # 凯库勒大写→保留键级），而非一律芳香化。
     allow_aromatic = (
         False
-        if any(el[0] == "resarrow" for el in sequence)
+        if (any(el[0] == "resarrow" for el in sequence)
+            or blocks)
         else None
     )
 
@@ -869,16 +887,58 @@ def render_composite(layout: str, children: list) -> str:
                                      show_numbers)
 
     # 统一布局引擎：组件序列 → 位置/加号/共振箭头/反应箭头（视觉包围盒防重叠）
+    # [BLOCK] 共振块预渲染：块内 STRUCT + 共振箭头 → 内部布局 → lines + bbox
+    block_data = {}   # 块序号 → (lines, bbox)
+    for bid, bchildren in enumerate(blocks):
+        b_items = []
+        b_ids = []
+        for bc in bchildren:
+            if bc.type == "STRUCT":
+                bmol = prepare_mol(bc.args[0].strip() if bc.args else "",
+                                   allow_aromatic=False)
+                if bmol is None:
+                    return (f"（COMPOSITE 渲染失败：BLOCK 内无效 SMILES"
+                            f"「{bc.args[0] if bc.args else ''}」）")
+                scale_mol_coords(bmol, _MOL_SCALE)
+                bid_ = bc.attrs.get("id") or f"b{bid}_{len(b_ids)}"
+                b_ids.append(bid_)
+                b_items.append(("mol", bid_, bmol))
+            elif bc.type == "ARROW":
+                b_items.append(("resarrow",))
+        if not b_items:
+            return "（COMPOSITE 渲染失败：BLOCK 内缺少结构组件）"
+        blayout = layout_row(b_items, mol_gap=_MOL_GAP, plus_w=_PLUS_W,
+                             arrow_w=_ARR_W, arrow_pad=_ARR_PAD, res_w=1.1)
+        b_lines = []
+        for placed in blayout.mols:
+            b_lines.extend(molecule_scope_lines(placed.mol, placed.shift,
+                                                show_lone_pairs=False))
+        for rx in blayout.resarrows:
+            b_lines.append(
+                f"  \\node[font=\\large] at ({rx:.2f},0) {{$\\leftrightarrow$}};")
+        # 块包围盒：内部布局范围（含共振箭头占位）
+        xs, ys = [], []
+        for placed in blayout.mols:
+            bb = placed.bbox
+            xs += [bb[0] + placed.shift[0], bb[2] + placed.shift[0]]
+            ys += [bb[1] + placed.shift[1], bb[3] + placed.shift[1]]
+        bbox = (min(xs) - 0.2, min(ys) - 0.2, max(xs) + 0.2, max(ys) + 0.2) \
+            if xs else (0.0, -0.3, blayout.width, 0.3)
+        block_data[bid] = (b_lines, bbox)
+
     items = []
     for el in sequence:
         if el[0] == "mol":
             cid = structs[el[1]]["id"]
             items.append(("mol", cid, mols[cid]["mol"],
                           mols[cid]["coeff"]))
+        elif el[0] == "block":
+            lines, bbox = block_data[el[1]]
+            items.append(("block", f"block{el[1]}", lines, bbox))
         elif el[0] in ("plus", "resarrow", "newline"):
             items.append((el[0],))
         elif el[0] == "arrow":
-            items.append(("arrow", el[1]))
+            items.append((el[0], el[1], el[2], el[3]))
     # 布局感知 XH 外延：id(mol) → {原子: 显式 H 数}，供 bbox_fn 计入
     # H 节点位置（问题 6：否则孤立碳 CH4 的 H 超出 bbox，与主箭头重叠）
     xh_by_mol = {}
@@ -908,14 +968,14 @@ def render_composite(layout: str, children: list) -> str:
                                   bbox_fn=_bbox_with_xh)
     plus_positions = []      # (x, yoff)
     res_positions = []       # (x, yoff)
-    main_arrows = []         # [x1, x2, cond, yoff]
+    main_arrows = []         # [x1, x2, cond, yoff, kind, sup]
     for row_layout, yoff in zip(rows, y_offsets):
         for placed in row_layout.mols:
             mols[placed.key]["shift"] = (placed.shift[0], placed.shift[1] - yoff)
             mols[placed.key]["bbox"] = placed.bbox
         plus_positions.extend((px, yoff) for px in row_layout.pluses)
         res_positions.extend((rx, yoff) for rx in row_layout.resarrows)
-        main_arrows.extend([a.x1, a.x2, a.condition, yoff]
+        main_arrows.extend([a.x1, a.x2, a.condition, yoff, a.kind, a.sup]
                            for a in row_layout.arrows)
 
     if global_cond:
@@ -960,8 +1020,12 @@ def render_composite(layout: str, children: list) -> str:
         or any(el[0] == "resarrow" for el in sequence)
     )
 
-    # 每个分子一个 scope（布局引擎积木），组件级标注（电荷/氢键）随分子移动
+    # 每个分子一个 scope（布局引擎积木），组件级标注（电荷/氢键）随分子移动。
+    # 附件（arrow 令牌：副反应物/副产物）不在此渲染——由各 ARROW 的 sup
+    # 渲染在箭头上下（避免箭头两侧重复出现）。
     for comp in structs:
+        if comp.get("arrow"):
+            continue
         comp_lone_pairs = global_lone_pairs or \
             mols[comp["id"]].get("mode") == "lewis"
         lines.extend(_molecule_with_annotations_lines(
@@ -969,6 +1033,15 @@ def render_composite(layout: str, children: list) -> str:
             show_lone_pairs=comp_lone_pairs,
             hbond_toward=hbond_toward.get(comp["id"], {}),
             hbond_away=hbond_away.get(comp["id"], {})))
+
+    # [BLOCK] 共振块：内部行（含分子 scope）整体平移（布局引擎定位）
+    for row_layout, yoff in zip(rows, y_offsets):
+        for placed in row_layout.blocks:
+            lines.append(
+                f"  \\begin{{scope}}[shift={{"
+                f"({placed.shift[0]:.2f},{placed.shift[1] - yoff:.2f})}}]")
+            lines.extend(placed.lines)
+            lines.append("  \\end{scope}")
 
     # 氢键点状虚线（分子内/分子间统一）：H 位置取自 [XH] 画的显式 H
     # （xh_points，MECHARROW a#k 同机制），受体为组件 idB 的原子 b——
@@ -1002,6 +1075,8 @@ def render_composite(layout: str, children: list) -> str:
             lines.append(f"  {dot_line}")
 
     for comp in structs:
+        if comp.get("arrow"):
+            continue   # 附件 label 不显示（其结构式在箭头上下）
         info = mols[comp["id"]]
         label = info["label"]
         # 纯化学式 label（CH3Cl、Cl·、·CH3、OH-）分子本身已展示，不重复；
@@ -1024,10 +1099,31 @@ def render_composite(layout: str, children: list) -> str:
     for rx, yoff in res_positions:
         lines.append(f"  \\node[font=\\large] at ({rx:.2f},{-yoff:.2f}) {{$\\leftrightarrow$}};")
 
-    for x1, x2, cond, yoff in main_arrows:
-        # 主反应箭头（单向 → / 双向 ⇌ 统一）：共享函数与 reaction/arrow 三处
-        # 共用（三合一，20260816）；⇌ 令牌在条件中识别并剥离
-        lines.extend(main_arrow_lines(x1, x2, cond, y=-yoff))
+    for x1, x2, cond, yoff, a_kind, sup in main_arrows:
+        # 主反应箭头（→/⇌/↔/⇒ 统一）：共享函数与 reaction/arrow 共用；
+        # kind 由 [ARROW:type=...] 显式传入（旧 ⇌ 令牌由函数内部识别）
+        lines.extend(main_arrow_lines(x1, x2, cond, y=-yoff, kind=a_kind))
+        # 附件结构式：副反应物（+E）画在箭头上方、副产物（-F）下方——
+        # 与普通结构式同一绘制管线（可参与机理箭头引用）
+        if sup:
+            mx = (x1 + x2) / 2.0
+            for s in sup:
+                s = s.strip()
+                if not s:
+                    continue
+                sign, sid = (s[0], s[1:]) if s[0] in "+-" else ("+", s)
+                info = mols.get(sid)
+                if info is None:
+                    continue
+                amol = info["mol"]
+                bb = mol_visual_bbox(amol, include_lone_pairs=False)
+                aw, ah = bb[2] - bb[0], bb[3] - bb[1]
+                cx = bb[0] + aw / 2.0
+                cy = bb[1] + ah / 2.0
+                dy = 0.75 + ah / 2.0 if sign == "+" else -(0.75 + ah / 2.0)
+                lines.extend(molecule_scope_lines(
+                    amol, (mx - cx, -yoff + dy - cy),
+                    show_lone_pairs=False))
 
     # 加号实际坐标（y 取负：布局 yoff 向下为正，渲染取反）——供成键空位避让
     plus_xy = [(px, -yoff) for px, yoff in plus_positions]

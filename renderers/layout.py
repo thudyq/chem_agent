@@ -39,6 +39,8 @@ class PlacedArrow:
     x1: float
     x2: float
     condition: str = ""
+    kind: str = "single"     # 大一统架构箭头类型（single/reversible/resonance/retro）
+    sup: list = field(default_factory=list)  # 附件引用（+E 副反应物 / -F 副产物）
 
 
 @dataclass
@@ -53,6 +55,19 @@ class PlacedText:
 
 
 @dataclass
+class PlacedBlock:
+    """已定位的复合块组件（[BLOCK] 共振块，20260819 大一统架构）。
+
+    lines 为块内部预渲染的 TikZ 行（局部坐标，含分子 scope），
+    整体随 shift 平移；bbox 为块内部布局的局部包围盒（占位宽度）。
+    """
+    key: Hashable
+    lines: List[str]
+    shift: Tuple[float, float]
+    bbox: Tuple[float, float, float, float]
+
+
+@dataclass
 class RowLayout:
     """一行组件的布局结果。"""
     mols: List[PlacedMol]
@@ -61,6 +76,7 @@ class RowLayout:
     width: float                 # 总宽（右端游标）
     resarrows: List[float] = field(default_factory=list)   # ↔ 中心 x 坐标
     texts: List[PlacedText] = field(default_factory=list)  # 纯文本组件（化学式）
+    blocks: List[PlacedBlock] = field(default_factory=list)  # 复合块组件
 
     def mol_map(self) -> dict:
         """key → PlacedMol 映射，便于按组件 id 取位置。"""
@@ -107,6 +123,7 @@ def layout_row(items: list, *, mol_gap: float = 1.6, plus_w: float = 1.1,
     pluses: List[float] = []
     arrows: List[PlacedArrow] = []
     resarrows: List[float] = []
+    blocks: List[PlacedBlock] = []
     prev_kind = None
     for item in items:
         kind = item[0]
@@ -165,13 +182,28 @@ def layout_row(items: list, *, mol_gap: float = 1.6, plus_w: float = 1.1,
             cursor += res_w
         elif kind == "arrow":
             cond = item[1] if len(item) > 1 else ""
+            a_kind = item[2] if len(item) > 2 else "single"
+            sup = item[3] if len(item) > 3 else []
             arrows.append(PlacedArrow(x1=cursor + arrow_pad,
                                       x2=cursor + arrow_w - arrow_pad,
-                                      condition=cond))
+                                      condition=cond, kind=a_kind, sup=sup))
             cursor += arrow_w
+        elif kind == "block":
+            # 复合块组件（[BLOCK] 共振块）：按块 bbox 占位，整体平移
+            if prev_kind in ("mol", "text", "block"):
+                cursor += mol_gap
+            _, key, blines, bbox = item[:4]
+            min_x, min_y, max_x, max_y = bbox
+            w = max_x - min_x
+            local_cy = (min_y + max_y) / 2.0
+            local_cx = (min_x + max_x) / 2.0
+            shift = (cursor + w / 2.0 - local_cx, -local_cy)
+            blocks.append(PlacedBlock(key=key, lines=blines, shift=shift,
+                                      bbox=bbox))
+            cursor += w
         prev_kind = kind
     return RowLayout(mols=mols, pluses=pluses, arrows=arrows, width=cursor,
-                     resarrows=resarrows, texts=texts)
+                     resarrows=resarrows, texts=texts, blocks=blocks)
 
 
 def _resolve_row_overlaps(layout: RowLayout, pad: float = 0.05) -> float:

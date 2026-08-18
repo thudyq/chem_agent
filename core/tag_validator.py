@@ -68,7 +68,9 @@ def _parse_mol(smiles: str):
 LABEL_MAX_LEN = 24
 
 # COMPOSITE 支持的布局（与 renderers/composite.py 保持一致）
-COMPOSITE_LAYOUTS = ("reaction_mech", "row", "energy")
+# reaction：大一统架构新名（反应序列/共振/逆合成 + 守恒 + 机理）；
+# reaction_mech：旧名（兼容保留）；row/energy：保留
+COMPOSITE_LAYOUTS = ("reaction_mech", "reaction", "row", "energy")
 
 # 与 renderers/composite.py 相同的引用/端点提取正则
 # 端点支持三种：原子序号（0）、键中点（0-1）、显式 H（0#1 = 原子 0 的第 1 个 XH）。
@@ -558,6 +560,172 @@ def _check_composite_balance(children: list, layout_name: str) -> str:
     return ""
 
 
+# 箭头类型（大一统架构，20260819）：single=正向 → / reversible=可逆 ⇌ /
+# resonance=共振 ↔ / retro=逆合成 ⇒
+_ARROW_TYPES = ("single", "reversible", "resonance", "retro")
+
+
+def _check_block(block_children: list) -> Tuple[bool, str]:
+    """BLOCK 共振块校验：块内仅 STRUCT / ARROW(type=resonance) / PLUS。
+
+    块 = 共振极限式序列（如 [B1 ↔ B2 ↔ B3]），作为单一复合结构参与外层
+    序列；块内机理箭头（共振式间转化）暂不支持（布局避让规则待议）。
+    """
+    has_struct = False
+    for c in block_children:
+        if c.type == "STRUCT":
+            has_struct = True
+            ok, reason = _validate_struct_args(c.args, c.attrs)
+            if not ok:
+                return False, f"块内组件 {c.attrs.get('id', '')}: {reason}"
+        elif c.type == "ARROW":
+            a_type = (c.args[0] if c.args else "") or "single"
+            if a_type != "resonance":
+                return False, f"BLOCK 内箭头类型应为 resonance（当前 {a_type}）"
+        elif c.type == "PLUS":
+            return False, "BLOCK 内不支持 [PLUS]（共振式只能单一）"
+        else:
+            return False, f"BLOCK 内不支持 {c.type}（仅 STRUCT / ARROW:resonance）"
+    if not has_struct:
+        return False, "BLOCK 内缺少 [STRUCT] 组件"
+    return True, ""
+
+
+def _check_reaction_sequence(children: list, comps: dict) -> str:
+    """大一统架构守恒（reaction 布局）：按 [ARROW] 分步，每步按箭头类型
+    与结构数分派——与 Drawbacks 第一节第 9 条方案一致：
+
+    - type=single/reversible（反应）：
+        单→单（主结构 + 附件合计两侧各 1）→ C 当量（原 ARROW 逻辑）；
+        任一边 ≥2 → 完整原子+电荷守恒（原 REACTION 2a 逻辑）；
+        sup 附件参与补足（+E 副反应物计左侧、-F 副产物计右侧）。
+    - type=resonance（共振）：两侧原子守恒（同分子式，含 H，不比对电荷）。
+    - type=retro（逆合成）：C 当量。
+    - BLOCK 共振块作为单一结构（分子式取块内首个 STRUCT）。
+
+    返回错误原因或 ""（无 ARROW 的纯排列不校验）。
+    """
+    def _block_smiles(block) -> str:
+        for c in block.args[0] if block.args else []:
+            if c.type == "STRUCT" and c.args and c.args[0]:
+                return c.args[0].strip()
+        return ""
+
+    # 序列化：主结构（含 BLOCK）与箭头；arrow 附件 STRUCT 不参与主序列
+    seq = []
+    for child in children:
+        if child.type == "STRUCT":
+            if child.attrs.get("arrow"):
+                continue
+            smi = child.args[0].strip() if child.args and child.args[0] else ""
+            seq.append(("struct", smi))
+        elif child.type == "BLOCK":
+            smi = _block_smiles(child)
+            if not smi:
+                return "BLOCK 内缺少 [STRUCT] 组件"
+            seq.append(("struct", smi))
+        elif child.type == "PLUS":
+            seq.append(("plus",))
+        elif child.type == "ARROW":
+            a_type = (child.args[0] if child.args else "") or "single"
+            sup = child.args[1] if len(child.args) > 1 else []
+            cond = child.args[2] if len(child.args) > 2 else ""
+            seq.append(("arrow", a_type, sup, cond))
+
+    # 按箭头分步
+    segments, arrows = [], []
+    cur = []
+    for item in seq:
+        if item[0] == "arrow":
+            arrows.append(item)
+            segments.append(cur)
+            cur = []
+        else:
+            cur.append(item)
+    segments.append(cur)
+    if not arrows:
+        return ""  # 无箭头（纯排列/共振块独立展示）不校验
+    for i, arrow in enumerate(arrows):
+        left_items, right_items = segments[i], segments[i + 1]
+        reason = _check_reaction_step(left_items, right_items, arrow, i, comps)
+        if reason:
+            return reason
+    return ""
+
+
+def _check_reaction_step(left_items, right_items, arrow, step, comps) -> str:
+    """单步守恒分派（_check_reaction_sequence 的步内逻辑）。"""
+    a_type, sup, _cond = arrow[1], arrow[2], arrow[3]
+
+    def _species(items):
+        out = []
+        for it in items:
+            if it[0] != "struct" or not it[1]:
+                continue
+            parsed = _parse_coeff(it[1])
+            if parsed is None:
+                return None
+            coeff, bare = parsed
+            out.append((coeff, bare))
+        return out
+
+    left = _species(left_items)
+    right = _species(right_items)
+    n_left_struct = sum(1 for it in left_items if it[0] == "struct" and it[1])
+    n_right_struct = sum(1 for it in right_items if it[0] == "struct" and it[1])
+    # sup 附件补足：+id 副反应物计左侧、-id 副产物计右侧
+    for s in (sup or []):
+        s = s.strip()
+        if not s:
+            continue
+        sign, sid = (s[0], s[1:]) if s[0] in "+-" else ("+", s)
+        info = comps.get(sid)
+        if info is None:
+            return f"第 {step + 1} 步：箭头附件引用未知组件「{sid}」"
+        smi = (info.get("smiles") or "").strip()
+        if not smi:
+            return f"第 {step + 1} 步：附件组件「{sid}」SMILES 为空"
+        parsed = _parse_coeff(smi)
+        if parsed is None:
+            return f"第 {step + 1} 步：附件「{sid}」SMILES 非法"
+        coeff, bare = parsed
+        (left if sign == "+" else right).append((coeff, bare))
+        if sign == "+":
+            n_left_struct += 1
+        else:
+            n_right_struct += 1
+
+    def _fail(msg):
+        return f"第 {step + 1} 步：{msg}"
+
+    if a_type == "resonance":
+        ls, rs = _sum_species(left), _sum_species(right)
+        if ls is None or rs is None:
+            return ""
+        return _balance_reason(ls, rs, strict_h=True, step=f"第 {step + 1} 步",
+                               check_charge=False)
+    if a_type == "retro":
+        # 逆合成（分子拆分）：宽松当量——前体 C 数不得超过目标（断键不增碳；
+        # 丢失基团如 formylation 的 CO 允许）。明显反向（前体碳更多）拦截。
+        lc, rc = _sum_c_counts(left), _sum_c_counts(right)
+        if lc is not None and rc is not None and rc > lc:
+            return _fail(f"逆合成前体 C 原子数（{rc}）多于目标（{lc}）")
+        return ""
+    # 反应（single/reversible）
+    if n_left_struct == 1 and n_right_struct == 1:
+        # 单→单：C 当量（原 ARROW 逻辑）
+        lc, rc = _sum_c_counts(left), _sum_c_counts(right)
+        if lc is not None and rc is not None and lc != rc:
+            return _fail(f"两侧 C 原子数不等（{lc} vs {rc}，单→单仅校验当量）")
+        return ""
+    # 任一边 ≥2：完整原子+电荷守恒（原 REACTION 2a 逻辑）
+    ls, rs = _sum_species(left), _sum_species(right)
+    if ls is None or rs is None:
+        return ""
+    return _balance_reason(ls, rs, strict_h=True, step=f"第 {step + 1} 步",
+                           check_charge=True)
+
+
 # STRUCT 绘制模式（分子家族重构，20260818）：与 tag_parser._STRUCT_MODES 一致。
 # skeleton=键线式/结构简式（默认）；lewis=电子式（+孤对）；stereo=楔形式；
 # chair=椅式构象；newman=纽曼投影。
@@ -718,6 +886,10 @@ def _validate_arrow(args: list) -> Tuple[bool, str]:
         return False, "ARROW 需要反应物与产物 SMILES"
     sides = []
     for smi in (args[0], args[1]):
+        if not isinstance(smi, str):
+            # 大一统架构的 [ARROW:type=...,sup=...] 仅容器内使用；
+            # 顶层 [ARROW] 仍是旧语法（反应物,产物,类型）
+            return False, "ARROW 参数格式错误（顶层 [ARROW] 仅支持 反应物,产物,类型）"
         parsed = _parse_coeff(smi)
         if parsed is None:
             return False, f"非法系数「{smi}」"
@@ -843,6 +1015,9 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
         comps[cid] = {
             "smiles": child.args[0].strip() if child.args and child.args[0] else "",
             "at": child.attrs.get("at"),
+            # 大一统架构：arrow 令牌组件 = 箭头上附件（副反应物/副产物），
+            # 不参与主序列，由 ARROW 的 sup= 参数引用
+            "arrow": bool(child.attrs.get("arrow")),
         }
         # STRUCT 子标记本身递归校验（mode 分派）；容器内仅支持 skeleton/lewis
         # （stereo/chair/newman 为独立画法的整图语义，顶层使用）
@@ -855,8 +1030,10 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
             return False, f"组件 {cid}: {reason}"
 
     # row 布局允许无 [STRUCT]（纯箭头/条件/连接符序列也合法）；reaction_mech /
-    # energy 仍要求至少一个组件（机理引用与驻点挂靠都依赖组件）
-    if not comps and layout_name != "row":
+    # energy 仍要求至少一个组件（机理引用与驻点挂靠都依赖组件）；reaction 布局
+    # 允许仅含 BLOCK 共振块（块内 STRUCT 由 _check_block 校验）
+    has_block = any(c.type == "BLOCK" for c in children)
+    if not comps and not has_block and layout_name != "row":
         return False, "容器内缺少 [STRUCT] 组件"
 
     # energy 布局：每个 STRUCT 必须有 at= 且不越界
@@ -933,6 +1110,26 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
                         if dst2_reason:
                             return False, (f"MECHARROW 目标端点「{dst2_id}:{dst2_pt}」"
                                            f"{dst2_reason}")
+        elif ctype == "ARROW" and len(child.args) >= 1:
+            # 大一统架构容器内箭头：[ARROW:type=..., sup=..., 条件]
+            a_type = (child.args[0] or "").strip() or "single"
+            if a_type not in _ARROW_TYPES:
+                return False, (f"ARROW 类型「{a_type}」非法，支持 "
+                               f"{'/'.join(_ARROW_TYPES)}")
+            for s in (child.args[1] if len(child.args) > 1 else []):
+                s = s.strip()
+                if not s:
+                    continue
+                sid = s[1:] if s[0] in "+-" else s
+                if sid not in comps:
+                    return False, f"ARROW 附件引用未知组件「{sid}」"
+                if not comps[sid].get("arrow"):
+                    return False, (f"ARROW 附件组件「{sid}」未声明 arrow 令牌"
+                                   f"（副反应物/副产物需 [STRUCT:...,id={sid},arrow]）")
+        elif ctype == "BLOCK":
+            ok, reason = _check_block(child.args[0] if child.args else [])
+            if not ok:
+                return False, f"BLOCK: {reason}"
         elif ctype in ("CHARGE", "HBOND") and len(child.args) >= 2:
             ref = child.args[0].strip()
             if ref not in comps:
@@ -1020,7 +1217,12 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
             reason = _check_xh_h_usage(comp_mols.get(ref), idxs, f"组件 {ref} ")
             if reason:
                 return False, reason
-        reason = _check_composite_balance(children, layout_name)
+        if layout_name == "reaction":
+            # 大一统架构守恒：按 [ARROW] 分步 + 箭头类型 + sup 附件补足
+            reason = _check_reaction_sequence(children, comps)
+        else:
+            # 旧布局守恒（reaction_mech 分步 2b / row/energy 跳过）
+            reason = _check_composite_balance(children, layout_name)
         if reason:
             return False, reason
     return True, ""

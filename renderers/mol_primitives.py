@@ -1695,16 +1695,24 @@ def parse_arrow_kind(cond: str) -> tuple:
 
 
 def main_arrow_lines(x1: float, x2: float, condition: str = "", *,
-                     y: float = 0.0, style: str = "very thick") -> list:
-    """主反应箭头 TikZ 行——单向 → / 双向 ⇌ 统一（reaction/arrow/composite 共用）。
+                     y: float = 0.0, style: str = "very thick",
+                     kind: str = None) -> list:
+    """主反应箭头 TikZ 行——单向 → / 双向 ⇌ / 共振 ↔ / 逆合成 ⇒ 统一。
+
+    kind 显式传入（大一统架构 [ARROW:type=...]）时优先；否则按条件中的
+    ⇌ 令牌自动识别（旧语法兼容）。单向/可逆输出与迁移前逐字符一致。
 
     单向：一条右箭头；条件经 split_arrow_condition 上下分挂（正条件/无 - 前缀
     在 above、-X 补足在 below），输出与迁移前逐字符一致（回归锚点）。
-    双向（条件含 ⇌，parse_arrow_kind 剥离）：两条半箭头水平交错上下排列——
-    上条右指覆盖右侧 ~2/3（尖端在 x2）、下条左指覆盖左侧 ~2/3（尖端在 x1），
-    教科书平衡符号；条件同上分挂（正条件挂上条 above、-X 挂下条 below）。
+    双向（⇌）：两条半箭头水平交错上下排列——上条右指覆盖右侧 ~2/3（尖端在
+    x2）、下条左指覆盖左侧 ~2/3（尖端在 x1），教科书平衡符号；条件同上分挂。
+    共振（↔）：居中 ↔ 节点（与 RESARROW 一致）。
+    逆合成（⇒）：双线推导箭头（普通粗细双线杆 + 开放式折线尖）。
     """
-    kind, cond = parse_arrow_kind(condition)
+    if kind is not None:
+        k, cond = kind, condition
+    else:
+        k, cond = parse_arrow_kind(condition)
     above, below = split_arrow_condition(cond)
 
     def _node(text: str, pos: str) -> str:
@@ -1714,7 +1722,21 @@ def main_arrow_lines(x1: float, x2: float, condition: str = "", *,
         align = "align=center, " if "\\\\" in t else ""
         return f" node[midway, {align}{pos}] {{{t}}}"
 
-    if kind == "reversible":
+    if k == "resonance":
+        return [f"  \\node[font=\\large] at ({(x1 + x2) / 2:.2f},{y:.2f}) "
+                f"{{\\$\\leftrightarrow$}};"]
+    if k == "retro":
+        # 逆合成双线推导箭头（⇒，与 retro.py 画法一致，提取为共享）
+        tip, add = 0.23, 0.14
+        base = x2 - tip
+        tail = base + add
+        return [
+            f"  \\draw ({x1:.2f},{y + 0.05:.2f}) -- ({tail:.2f},{y + 0.05:.2f});",
+            f"  \\draw ({x1:.2f},{y - 0.05:.2f}) -- ({tail:.2f},{y - 0.05:.2f});",
+            f"  \\draw ({base:.2f},{y + 0.13:.2f}) -- ({x2:.2f},{y:.2f}) "
+            f"-- ({base:.2f},{y - 0.13:.2f});",
+        ]
+    if k == "reversible":
         # 双向（⇌）按 fast_latex_test.tex 参考写法：四段裸 \draw 拼成，
         # 不用 -> 箭头样式——两条等长横线（间距 0.10，y=±0.05）+ 两个
         # 45° 箭头尖（偏移 ±0.10：上尖在右端右上、下尖在左端左下）。

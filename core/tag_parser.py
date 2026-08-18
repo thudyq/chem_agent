@@ -104,12 +104,15 @@ def _only_child_tags_between(text: str, lo: int, hi: int) -> bool:
 # LEWIS/STEREO/CHAIR/NEWMAN 为分子旧标记：归一化为 STRUCT+mode 后
 # 由容器统一渲染（mode=lewis 显示孤对；stereo/chair/newman 由校验层
 # 限制为顶层使用，见 tag_validator）
+# ARROW 为大一统架构的新箭头标记（[ARROW:type=...,sup=...,条件]）；
+# RXNARROW/RESARROW/CONDITION 为旧箭头标记（兼容保留，新架构不用）
 _INNER_OPENERS = {
     "STRUCT": "[STRUCT:",
     "LEWIS": "[LEWIS:",
     "STEREO": "[STEREO:",
     "CHAIR": "[CHAIR:",
     "NEWMAN": "[NEWMAN:",
+    "ARROW": "[ARROW:",
     "MECHARROW": "[MECHARROW:",
     "CONDITION": "[CONDITION:",
     "RXNARROW": "[RXNARROW:",
@@ -127,6 +130,11 @@ _INNER_TOKENS = {
     "RESARROW": "[RESARROW]",
     "NEWLINE": "[NEWLINE]",
 }
+
+# 共振块定界（20260819 大一统架构）：[BLOCK]...[/BLOCK]——块内为
+# STRUCT + 共振箭头序列，作为复合结构参与外层反应序列。
+_BLOCK_OPEN = "[BLOCK]"
+_BLOCK_CLOSE = "[/BLOCK]"
 
 
 # 分子家族：旧标记 → STRUCT + mode 的归一化映射（20260818 重构）
@@ -247,12 +255,15 @@ def _parse_content(tag_type: str, content: str) -> list:
         si, si_end = _find_kv(content, "subs")
         bi, bi_end = _find_kv(content, "bond")
         gi, gi_end = _find_kv(content, "angle")
-        cut = [p for p in (li, ii, ai, pi, mi, si, bi, gi) if p != -1]
+        # arrow 裸令牌（箭头上附件标记）也是参数分隔符
+        atok = re.search(r",\s*arrow(?=,|\s*$)", content or "")
+        ap = atok.start() if atok else -1
+        cut = [p for p in (li, ii, ai, pi, mi, si, bi, gi, ap) if p != -1]
         if cut:
             smi = content[: min(cut)]
         if li != -1:
             # 值截止到下一个参数的逗号位置（after 用 start）
-            after = [p for p in (ii, ai, pi, mi, si, bi, gi)
+            after = [p for p in (ii, ai, pi, mi, si, bi, gi, ap)
                      if p != -1 and p > li]
             label = content[li_end:min(after)] if after else content[li_end:]
         # LLM 偶发写出尾逗号（如 [STRUCT:CC[OH2+],]），归一化去掉
@@ -281,6 +292,34 @@ def _parse_content(tag_type: str, content: str) -> list:
             return [ida.strip(), rest.strip()]
         return [_strip_fake_label(content), ""]
     if tag_type == "ARROW":
+        if (content or "").strip().startswith("type="):
+            # 容器内新语法（20260819 大一统架构）：[ARROW:type=..., sup=..., 条件]
+            # 返回 [type, sup附件列表, 条件]。sup 附件 = "+id"（副反应物，箭头上方）
+            # / "-id"（副产物，箭头下方），逗号分隔（与用户示例一致：sup=+E,-F）。
+            # 附件列表吸收以 +/- 开头且形如 id 的后续逗号项，消除与条件文本歧义。
+            content = content.strip()
+            type_, rest = "single", content
+            m = re.match(r"^type=(\w+)", content)
+            if m:
+                type_, rest = m.group(1), content[m.end():].strip()
+            sup_items, rest2 = [], []
+            tokens = [t.strip() for t in rest.split(",") if t.strip()]
+            in_sup = False
+            for t in tokens:
+                if t.startswith("sup="):
+                    in_sup = True
+                    # sup 值内附件可再以 `;` 分隔（与 REACTION 物种分隔一致）
+                    for s in t[len("sup="):].split(";"):
+                        if s.strip():
+                            sup_items.append(s.strip())
+                    continue
+                if in_sup and re.fullmatch(r"[+-][A-Za-z0-9_]+", t):
+                    sup_items.append(t)
+                    continue
+                in_sup = False
+                rest2.append(t)
+            return [type_, sup_items, ", ".join(rest2)]
+        # 顶层旧语法：[ARROW:反应物,产物,类型]
         parts = content.split(",", 2)
         while len(parts) < 3:
             parts.append("")
@@ -335,7 +374,10 @@ def _parse_struct_attrs(content: str) -> dict:
     bi, bi_end = _find_kv(content, "bond")
     gi, gi_end = _find_kv(content, "angle")
     # 值截止用下一参数的逗号位置（start）；提取起点用本参数值起点（end）
-    others_start = [p for p in (li, ii, ai, pi, mi, si, bi, gi) if p != -1]
+    atok = re.search(r",\s*arrow(?=,|\s*$)", content or "")
+    ap = atok.start() if atok else -1
+    others_start = [p for p in (li, ii, ai, pi, mi, si, bi, gi, ap)
+                    if p != -1]
     if ii != -1:
         after = [p for p in others_start if p > ii]
         val = content[ii_end:min(after) if after else len(content)]
@@ -368,6 +410,9 @@ def _parse_struct_attrs(content: str) -> dict:
         after = [p for p in others_start if p > gi]
         val = content[gi_end:min(after) if after else len(content)].strip()
         attrs["angle"] = val
+    # arrow 裸令牌（大一统架构：该 STRUCT 是箭头上附件——副反应物/副产物）
+    if re.search(r",\s*arrow(?=,|\s*$)", content or ""):
+        attrs["arrow"] = True
     return attrs
 
 
@@ -382,14 +427,43 @@ def _parse_inner_tags(inner: str, base: int) -> List[RenderTag]:
     参数:
         inner: 容器内文本（不含 [COMPOSITE:...] 与 [/COMPOSITE]）。
         base: inner 在原文中的起始下标，用于把子标记位置换算回原文坐标。
+
+    先配对 [BLOCK]...[/BLOCK] 共振块（块内子标记递归解析，不允许嵌套），
+    其余子标记照常解析并跳过块区域。
     """
     children = []
+    block_regions = []
+    bi = 0
+    while True:
+        bo = inner.find(_BLOCK_OPEN, bi)
+        if bo == -1:
+            break
+        bc = inner.find(_BLOCK_CLOSE, bo + len(_BLOCK_OPEN))
+        if bc == -1:
+            bi = bo + len(_BLOCK_OPEN)
+            continue
+        block_inner = inner[bo + len(_BLOCK_OPEN):bc]
+        sub = _parse_inner_tags(block_inner, base + bo + len(_BLOCK_OPEN))
+        raw = inner[bo:bc + len(_BLOCK_CLOSE)]
+        children.append(RenderTag(
+            type="BLOCK", args=[sub], raw=raw,
+            start_pos=base + bo, end_pos=base + bc + len(_BLOCK_CLOSE),
+        ))
+        block_regions.append((bo, bc + len(_BLOCK_CLOSE)))
+        bi = bc + len(_BLOCK_CLOSE)
+
+    def _in_block(pos: int) -> bool:
+        return any(s <= pos < e for s, e in block_regions)
+
     for tag_type, opener in _INNER_OPENERS.items():
         search_from = 0
         while True:
             idx = inner.find(opener, search_from)
             if idx == -1:
                 break
+            if _in_block(idx):
+                search_from = idx + len(opener)
+                continue
             end = _find_tag_end(inner, idx)
             if end == -1:
                 search_from = idx + len(opener)
@@ -406,6 +480,9 @@ def _parse_inner_tags(inner: str, base: int) -> List[RenderTag]:
             idx = inner.find(token, search_from)
             if idx == -1:
                 break
+            if _in_block(idx):
+                search_from = idx + len(token)
+                continue
             children.append(RenderTag(
                 type=tag_type,
                 args=[],

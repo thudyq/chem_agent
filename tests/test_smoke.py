@@ -202,6 +202,46 @@ def test_smoke_composite_mode_lewis():
     _assert_ok(outs[0], "\\fill")
 
 
+def test_smoke_reaction_layout():
+    """大一统架构 reaction 布局：ARROW 序列渲染（正向 + 可逆 + 附件结构式）。"""
+    outs, bad = _render(
+        "[COMPOSITE:reaction][STRUCT:CCl,id=A,label=CH3Cl]"
+        "[STRUCT:[OH-],id=E,arrow][STRUCT:[Cl-],id=F,arrow]"
+        "[ARROW:type=reversible,sup=+E;-F]"
+        "[STRUCT:CO,id=B,label=CH3OH][/COMPOSITE]")
+    assert len(outs) == 1 and bad == 0, [r.reason for r in bad]
+    _assert_ok(outs[0], "\\begin{scope}[shift=")
+    # 附件结构式（副反应物/副产物）：OH- 电荷圈、Cl- 标签存在；⇌ 令牌剥离
+    assert "{$-$}" in outs[0] and "{Cl}" in outs[0]
+    assert "⇌" not in outs[0]
+
+
+def test_smoke_reaction_block():
+    """reaction 布局 [BLOCK] 共振块渲染（块 scope + ↔）。"""
+    outs, bad = _render(
+        "[COMPOSITE:reaction][STRUCT:c1ccccc1,id=A,label=苯]"
+        "[ARROW:type=single,条件]"
+        "[BLOCK][STRUCT:C1=CC=CC=C1,id=B1]"
+        "[ARROW:type=resonance]"
+        "[STRUCT:C1C=CC=CC=1,id=B2][/BLOCK]"
+        "[ARROW:type=single,条件]"
+        "[STRUCT:O=[N+]([O-])c1ccccc1,id=C,label=硝基苯][/COMPOSITE]")
+    assert len(outs) == 1 and bad == 0, [r.reason for r in bad]
+    _assert_ok(outs[0], "\\leftrightarrow")
+
+
+def test_smoke_reaction_retro():
+    """reaction 布局逆合成箭头（⇒ 双线杆 + 开放折线尖）。"""
+    outs, bad = _render(
+        "[COMPOSITE:reaction][STRUCT:O=Cc1ccccc1,id=T,label=苯甲醛]"
+        "[ARROW:type=retro,formylation][STRUCT:c1ccccc1,id=P,label=苯]"
+        "[/COMPOSITE]")
+    assert len(outs) == 1 and bad == 0
+    assert "\\node[font=\\large]" not in outs[0]   # 非共振
+    # 双线杆（两条平行线 y=±0.05）存在
+    assert outs[0].count("0.05") >= 2 and outs[0].count("-0.05") >= 1
+
+
 def test_smoke_lewis_with_label():
     outs, bad = _render("[LEWIS:O,label=水]")
     assert len(outs) == 1 and bad == 0

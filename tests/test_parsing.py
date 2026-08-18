@@ -93,6 +93,55 @@ def test_struct_mode_named_params():
     assert t4.attrs["id"] == "s0"
 
 
+def test_composite_arrow_new_syntax():
+    """大一统架构：容器内 [ARROW:type=..., sup=..., 条件] 解析。"""
+    tag = parse_tags("[COMPOSITE:reaction]"
+                     "[STRUCT:CCl,id=A]"
+                     "[ARROW:type=reversible,sup=+E,-F,条件]"
+                     "[/COMPOSITE]")[0]
+    arrow = next(c for c in tag.args[1] if c.type == "ARROW")
+    assert arrow.args[0] == "reversible"
+    assert arrow.args[1] == ["+E", "-F"]
+    assert arrow.args[2] == "条件"
+    # 无附件、无条件的箭头
+    tag2 = parse_tags("[COMPOSITE:reaction][STRUCT:CC,id=A]"
+                      "[ARROW:type=single][/COMPOSITE]")[0]
+    a2 = next(c for c in tag2.args[1] if c.type == "ARROW")
+    assert a2.args == ["single", [], ""]
+
+
+def test_composite_arrow_toplevel_old_syntax_kept():
+    """顶层 [ARROW:反应物,产物,类型] 旧语法不受容器内新语法影响。"""
+    tags = parse_tags("[ARROW:CCO,CC=O,Cu, Δ]")
+    assert tags[0].type == "ARROW"
+    assert tags[0].args == ["CCO", "CC=O", "Cu, Δ"]
+
+
+def test_composite_block_parsing():
+    """[BLOCK]...[/BLOCK] 共振块配对解析（块内子标记递归）。"""
+    tag = parse_tags("[COMPOSITE:reaction]"
+                     "[STRUCT:c1ccccc1,id=A]"
+                     "[BLOCK][STRUCT:C1=CC=CC=C1,id=B1]"
+                     "[ARROW:type=resonance]"
+                     "[STRUCT:C1C=CC=CC=1,id=B2][/BLOCK]"
+                     "[/COMPOSITE]")[0]
+    block = next(c for c in tag.args[1] if c.type == "BLOCK")
+    inner = block.args[0]
+    assert [c.type for c in inner] == ["STRUCT", "ARROW", "STRUCT"]
+    assert inner[1].args[0] == "resonance"
+
+
+def test_composite_struct_arrow_token():
+    """STRUCT 的 arrow 裸令牌：附件标记进 attrs，id 不被污染。"""
+    tag = parse_tags("[COMPOSITE:reaction]"
+                     "[STRUCT:[OH-],id=E,arrow]"
+                     "[/COMPOSITE]")[0]
+    s = next(c for c in tag.args[1] if c.type == "STRUCT")
+    assert s.attrs["arrow"] is True
+    assert s.attrs["id"] == "E"
+    assert s.args[0] == "[OH-]"
+
+
 def test_composite_prose_mention_not_swallowed():
     """正文文字提及 [COMPOSITE:...]（如"用 [COMPOSITE:row] 展示"）时不应
     与后面的真容器贪婪配对——真容器必须正常解析，不被幻影容器吞掉。"""
