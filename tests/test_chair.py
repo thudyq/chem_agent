@@ -149,6 +149,28 @@ class TestGeometry:
         assert abs(y2 - y1 - _SUB_LEN) < 1e-6, f"1 位 ax 键应竖直朝上: {sub}"
         assert "{Br}" in out
 
+    def _sub_angle(self, smi, spec):
+        """渲染后最后一条键（取代基键）的方向角（0~360）。"""
+        out = render_chair(smi, spec)
+        bonds = re.findall(
+            r"\\draw \(([-\d.]+),([-\d.]+)\) -- \(([-\d.]+),([-\d.]+)\);", out)
+        x1, y1, x2, y2 = map(float, bonds[-1])
+        return math.degrees(math.atan2(y2 - y1, x2 - x1)) % 360.0
+
+    def test_equatorial_pos2_and_pos5_60deg(self):
+        """2/5 号位平伏键与水平呈 60°（fast_latex_test.tex 参考，20260818）。
+
+        原实现与浅斜骨架键平行（±15°）→ 2 号 165°、5 号 345°（视觉太平）；
+        正确：2 号 120°（左上）、5 号 300°（右下）。
+        """
+        assert abs(self._sub_angle("C1C(C)CCCC1", "2:eq") - 120.0) < 1.0
+        assert abs(self._sub_angle("C1CCCC(C)C1", "5:eq") - 300.0) < 1.0
+
+    def test_equatorial_pos2_pos5_flip_y_reflection(self):
+        """flip 画法 2/5 号位平伏键 = 正常画法的 y 反射（240°/60°）。"""
+        assert abs(self._sub_angle("C1C(C)CCCC1", "flip,2:eq") - 240.0) < 1.0
+        assert abs(self._sub_angle("C1CCCC(C)C1", "flip,5:eq") - 60.0) < 1.0
+
 
 class TestFlip:
     def test_parse_flip(self):
