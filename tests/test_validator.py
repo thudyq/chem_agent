@@ -123,6 +123,33 @@ def test_newman_angle_out_of_range():
     assert len(invalid) == 1
 
 
+def test_newman_with_bond_valid():
+    """新格式 [NEWMAN:SMILES,a-b,角度]：合法键放行。"""
+    _, invalid = _validate("[NEWMAN:CC,0-1,60]")
+    assert len(invalid) == 0
+
+
+def test_newman_bond_not_exist_rejected():
+    """键 a-b 不存在（索引在范围内但不成键）→ 拦截。"""
+    _, invalid = _validate("[NEWMAN:CCC,0-2,60]")
+    assert len(invalid) == 1
+    assert "键" in invalid[0].reason
+
+
+def test_newman_bond_atom_out_of_range():
+    """原子序号越界（5 超过原子数 2）→ 拦截。"""
+    _, invalid = _validate("[NEWMAN:CC,5-1,60]")
+    assert len(invalid) == 1
+    assert "越界" in invalid[0].reason
+
+
+def test_newman_bond_missing_angle():
+    """新格式缺角度 → 拦截。"""
+    _, invalid = _validate("[NEWMAN:CC,0-1]")
+    assert len(invalid) == 1
+    assert "角度" in invalid[0].reason
+
+
 def test_energy_bad_value_rejected():
     _, invalid = _validate("[ENERGY:0,abc]")
     assert len(invalid) == 1

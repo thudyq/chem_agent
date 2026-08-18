@@ -148,7 +148,15 @@ def test_newman():
     tags = parse_tags("[NEWMAN:CC,60]")
     assert len(tags) == 1
     assert tags[0].type == "NEWMAN"
-    assert tags[0].args == ["CC", "60"]
+    assert tags[0].args == ["CC", "60", ""]
+
+
+def test_newman_with_bond():
+    """NEWMAN 三参数：[SMILES, a-b, 角度]（投影观察键 + 二面角）。"""
+    tags = parse_tags("[NEWMAN:CC,0-1,60]")
+    assert len(tags) == 1
+    assert tags[0].type == "NEWMAN"
+    assert tags[0].args == ["CC", "0-1", "60"]
 
 
 def test_energy():

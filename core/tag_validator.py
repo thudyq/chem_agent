@@ -571,18 +571,62 @@ def _validate_struct_args(args: list) -> Tuple[bool, str]:
     return True, ""
 
 
+# NEWMAN 键参数格式：a-b（原子序号对，投影观察键）
+_NEWMAN_BOND_RE = re.compile(r"^\d+-\d+$")
+
+
+def _check_newman_bond(smi: str, bond_spec: str) -> Tuple[bool, str]:
+    """NEWMAN 键参数存在性校验（a-b 为 SMILES 中的一条键）。"""
+    try:
+        a, b = (int(x) for x in bond_spec.split("-"))
+    except ValueError:
+        return False, f"键参数「{bond_spec}」格式应为 a-b"
+    try:
+        mol = Chem.MolFromSmiles(smi)
+    except Exception:
+        return False, f"无效 SMILES「{smi}」"
+    if mol is None:
+        return False, f"无效 SMILES「{smi}」"
+    if a < 0 or b < 0 or a >= mol.GetNumAtoms() or b >= mol.GetNumAtoms():
+        return False, f"原子序号越界：{bond_spec}（原子数 {mol.GetNumAtoms()}）"
+    if mol.GetBondBetweenAtoms(a, b) is None:
+        return False, f"原子 {a} 与 {b} 之间无键"
+    return True, ""
+
+
 def _validate_newman(args: list) -> Tuple[bool, str]:
+    """NEWMAN 校验：SMILES + 投影键（a-b，可缺省）+ 二面角（0~360）。
+
+    兼容旧格式 [NEWMAN:SMILES,角度]（第二参数为角度、无键参数）——
+    第二参数形如 `a-b` 时按新格式（第三参数为角度）解析。
+    """
     if not args or not args[0]:
         return False, "SMILES 为空"
-    angle = args[1] if len(args) > 1 else ""
+    smi = args[0].strip()
+    if not _smiles_ok(smi):
+        return False, f"无效 SMILES「{smi}」"
+    arg1 = (args[1] or "").strip() if len(args) > 1 else ""
+    arg2 = (args[2] or "").strip() if len(args) > 2 else ""
+    if _NEWMAN_BOND_RE.match(arg1):
+        # 新格式：[SMILES, a-b, 角度]
+        bond_spec, angle = arg1, arg2
+        if not angle:
+            return False, "缺少角度"
+        if _RDKIT_OK:
+            ok, reason = _check_newman_bond(smi, bond_spec)
+            if not ok:
+                return False, reason
+    else:
+        # 旧格式：[SMILES, 角度]
+        bond_spec, angle = "", arg1
+    if not angle:
+        return False, "缺少角度"
     try:
         a = float(angle)
     except (TypeError, ValueError):
         return False, f"角度「{angle}」不是数字"
     if not 0 <= a <= 360:
         return False, f"角度 {a:g} 超出 0~360"
-    if not _smiles_ok(args[0].strip()):
-        return False, f"无效 SMILES「{args[0].strip()}」"
     return True, ""
 
 

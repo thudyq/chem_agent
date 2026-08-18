@@ -1,11 +1,19 @@
 # -*- coding: utf-8 -*-
-"""renderers/newman.py — [NEWMAN] 标记渲染器：沿 C-C 键的纽曼投影式。
+"""renderers/newman.py — [NEWMAN] 标记渲染器：沿指定键的纽曼投影式。
 
-输入 SMILES + 二面角，用 tikzpicture 画纽曼投影：前碳为实心圆、3 键 120° 分布，
-后碳 3 键旋转 θ°（灰色、先画以置于后）。取代基标签由 RDKit 解析（C→CH₃、O→OH、隐式 H）。
+输入 SMILES + 投影键（a-b，原子序号对）+ 二面角，用 tikzpicture 画纽曼投影：
+前碳为实心圆、3 键 120° 分布，后碳 3 键旋转 θ°（灰色、先画以置于后）。
+取代基标签由 RDKit 解析（C→CH₃、O→OH、隐式 H）。
+
+格式：[NEWMAN:SMILES,a-b,角度]（a-b 缺省时兼容旧格式 [NEWMAN:SMILES,角度]，
+自动选首个 C-C 单键作为观察键）。
 """
 
 import math
+import re
+
+# 键参数格式：a-b（原子序号对）
+_BOND_SPEC_RE = re.compile(r"^\d+-\d+$")
 
 
 def _atom_label(atom):
@@ -21,10 +29,33 @@ def _atom_label(atom):
     return sym
 
 
-def render_newman(smiles: str, angle="60") -> str:
-    """[NEWMAN] 渲染：SMILES + 二面角 → 纽曼投影 TikZ 代码。
+def _pick_bond(mol, bond_spec: str):
+    """按键参数 a-b 选观察键；找不到返回 None。
 
-    失败（无效 SMILES/无 C-C 单键/rdkit 未装）返回可读错误提示。
+    bond_spec 为空（旧格式）→ 自动选首个 C-C 单键。
+    """
+    if bond_spec:
+        try:
+            a, b = (int(x) for x in bond_spec.split("-"))
+        except ValueError:
+            return None
+        if 0 <= a < mol.GetNumAtoms() and 0 <= b < mol.GetNumAtoms():
+            return mol.GetBondBetweenAtoms(a, b)
+        return None
+    for b in mol.GetBonds():
+        a1, a2 = b.GetBeginAtom(), b.GetEndAtom()
+        if a1.GetSymbol() == "C" and a2.GetSymbol() == "C" \
+                and b.GetBondTypeAsDouble() == 1:
+            return b
+    return None
+
+
+def render_newman(smiles: str, bond_spec: str = "", angle: str = "60") -> str:
+    """[NEWMAN] 渲染：SMILES + 投影键 + 二面角 → 纽曼投影 TikZ 代码。
+
+    兼容旧调用 render_newman(smiles, "60")——第二参数不是 a-b 格式时
+    视为角度（旧格式，自动选键）。
+    失败（无效 SMILES/键不存在/无 C-C 单键/rdkit 未装）返回可读错误提示。
     """
     try:
         from rdkit import Chem
@@ -35,14 +66,19 @@ def render_newman(smiles: str, angle="60") -> str:
     if mol is None:
         return f"（纽曼投影渲染失败：无效 SMILES「{smiles}」）"
 
-    # 找首个 C-C 单键作为观察键（复杂分子的特定键选择留作后续优化）
-    bond = None
-    for b in mol.GetBonds():
-        a, b2 = b.GetBeginAtom(), b.GetEndAtom()
-        if a.GetSymbol() == "C" and b2.GetSymbol() == "C" and b.GetBondTypeAsDouble() == 1:
-            bond = b
-            break
+    spec = (bond_spec or "").strip()
+    if _BOND_SPEC_RE.match(spec):
+        # 新格式：[SMILES, a-b, 角度]——bond_spec 为键，angle 为角度
+        pass
+    else:
+        # 旧格式：[SMILES, 角度]——第二参数是角度，键自动选择
+        angle = spec or angle
+        spec = ""
+
+    bond = _pick_bond(mol, spec)
     if bond is None:
+        if spec:
+            return f"（纽曼投影渲染失败：键 {spec} 不存在）"
         return f"（纽曼投影渲染失败：「{smiles}」无 C-C 单键）"
 
     front_atom, back_atom = bond.GetBeginAtom(), bond.GetEndAtom()
@@ -100,7 +136,9 @@ def render_newman(smiles: str, angle="60") -> str:
 
 
 if __name__ == "__main__":
-    print("[1] 乙烷 CC, 60°（交叉式）:")
+    print("[1] 乙烷沿 0-1 键, 60°（交叉式，新格式）:")
+    print(render_newman("CC", "0-1", "60"))
+    print("\n[2] 乙烷沿 0-1 键, 0°（重叠式）:")
+    print(render_newman("CC", "0-1", "0"))
+    print("\n[3] 旧格式兼容（自动选键）:")
     print(render_newman("CC", "60"))
-    print("\n[2] 乙烷 CC, 0°（重叠式）:")
-    print(render_newman("CC", "0"))

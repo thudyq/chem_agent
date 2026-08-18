@@ -213,8 +213,10 @@ def _parse_content(tag_type: str, content: str) -> list:
             parts.append("")
         return parts
     if tag_type == "NEWMAN":
-        parts = content.split(",", 1)
-        if len(parts) == 1:
+        # [NEWMAN:SMILES,a-b,角度]：a-b 为投影观察键（原子序号），角度为二面角；
+        # 兼容旧格式 [NEWMAN:SMILES,角度]（键缺省，渲染器自动选键）
+        parts = content.split(",", 2)
+        while len(parts) < 3:
             parts.append("")
         return parts
     if tag_type == "CHAIR":

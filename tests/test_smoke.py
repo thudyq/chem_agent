@@ -139,6 +139,13 @@ def test_smoke_newman():
     _assert_ok(outs[0], "circle")
 
 
+def test_smoke_newman_with_bond():
+    """NEWMAN 三参数（指定投影键 a-b）：渲染成功。"""
+    outs, bad = _render("[NEWMAN:CC,0-1,60]")
+    assert len(outs) == 1 and bad == 0
+    _assert_ok(outs[0], "circle")
+
+
 def test_smoke_stereo():
     outs, bad = _render("[STEREO:C[C@H](O)C(=O)O]")
     assert len(outs) == 1 and bad == 0
