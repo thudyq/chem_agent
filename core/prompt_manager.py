@@ -10,9 +10,6 @@ _ARROW_INSTRUCTION_PATH = (
 _STRUCTURE_INSTRUCTION_PATH = (
     Path(__file__).resolve().parent.parent / "prompts" / "Instruction-for-Structure.md"
 )
-_HBOND_INSTRUCTION_PATH = (
-    Path(__file__).resolve().parent.parent / "prompts" / "Instruction-for-Hbonds.md"
-)
 _SMILES_INSTRUCTION_PATH = (
     Path(__file__).resolve().parent.parent / "prompts" / "Instruction-for-SMILES.md"
 )
@@ -41,8 +38,11 @@ def load_smiles_instructions() -> str:
 
 
 def load_hbond_instructions() -> str:
-    """加载氢键绘制规范。"""
-    return _load_instruction(_HBOND_INSTRUCTION_PATH)
+    """氢键规范已并入主提示（20260821 重写：Instruction-for-Hbonds.md 删除）。
+
+    保留函数签名供外部兼容；返回空串。
+    """
+    return ""
 
 
 def load_system_prompt() -> str:
@@ -75,17 +75,6 @@ def load_system_prompt() -> str:
             + "结构式使用规范（来自 prompts/Instruction-for-Structure.md）\n"
             + "============================================================\n\n"
             + structure_instructions
-        )
-
-    hbond_instructions = load_hbond_instructions()
-    if hbond_instructions:
-        system_prompt = (
-            system_prompt
-            + "\n\n"
-            + "============================================================\n"
-            + "氢键绘制规范（来自 prompts/Instruction-for-Hbonds.md）\n"
-            + "============================================================\n\n"
-            + hbond_instructions
         )
 
     smiles_instructions = load_smiles_instructions()
