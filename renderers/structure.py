@@ -64,7 +64,12 @@ def render_structure(smiles: str, label: str = None) -> str:
 
     rings = aromatic_ring_info(mol) if is_aromatic else None
     lines = ["\\begin{tikzpicture}"]
-    lines.extend(molecule_scope_lines(mol, (0.0, 0.0), aromatic_rings=rings))
+    # 键线式默认不标孤对电子（规范第 3 条，与 ARROW/REACTION/RETRO 一致）：
+    # 孤对电子仅在 LEWIS / 机理容器（MECHARROW/RESARROW）中显示。
+    # 注意 molecule_scope_lines 默认 show_lone_pairs=True，此处必须显式关闭
+    # （20260818 修复：此前顶层 STRUCT 漏传 → [STRUCT:CCl] 的 Cl 画出 3 对孤对电子）。
+    lines.extend(molecule_scope_lines(mol, (0.0, 0.0), aromatic_rings=rings,
+                                      show_lone_pairs=False))
     if label:
         text = wrap_format_text(label)
         align = "align=center, " if "\\\\" in text else ""

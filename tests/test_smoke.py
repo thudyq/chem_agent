@@ -49,6 +49,19 @@ def test_smoke_struct():
     _assert_ok(outs[0], "苯")
 
 
+def test_smoke_struct_no_lone_pairs():
+    """顶层 STRUCT 不画孤对电子（键线式规范第 3 条，20260818 回归锚点）。
+
+    此前 render_structure 漏传 show_lone_pairs=False（molecule_scope_lines
+    默认 True）→ [STRUCT:CCl] 的 Cl 画出 3 对孤对电子点（6 个 \\fill）。
+    对照：LEWIS 仍画（test_smoke_lewis 断言 \\fill）。
+    """
+    outs, bad = _render("[STRUCT:CCl]")
+    assert len(outs) == 1 and bad == 0
+    _assert_ok(outs[0], "{Cl}")
+    assert "\\fill" not in outs[0], "顶层 STRUCT 不应有孤对电子点"
+
+
 def test_smoke_reaction():
     outs, bad = _render("[REACTION:CCO;CCO|CCOCC;O|H2SO4]")
     assert len(outs) == 1 and bad == 0
