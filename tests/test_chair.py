@@ -131,6 +131,24 @@ class TestGeometry:
         assert min(abs(line - 15.0), abs(line - 165.0)) < 1.0, \
             f"equatorial 键不平行浅斜骨架: {ang:.1f}°"
 
+    def test_substituent_bond_length(self):
+        """取代基键线终点距环碳 _SUB_LEN=1.1（20260818 微调）。
+
+        Br 1 位 ax：键线终点 (0,1.10)，标签中心 (0,1.40)
+        （再外移 label_bond_margin(Br)=0.30）。
+        """
+        from renderers.chair import _SUB_LEN
+        out = render_chair("BrC1CCCCC1", "1:ax")
+        bonds = re.findall(
+            r"\\draw \(([-\d.]+),([-\d.]+)\) -- \(([-\d.]+),([-\d.]+)\);", out)
+        sub = bonds[-1]
+        x1, y1, x2, y2 = map(float, sub)
+        length = math.hypot(x2 - x1, y2 - y1)
+        assert abs(length - _SUB_LEN) < 1e-6, \
+            f"取代基键长 {length:.3f} ≠ {_SUB_LEN}"
+        assert abs(y2 - y1 - _SUB_LEN) < 1e-6, f"1 位 ax 键应竖直朝上: {sub}"
+        assert "{Br}" in out
+
 
 class TestFlip:
     def test_parse_flip(self):

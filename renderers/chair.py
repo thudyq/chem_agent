@@ -29,7 +29,8 @@ from .mol_primitives import atom_main_label, format_chem_text, label_bond_margin
 _SIGMA = 15.0       # 浅斜键与水平夹角（Klein 约束解出，视觉校准后可调）
 _STEEP = 60.0       # 陡斜键与水平夹角（Klein 明文 60°）
 _L = 1.5            # 环键长
-_SUB_LEN = 1.0      # 取代基键长
+_SUB_LEN = 1.1      # 取代基键线终点距环碳（20260818 微调：原 1.0 偏短、
+                    # 试 1.5 与环键等长后视觉过长，定为 1.1）
 
 # 顶点有向边方向（遍历序）：-σ, +σ, -60°, 180-σ, 180+σ, 180-60°——三对平行、
 # 60° 键底端同高、闭环自洽
@@ -131,17 +132,16 @@ def render_chair(smiles: str, spec: str = "") -> str:
         ang = (90.0 if up else -90.0) if kind == "ax" else \
             _equatorial_angle(vx, vy, (cx, cy), up)
         r = math.radians(ang)
-        ex, ey = vx + _SUB_LEN * math.cos(r), vy + _SUB_LEN * math.sin(r)
         label = _substituent_label(mol, ring[pos - 1], ring_set)
         if not label:
             continue            # 该环位无取代基（校验层已拦截，渲染兜底跳过）
-        # 取代基端标签留白：键线终点停在标签占位之外（与骨架键/显式 H 同一
-        # label_bond_margin 口径）；环碳端是键线式顶点（不标 C）无标签不收缩。
+        # 取代基键线终点距环碳 _SUB_LEN=1.1（短于环键，避免过长遮挡）；
+        # 标签中心再沿键方向外移 label_bond_margin（标签不压键线终点；
+        # 环碳端是键线式顶点不标 C 无标签不收缩）
+        bx, by = vx + _SUB_LEN * math.cos(r), vy + _SUB_LEN * math.sin(r)
         m = label_bond_margin(label)
-        d = math.hypot(ex - vx, ey - vy) or 1.0
-        ux, uy = (ex - vx) / d, (ey - vy) / d
-        sx, sy = ex - ux * m, ey - uy * m
-        lines.append(f"  \\draw ({vx:.2f},{vy:.2f}) -- ({sx:.2f},{sy:.2f});")
+        ex, ey = bx + math.cos(r) * m, by + math.sin(r) * m
+        lines.append(f"  \\draw ({vx:.2f},{vy:.2f}) -- ({bx:.2f},{by:.2f});")
         lines.append(
             f"  \\node[fill=white, inner sep=1pt] at ({ex:.2f},{ey:.2f}) "
             f"{{{format_chem_text(label)}}};")
