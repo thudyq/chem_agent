@@ -255,15 +255,16 @@ def _parse_content(tag_type: str, content: str) -> list:
         si, si_end = _find_kv(content, "subs")
         bi, bi_end = _find_kv(content, "bond")
         gi, gi_end = _find_kv(content, "angle")
+        ci, ci_end = _find_kv(content, "charge")
         # arrow 裸令牌（箭头上附件标记）也是参数分隔符
         atok = re.search(r",\s*arrow(?=,|\s*$)", content or "")
         ap = atok.start() if atok else -1
-        cut = [p for p in (li, ii, ai, pi, mi, si, bi, gi, ap) if p != -1]
+        cut = [p for p in (li, ii, ai, pi, mi, si, bi, gi, ci, ap) if p != -1]
         if cut:
             smi = content[: min(cut)]
         if li != -1:
             # 值截止到下一个参数的逗号位置（after 用 start）
-            after = [p for p in (ii, ai, pi, mi, si, bi, gi, ap)
+            after = [p for p in (ii, ai, pi, mi, si, bi, gi, ci, ap)
                      if p != -1 and p > li]
             label = content[li_end:min(after)] if after else content[li_end:]
         # LLM 偶发写出尾逗号（如 [STRUCT:CC[OH2+],]），归一化去掉
@@ -358,7 +359,7 @@ def _parse_content(tag_type: str, content: str) -> list:
 
 
 def _parse_struct_attrs(content: str) -> dict:
-    """提取 STRUCT 内容中的结构化属性 id/at/pos/mode/subs/bond/angle。
+    """提取 STRUCT 内容中的结构化属性 id/at/pos/mode/subs/bond/angle/charge。
 
     与 _parse_content 的 STRUCT 分支共用查找逻辑，但额外返回属性值，
     供 composite / tag_validator / 渲染分派直接读取（改进 3：避免从
@@ -373,10 +374,11 @@ def _parse_struct_attrs(content: str) -> dict:
     si, si_end = _find_kv(content, "subs")
     bi, bi_end = _find_kv(content, "bond")
     gi, gi_end = _find_kv(content, "angle")
+    ci, ci_end = _find_kv(content, "charge")
     # 值截止用下一参数的逗号位置（start）；提取起点用本参数值起点（end）
     atok = re.search(r",\s*arrow(?=,|\s*$)", content or "")
     ap = atok.start() if atok else -1
-    others_start = [p for p in (li, ii, ai, pi, mi, si, bi, gi, ap)
+    others_start = [p for p in (li, ii, ai, pi, mi, si, bi, gi, ci, ap)
                     if p != -1]
     if ii != -1:
         after = [p for p in others_start if p > ii]
@@ -410,6 +412,10 @@ def _parse_struct_attrs(content: str) -> dict:
         after = [p for p in others_start if p > gi]
         val = content[gi_end:min(after) if after else len(content)].strip()
         attrs["angle"] = val
+    if ci != -1:
+        after = [p for p in others_start if p > ci]
+        val = content[ci_end:min(after) if after else len(content)].strip()
+        attrs["charge"] = val
     # arrow 裸令牌（大一统架构：该 STRUCT 是箭头上附件——副反应物/副产物）
     if re.search(r",\s*arrow(?=,|\s*$)", content or ""):
         attrs["arrow"] = True

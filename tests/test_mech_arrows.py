@@ -90,62 +90,48 @@ def test_draw_mech_arrows_skip_invalid_point():
 
 
 def test_draw_mech_arrows_explicit_h_point():
-    """B1（20260812）：a#k 端点定位到 [XH] 显式 H 节点坐标。
-
-    C（单碳，仅 0 号原子）加 [XH] 画出 1 个 H，MECHARROW 用 ch4:0#1 引用它。
+    """20260821：显式 H 是真实原子参与编号（a#k 废弃），MECHARROW 直接用
+    H 原子序号引用（CC([H])CC 的 2 号原子是 H）。
     """
-    mols = _mols("C")
-    mols["r0"]["xh"] = [0]
-    mols["r0"]["explicit_hs"] = {0: 1}
-    # 模拟 XH 渲染收集的坐标（局部，未加 shift）——与实际 place_explicit_hs 一致
-    from renderers.mol_primitives import place_explicit_hs
-    pts = place_explicit_hs(mols["r0"]["mol"], 0, 1)
-    mols["r0"]["xh_points"] = {0: pts}
-    lines = draw_mech_arrows(mols, _parse_mech_arrows(["r0:0#1>r0:0"]))
-    assert lines, "a#k 端点应能定位到显式 H 并绘制箭头"
+    mols = _mols("CC([H])CC")   # 5 原子：C0-C1(H2)-C3-C4，2 号是显式 H
+    lines = draw_mech_arrows(mols, _parse_mech_arrows(["r0:2>r0:0"]))
+    assert lines, "H 原子序号端点应能定位并绘制箭头"
 
 
-def test_draw_mech_arrows_explicit_h_missing_skips():
-    """a#k 但组件无对应显式 H（未声明 XH）→ 跳过，不崩溃。"""
-    mols = _mols("C")
-    mols["r0"]["xh_points"] = {}
-    lines = draw_mech_arrows(mols, _parse_mech_arrows(["r0:0#1>r0:0"]))
-    assert lines == []
+def test_draw_mech_arrows_explicit_h_bond_break():
+    """显式 H 断键（夺 H）：起点为 C–H 键中点（a-b，如 1-2），向下弯。"""
+    mols = _mols("CC([H])CC")
+    lines = draw_mech_arrows(mols, _parse_mech_arrows(["r0:1-2>r0:0"]))
+    assert lines, "C–H 键中点端点（1-2）应能绘制断键箭头"
 
 
 def test_draw_mech_arrows_explicit_h_out_of_range_skips():
-    """a#k 的 k 超出显式 H 数 → 跳过。"""
-    mols = _mols("C")
-    from renderers.mol_primitives import place_explicit_hs
-    mols["r0"]["xh"] = [0]
-    mols["r0"]["xh_points"] = {0: place_explicit_hs(mols["r0"]["mol"], 0, 1)}
-    lines = draw_mech_arrows(mols, _parse_mech_arrows(["r0:0#2>r0:0"]))
+    """端点超出原子数 → 跳过，不崩溃。"""
+    mols = _mols("CC([H])CC")  # 5 个原子
+    lines = draw_mech_arrows(mols, _parse_mech_arrows(["r0:9>r0:0"]))
     assert lines == []
 
 
 def test_draw_mech_arrows_explicit_h_as_target():
-    """a#k 作终点（如碱夺 H）：箭头尖端退让到 H 节点标签正方形
+    """显式 H 原子作终点（如碱夺 H）：箭头尖端退让到 H 节点标签正方形
     （半边长 _LABEL_SQUARE_HALF=0.13）边缘外约 0.05（aim_end 切线退让，
-    与纯原子终点同一机制），不压 H 占位；而非 X—H 键中点
-    （as_target 区分起点/终点；20260815 起启用正方形退让逻辑）。
+    与纯原子终点同一机制），不压 H 占位。
 
-    C（单碳）加 [XH] 画 H，MECHARROW 终点用 r0:0#1——定位到 H 节点方向，
+    CC([H])CC 的 2 号是显式 H，MECHARROW 终点用 r0:2——定位到 H 节点方向，
     末端退到 H 节点正方形之外。
     """
-    mols = _mols("C", "C")
-    from renderers.mol_primitives import place_explicit_hs
-    pts = place_explicit_hs(mols["r0"]["mol"], 0, 1)
-    mols["r0"]["xh"] = [0]
-    mols["r0"]["explicit_hs"] = {0: 1}
-    mols["r0"]["xh_points"] = {0: pts}
-    lines = draw_mech_arrows(mols, _parse_mech_arrows(["r1:0>r0:0#1"]))
-    assert lines, "a#k 作终点应能定位到显式 H 节点并绘制箭头"
+    mols = _mols("C", "CC([H])CC")
+    lines = draw_mech_arrows(mols, _parse_mech_arrows(["r0:0>r1:2"]))
+    assert lines, "H 原子作终点应能定位到 H 节点并绘制箭头"
     # 终点坐标 = H 节点正方形外（半边长 0.13），间隙约 0.05（含斜向切线修正）
     import re
+    from renderers.mol_primitives import atom_pos
     m = re.search(r"\.\.\s*\(([-\d.]+),([-\d.]+)\)", lines[0])
     assert m, "箭头应有终点坐标"
     tx, ty = float(m.group(1)), float(m.group(2))
-    hx, hy = pts[0][0] + mols["r0"]["shift"][0], pts[0][1] + mols["r0"]["shift"][1]
+    hx, hy = atom_pos(mols["r1"]["mol"], 2)
+    hx += mols["r1"]["shift"][0]
+    hy += mols["r1"]["shift"][1]
     dist = ((tx - hx) ** 2 + (ty - hy) ** 2) ** 0.5
     assert dist > 0.13, \
         f"尖端应退到 H 节点正方形（0.13）之外，实际 {dist:.3f}"

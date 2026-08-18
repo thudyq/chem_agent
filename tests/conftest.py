@@ -32,6 +32,10 @@ KNOWN_SMILES = {
     # B1（20260812）自由基机理：单原子/小分子组分
     "C": _FakeMol(1), "Cl": _FakeMol(1), "ClCl": _FakeMol(2),
     "[Cl]": _FakeMol(1), "[CH3]": _FakeMol(1),
+    # 20260821：显式 H 是真实原子参与编号（a#k 废弃）——甲烷显式 H 写法
+    "C([H])([H])([H])[H]": _FakeMol(5), "O([H])[H]": _FakeMol(3),
+    "N([H])([H])[H]": _FakeMol(4), "[H]OCCO": _FakeMol(5),
+    "CC(=O)O[H]": _FakeMol(5),
     # CHAIR：取代环己烷
     "BrC1CCCCC1": _FakeMol(7), "CC1CCCCC1": _FakeMol(7),
 }

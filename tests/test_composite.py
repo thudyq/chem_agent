@@ -598,12 +598,12 @@ def test_charge_annotation_child():
 
 
 def _hbond_render(extra=""):
-    """乙二醇分子内氢键（语义分离后）：[XH] 画给体 H + [HBOND] 只画点。"""
+    """乙二醇分子内氢键（20260821 起）：显式 H 原子直接参与编号——
+    [H]OCCO 的 0 号是给体 H（O1 的 H），受体为 O4；HBOND 只画点。"""
     return _render(
         "[COMPOSITE:row]"
-        "[STRUCT:OCCO,label=乙二醇,id=diol]"
-        "[XH:diol|0]"
-        "[HBOND:diol:0#1>diol:3]"
+        "[STRUCT:[H]OCCO,label=乙二醇,id=diol]"
+        "[HBOND:diol:0>diol:4]"
         + extra + "[/COMPOSITE]"
     )
 
@@ -657,15 +657,15 @@ def test_hbond_first_dot_inset_from_h():
 
 
 def test_hbond_requires_xh():
-    """语义分离强制：HBOND 引用 a#k 但未先 [XH] 画 H → 校验拦截。"""
+    """20260821 起：给体端点必须是 SMILES 显式 H 原子（真实原子参与编号）；
+    引用非 H 原子（如 O 原子序号）→ 校验拦截。"""
     from core.tag_validator import validate_tags
     text = ("[COMPOSITE:row][STRUCT:OCCO,id=diol]"
-            "[HBOND:diol:0#1>diol:3][/COMPOSITE]")
+            "[HBOND:diol:0>diol:3][/COMPOSITE]")   # 0 号是 O 非 H
     tags = parse_tags(text)
     _, invalid = validate_tags(tags)
     assert len(invalid) == 1
-    assert "HBOND 给体端点" in invalid[0].reason
-    assert "XH" in invalid[0].reason
+    assert "不是 H 原子" in invalid[0].reason
 
 
 def test_static_composite_no_lone_pairs():
@@ -1029,25 +1029,26 @@ def test_registry_dispatch_and_injection():
     assert out.endswith("以上。")
 
 
-# ---------- 氢键（分子内/分子间统一：XH 画氢、HBOND 只画点） ----------
+# ---------- 氢键（分子内/分子间统一：SMILES 显式 H 参与编号、HBOND 只画点） ----------
 
 _INTER_HB_BASE = (
     "[COMPOSITE:row]"
-    "[STRUCT:CC(=O)O,id=a,label=乙酸]"
-    "[STRUCT:CC(=O)O,id=b,label=乙酸]"
+    "[STRUCT:CC(=O)O[H],id=a,label=乙酸]"
+    "[STRUCT:CC(=O)O[H],id=b,label=乙酸]"
 )
 
 
 def test_hbond_inter_parser():
-    """跨组件 HBOND 解析：args = [给体组件 id, "a#k>idB:b"]。"""
-    tags = parse_tags(_INTER_HB_BASE + "[HBOND:a:3#1>b:2][/COMPOSITE]")
+    """跨组件 HBOND 解析：args = [给体组件 id, "给体H原子号>idB:b"]。"""
+    tags = parse_tags(_INTER_HB_BASE + "[HBOND:a:4>b:2][/COMPOSITE]")
     comp = tags[0]
     hbond = [c for c in comp.args[1] if c.type == "HBOND"][0]
-    assert hbond.args == ["a", "3#1>b:2"]
+    assert hbond.args == ["a", "4>b:2"]
 
 
 def test_hbond_inter_validation():
-    """跨组件 HBOND 校验：未画 XH 拦截（a#k 强制配对）；未知组件/越界/格式错拦截。"""
+    """跨组件 HBOND 校验（20260821 起给体为显式 H 原子序号，a#k 废弃）：
+    非 H 原子/越界/未知组件/格式错拦截。"""
     from core.tag_validator import validate_tags
 
     def check(spec):
@@ -1055,73 +1056,90 @@ def test_hbond_inter_validation():
         _, invalid = validate_tags(tags)
         return invalid
 
-    r = check("[HBOND:a:3#1>b:2]")            # 无 [XH:a|3] → a#k 未配对
-    assert r and "给体端点" in r[0].reason and "XH" in r[0].reason
-    r = check("[XH:a|3][HBOND:a:3#1>ghost:2]")
+    r = check("[HBOND:a:4>b:2]")            # 4 号是显式 H → 通过
+    assert not r
+    r = check("[HBOND:a:0>b:2]")            # 0 号是 C 非 H → 拦截
+    assert r and "不是 H 原子" in r[0].reason
+    r = check("[HBOND:a:4>ghost:2]")
     assert r and "引用未知组件" in r[0].reason
-    r = check("[XH:a|3][HBOND:a:99#1>b:2]")
-    assert r and "给体端点" in r[0].reason
-    r = check("[XH:a|3][HBOND:a:3#1>b:99]")
+    r = check("[HBOND:a:9>b:2]")
+    assert r and "给体 H 原子编号" in r[0].reason
+    r = check("[HBOND:a:4>b:9]")
     assert r and "受体原子编号" in r[0].reason
     r = check("[HBOND:a:bad>b:2]")
     assert r and "标注格式错误" in r[0].reason
-    r = check("[XH:a|3][HBOND:a:3#1>b:2]")    # XH + HBOND 成对 → 通过
-    assert not r
 
 
 def test_hbond_inter_renders_dots():
-    """跨组件氢键渲染：[XH] 画给体 H + teal 点状虚线 + 两分子（受体不画 H）。"""
+    """跨组件氢键渲染：SMILES 显式 H（a 的 4 号）为给体 H + teal 点状虚线。"""
     from core.tag_validator import validate_tags
-    text = _INTER_HB_BASE + "[XH:a|3][HBOND:a:3#1>b:2][/COMPOSITE]"
+    text = _INTER_HB_BASE + "[HBOND:a:4>b:2][/COMPOSITE]"
     tags = parse_tags(text)
     _, invalid = validate_tags(tags)
     assert not invalid
     out = render_composite(*tags[0].args)
     assert out.startswith("\\begin{tikzpicture}")
     assert out.count("\\fill[teal]") >= 3     # H···Y 点状虚线（圆点）
-    assert out.count("{H}") == 1              # 给体 XH 画的 H（受体不画 H）
+    assert out.count("{H}") == 2              # 两分子各 1 个显式 H
     assert out.count("{乙酸}") == 2           # 两分子 label 都在
 
 
 def test_hbond_intra_unified():
-    """分子内氢键同一套语法（同 id 写两次）：[XH] + [HBOND:g:0#1>g:3]。"""
+    """分子内氢键同一套语法（同 id 写两次）：[HBOND:g:0>g:4]（[H]OCCO 的
+    0 号显式 H → 4 号受体 O）。"""
     from core.tag_validator import validate_tags
-    text = ("[COMPOSITE:row][STRUCT:OCCO,id=g,label=乙二醇]"
-            "[XH:g|0][HBOND:g:0#1>g:3][/COMPOSITE]")
+    text = ("[COMPOSITE:row][STRUCT:[H]OCCO,id=g,label=乙二醇]"
+            "[HBOND:g:0>g:4][/COMPOSITE]")
     tags = parse_tags(text)
     _, invalid = validate_tags(tags)
     assert not invalid
     out = render_composite(*tags[0].args)
     assert out.startswith("\\begin{tikzpicture}")
     assert out.count("\\fill[teal]") >= 3
-    assert out.count("{H}") == 1              # 仅给体 H（受体不画 H）
+    assert out.count("{H}") == 1              # 仅给体显式 H（受体 O4 不画 H）
 
 
 def test_hbond_donor_h_toward_acceptor():
-    """孤立原子假骨架：水分子间氢键给体 H 朝受体（X—H···Y 直线），
-    teal 点从 H 指向受体不穿分子。"""
+    """水分子间氢键（20260821 起显式 H SMILES）：O([H])[H] 的 1 号 H 为给体，
+    teal 点从 H 指向受体 O 不穿分子。"""
     from core.tag_validator import validate_tags
-    text = ("[COMPOSITE:row][STRUCT:O,id=a,label=水A][STRUCT:O,id=b,label=水B]"
-            "[HBOND:a:0#1>b:0][/COMPOSITE]")
+
+    def _global_nodes(out, label):
+        """scope 局部坐标 + shift → 全局坐标（label: O/N/H）。"""
+        nodes = []
+        for sh_x, sh_y in re.findall(
+                r"\\begin\{scope\}\[shift=\{\(([-\d.]+),([-\d.]+)\)\}\]", out):
+            pass
+        shifts = re.findall(
+            r"\\begin\{scope\}\[shift=\{\(([-\d.]+),([-\d.]+)\)\}\]", out)
+        for i, (sh_x, sh_y) in enumerate(shifts):
+            pass  # scope 内部坐标按顺序与 shift 对应
+        # 简化：分别收集 shift 与节点，按出现顺序配对
+        scope_parts = re.split(r"\\begin\{scope\}\[shift=\{[^}]*\}\]", out)[1:]
+        for (sh_x, sh_y), part in zip(shifts, scope_parts):
+            sx, sy = float(sh_x), float(sh_y)
+            for x, y in re.findall(
+                    r"\\node\[fill=white, inner sep=1pt\] at "
+                    r"\(([-\d.]+),([-\d.]+)\) \{" + label + r"\}", part):
+                nodes.append((float(x) + sx, float(y) + sy))
+        return nodes
+
+    text = ("[COMPOSITE:row][STRUCT:O([H])[H],id=a,label=水A]"
+            "[STRUCT:O([H])[H],id=b,label=水B]"
+            "[HBOND:a:1>b:0][/COMPOSITE]")
     tags = parse_tags(text)
     _, invalid = validate_tags(tags)
     assert not invalid
     out = render_composite(*tags[0].args)
-    # 假骨架：O 节点（水A 左、水B 右）+ 各 2 个 H（V 形）
-    o_nodes = [(float(x), float(y)) for x, y, _ in re.findall(
-        r"\\node\[fill=white, inner sep=1pt\] at "
-        r"\(([-\d.]+),([-\d.]+)\) \{(O|N)\}", out)]
+    # O 节点（水A 左、水B 右）+ 各 2 个显式 H（V 形）
+    o_nodes = _global_nodes(out, "O")
     assert len(o_nodes) == 2
     oa, ob = o_nodes[0][0], o_nodes[1][0]
     assert ob > oa
-    h_nodes = [(float(x), float(y)) for x, y in re.findall(
-        r"\\node\[fill=white, inner sep=1pt\] at "
-        r"\(([-\d.]+),([-\d.]+)\) \{H\}", out)]
+    h_nodes = _global_nodes(out, "H")
     assert len(h_nodes) == 4                 # 水A 2 + 水B 2
-    # 给体 H：水A 中水平朝受体（y≈水A O 的 y，x 在 oa 与 ob 之间）
-    oa_y = o_nodes[0][1]
-    donor_h = [h for h in h_nodes
-               if abs(h[1] - oa_y) < 0.2 and oa < h[0] < ob]
+    # 给体 H（水A 中朝向受体侧：x 在 oa 与 ob 之间）
+    donor_h = [h for h in h_nodes if oa < h[0] < ob]
     assert donor_h, "应存在朝向受体的给体 H"
     hx = donor_h[0][0]
     dots = [(float(x), float(y)) for x, y in re.findall(
@@ -1132,13 +1150,14 @@ def test_hbond_donor_h_toward_acceptor():
 
 
 def test_hbond_pseudo_ammonia():
-    """氨分子间：孤立 N 假骨架（三角锥 3H），免 XH 通过校验并渲染。"""
+    """氨分子间（显式 H SMILES）：N([H])([H])[H] 的 1 号 H 为给体。"""
     from core.tag_validator import validate_tags
-    text = ("[COMPOSITE:row][STRUCT:N,id=a,label=氨A][STRUCT:N,id=b,label=氨B]"
-            "[HBOND:a:0#1>b:0][/COMPOSITE]")
+    text = ("[COMPOSITE:row][STRUCT:N([H])([H])[H],id=a,label=氨A]"
+            "[STRUCT:N([H])([H])[H],id=b,label=氨B]"
+            "[HBOND:a:1>b:0][/COMPOSITE]")
     tags = parse_tags(text)
     _, invalid = validate_tags(tags)
-    assert not invalid                        # 孤立原子免 XH 配对
+    assert not invalid
     out = render_composite(*tags[0].args)
     n_nodes = re.findall(
         r"\\node\[fill=white, inner sep=1pt\] at \([-\d.]+,[-\d.]+\) \{N\}", out)
@@ -1147,38 +1166,26 @@ def test_hbond_pseudo_ammonia():
 
 
 def test_hbond_pseudo_ammonia_acceptor_three_h():
-    """氨受体补全 3 个 H：第 3 个 H 在角平分线（水平向右，沿远离给体方向）。"""
+    """氨分子间：给体/受体各 3 个显式 H（N([H])([H])[H]），H 节点共 6 个。"""
     from core.tag_validator import validate_tags
-    text = ("[COMPOSITE:row][STRUCT:N,id=a][STRUCT:N,id=b]"
-            "[XH:a|0][HBOND:a|0#1>b:0][/COMPOSITE]")
+    text = ("[COMPOSITE:row][STRUCT:N([H])([H])[H],id=a][STRUCT:N([H])([H])[H],id=b]"
+            "[HBOND:a:1>b:0][/COMPOSITE]")
     tags = parse_tags(text)
     _, invalid = validate_tags(tags)
     assert not invalid
     out = render_composite(*tags[0].args)
-    n_nodes = [(float(x), float(y)) for x, y, _ in re.findall(
-        r"\\node\[fill=white, inner sep=1pt\] at "
-        r"\(([-\d.]+),([-\d.]+)\) \{(O|N)\}", out)]
-    h_nodes = [(float(x), float(y)) for x, y in re.findall(
-        r"\\node\[fill=white, inner sep=1pt\] at "
-        r"\(([-\d.]+),([-\d.]+)\) \{H\}", out)]
+    h_nodes = re.findall(
+        r"\\node\[fill=white, inner sep=1pt\] at \([-\d.]+,[-\d.]+\) \{H\}", out)
     assert len(h_nodes) == 6                # 给体 3 + 受体 3
-    nb_x, nb_y = n_nodes[1]
-    # 受体 N 的 H：在受体 N 右侧（远离给体）
-    rh = [h for h in h_nodes if h[0] > nb_x - 0.5]
-    assert len(rh) == 3
-    # 角平分线上的第 3 个 H：与受体 N 同水平（y 接近）、更靠右
-    mid = [h for h in rh if abs(h[1] - nb_y) < 0.2]
-    assert len(mid) == 1
-    assert mid[0][0] > nb_x
+    assert out.count("\\fill[teal]") >= 3
 
 
 def test_hbond_pseudo_requires_xh_for_bonded_donor():
-    """有骨架给体仍强制 XH：非孤立原子组件 a#k 未写 XH → 拦截。"""
+    """有骨架给体强制显式 H：OCCO 的 0 号是 O 非 H，HBOND 引用 → 拦截。"""
     from core.tag_validator import validate_tags
-    text = ("[COMPOSITE:row][STRUCT:OCCO,id=g][STRUCT:O,id=w]"
-            "[HBOND:g:0#1>w:0][/COMPOSITE]")   # g 有骨架（OCCO），无 XH
+    text = ("[COMPOSITE:row][STRUCT:OCCO,id=g][STRUCT:O([H])[H],id=w]"
+            "[HBOND:g:0>w:1][/COMPOSITE]")   # g 的 0 号是 O 非 H
     tags = parse_tags(text)
     _, invalid = validate_tags(tags)
     assert len(invalid) == 1
-    assert "HBOND 给体端点" in invalid[0].reason
-    assert "XH" in invalid[0].reason
+    assert "不是 H 原子" in invalid[0].reason

@@ -42,6 +42,12 @@ def _parse_mol(smiles: str):
     """Chem.MolFromSmiles 局部包装：游离氢组分（合法）的无害警告静默。
     保持经本模块命名空间调用 Chem（fake_rdkit fixture 可替换）。
 
+    **20260821：显式 H 保留解析**——XH 并入 STRUCT 后显式 H 是真实原子
+    参与编号（如 C([H])([H])([H])[H] 的 1~4 号），校验必须与渲染端
+    prepare_mol 同口径（sanitize=False + UpdatePropertyCache，保留显式 H
+    原子），否则 atom_counts 少算 H、MECHARROW/HBOND/NEWMAN 序号全偏。
+    fake_rdkit（MolFromSmiles 单参 lambda）或解析异常时回退默认解析。
+
     校验是**探测性解析**（非法 SMILES 是常态输入，P1 要拦截并提示），
     失败时的 RDKit 日志（SMILES Parse Error / Explicit valence 超限）对
     用户与日志都无价值——统一屏蔽 rdApp.error，避免终端被噪音刷屏
@@ -56,13 +62,37 @@ def _parse_mol(smiles: str):
         smiles = normalize_h_prefix_smiles(smiles)
     if expand_group_abbrevs is not None:
         smiles, _ = expand_group_abbrevs(smiles)
-    cm = None
-    if mute_rdkit_warnings is not None:
-        cm = mute_rdkit_warnings(include_error=True)
-    if cm is None:
-        return Chem.MolFromSmiles(smiles)
-    with cm:
-        return Chem.MolFromSmiles(smiles)
+
+    def _parse_default(smi):
+        # 回退路径：默认 sanitize 解析（折叠显式 H）；fake_rdkit / 异常时用
+        if mute_rdkit_warnings is None:
+            return Chem.MolFromSmiles(smi)
+        with mute_rdkit_warnings(include_error=True):
+            return Chem.MolFromSmiles(smi)
+
+    # 显式 H 保留解析（与渲染端 prepare_mol 同口径）：sanitize=False +
+    # UpdatePropertyCache，保留显式 H 原子参与编号。fake_rdkit（单参
+    # lambda / 无 SanitizeFlags）或解析异常时回退默认解析。
+    try:
+        if mute_rdkit_warnings is None:
+            mol = Chem.MolFromSmiles(smiles, sanitize=False)
+        else:
+            with mute_rdkit_warnings(include_error=True):
+                mol = Chem.MolFromSmiles(smiles, sanitize=False)
+        if mol is None:
+            return None
+        mol.UpdatePropertyCache(strict=False)
+        Chem.SanitizeMol(
+            mol,
+            Chem.SanitizeFlags.SANITIZE_ALL
+            ^ Chem.SanitizeFlags.SANITIZE_SETAROMATICITY
+            ^ Chem.SanitizeFlags.SANITIZE_KEKULIZE,
+        )
+        return mol
+    except (TypeError, AttributeError):
+        return _parse_default(smiles)
+    except Exception:
+        return _parse_default(smiles)
 
 # label 长度硬上限（字符数）。prompt 建议 ≤10（中文 ≤6），此处为兜底硬拦截
 LABEL_MAX_LEN = 24
@@ -73,9 +103,11 @@ LABEL_MAX_LEN = 24
 COMPOSITE_LAYOUTS = ("reaction_mech", "reaction", "row", "energy")
 
 # 与 renderers/composite.py 相同的引用/端点提取正则
-# 端点支持三种：原子序号（0）、键中点（0-1）、显式 H（0#1 = 原子 0 的第 1 个 XH）。
+# 端点支持两种：原子序号（0，含显式 H 原子）、键中点（0-1）。
 # 与 renderers/composite.py 的 _MECH_PT_RE 保持一致。
-_MECH_PT_RE = r"\d+(?:-\d+)?(?:#\d+)?"
+# （20260821：XH 并入 STRUCT 后显式 H 是真实原子参与编号，a#k 语法废弃——
+# 端点只支持原子序号（含显式 H 原子）与 a-b 键中点。）
+_MECH_PT_RE = r"\d+(?:-\d+)?"
 _MECH_ARROW_RE = re.compile(
     rf"^\s*([A-Za-z0-9_]+)\s*:\s*({_MECH_PT_RE})\s*(>>|>)\s*"
     rf"([A-Za-z0-9_]+)\s*:\s*({_MECH_PT_RE})"
@@ -566,10 +598,12 @@ _ARROW_TYPES = ("single", "reversible", "resonance", "retro")
 
 
 def _check_block(block_children: list) -> Tuple[bool, str]:
-    """BLOCK 共振块校验：块内仅 STRUCT / ARROW(type=resonance) / PLUS。
+    """BLOCK 共振块校验：块内仅 STRUCT / ARROW(type=resonance) / MECHARROW。
 
     块 = 共振极限式序列（如 [B1 ↔ B2 ↔ B3]），作为单一复合结构参与外层
-    序列；块内机理箭头（共振式间转化）暂不支持（布局避让规则待议）。
+    序列；块内 MECHARROW 表示共振式间电子流向转化（20260820 支持），
+    其引用存在性与原子范围由外层统一校验（块内组件注册进全局组件表，
+    支持跨块混合引用）。
     """
     has_struct = False
     for c in block_children:
@@ -582,10 +616,14 @@ def _check_block(block_children: list) -> Tuple[bool, str]:
             a_type = (c.args[0] if c.args else "") or "single"
             if a_type != "resonance":
                 return False, f"BLOCK 内箭头类型应为 resonance（当前 {a_type}）"
+        elif c.type == "MECHARROW":
+            if not c.args or not c.args[0]:
+                return False, "MECHARROW 为空"
         elif c.type == "PLUS":
             return False, "BLOCK 内不支持 [PLUS]（共振式只能单一）"
         else:
-            return False, f"BLOCK 内不支持 {c.type}（仅 STRUCT / ARROW:resonance）"
+            return False, (f"BLOCK 内不支持 {c.type}（仅 STRUCT / "
+                           f"ARROW:resonance / MECHARROW）")
     if not has_struct:
         return False, "BLOCK 内缺少 [STRUCT] 组件"
     return True, ""
@@ -782,7 +820,11 @@ def _check_chair_subs(smi: str, spec: str) -> Tuple[bool, str]:
 def _validate_struct_args(args: list, attrs: dict = None) -> Tuple[bool, str]:
     """校验单个 STRUCT 参数（顶层或容器内）：SMILES 非空 + label 长度 + 模式参数。
 
-    attrs 携带 mode/subs/bond/angle（分子家族重构：mode 分派各画法的专项校验）。
+    attrs 携带 mode/subs/bond/angle/charge。mode 分派各画法的专项校验；
+    20260821 起 bond/charge 并入 STRUCT 参数（单分子标注，替代顶层
+    BOND/CHARGE 新写法）：
+      - bond=a-b：键突出标注（mode=newman 时仍是投影观察键，语义分派）；
+      - charge=idx:+/-列表：部分电荷标注（0:+,3:-）。
     """
     attrs = attrs or {}
     if not args or not args[0] or not args[0].strip():
@@ -808,6 +850,73 @@ def _validate_struct_args(args: list, attrs: dict = None) -> Tuple[bool, str]:
         ok, reason = _check_newman_angle(attrs.get("angle", ""))
         if not ok:
             return False, reason
+    else:
+        # 非 newman：bond= 键突出标注（a-b 必须真实成键）、charge= 部分电荷
+        ok, reason = _check_struct_bond_mark(smi, attrs.get("bond", ""))
+        if not ok:
+            return False, reason
+        ok, reason = _check_struct_charge(smi, attrs.get("charge", ""))
+        if not ok:
+            return False, reason
+    return True, ""
+
+
+# STRUCT bond= 键突出标注格式：a-b（原子序号对）
+_STRUCT_BOND_MARK_RE = re.compile(r"^\d+-\d+$")
+
+
+def _check_struct_bond_mark(smi: str, bond_spec: str) -> Tuple[bool, str]:
+    """STRUCT bond= 键突出校验（非 newman）：a-b 格式 + 原子范围 + 真实成键。
+
+    bond_spec 为空 → 直接通过。
+    """
+    if not bond_spec:
+        return True, ""
+    if not _STRUCT_BOND_MARK_RE.match(bond_spec):
+        return False, f"bond 键标注格式错误「{bond_spec}」（应为 a-b，如 1-2）"
+    if not _RDKIT_OK:
+        return True, ""
+    mol = _parse_mol(smi)
+    if mol is None:
+        return True, ""   # SMILES 已在上层校验，此处静默
+    try:
+        a, b = (int(x) for x in bond_spec.split("-"))
+    except ValueError:
+        return False, f"bond 键标注格式错误「{bond_spec}」"
+    n = mol.GetNumAtoms()
+    if not (0 <= a < n and 0 <= b < n):
+        return False, f"bond 键 {a}-{b} 超出原子范围 0~{n - 1}"
+    if mol.GetBondBetweenAtoms(a, b) is None:
+        return False, f"bond 键 {a}-{b} 不存在（原子 {a} 与 {b} 之间没有化学键）"
+    return True, ""
+
+
+def _check_struct_charge(smi: str, charge_spec: str) -> Tuple[bool, str]:
+    """STRUCT charge= 部分电荷校验：idx:+/- 列表格式 + 原子范围。
+
+    charge_spec 为空 → 直接通过。
+    """
+    if not charge_spec:
+        return True, ""
+    if not _RDKIT_OK:
+        return True, ""
+    mol = _parse_mol(smi)
+    if mol is None:
+        return True, ""
+    n = mol.GetNumAtoms()
+    idxs = []
+    for tok in (charge_spec or "").split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        m = re.fullmatch(r"(\d+):[+-]", tok)
+        if not m:
+            return False, (f"charge 标注格式错误「{tok}」（应为 原子号:+/-，"
+                           f"如 0:+,3:-）")
+        idxs.append(int(m.group(1)))
+    for i in idxs:
+        if not 0 <= i < n:
+            return False, f"charge 原子编号 {i} 超出原子范围 0~{n - 1}"
     return True, ""
 
 
@@ -929,32 +1038,14 @@ def _validate_energy(args: list) -> Tuple[bool, str]:
 
 
 def _validate_mech_arrow_pt(pt: str, n_atoms: int,
-                            xh_count: dict | None = None,
                             mol=None) -> str:
-    """端点（原子序号 / a-b 键 / a#k 显式 H）合法性，返回原因串（""=合法）。
+    """端点（原子序号 / a-b 键）合法性，返回原因串（""=合法）。
 
-    "a#k"：原子 a 的第 k 个显式 H（k 从 1 起），需 xh_count 提供
-    {原子号: 显式 H 数}。缺 XH 与序号越界分开报告，便于修正环节引导。
+    20260821：显式 H 是真实原子参与编号（如 CC([H])CC 的 2 号是 H），
+    原 a#k 语法废弃——引用 H 直接写原子序号即可，无需 XH 配对检查。
     mol：RDKit Mol（可选）——"a-b" 键端点用它验证两原子间确实存在化学键，
     防止引用不存在的键（如乙醛 CC=O 的 0-2 无键）；mol 缺失时只查序号范围。
     """
-    if "#" in pt:
-        a, _, k = pt.partition("#")
-        try:
-            ia, ik = int(a), int(k)
-        except ValueError:
-            return f"显式 H 端点格式错误「{pt}」（应为 原子号#第k个，如 0#1）"
-        if not 0 <= ia < n_atoms:
-            return f"原子 {ia} 超出范围（该分子只有 {n_atoms} 个重原子，0 起）"
-        if ik < 1:
-            return f"第 {ik} 个显式 H 序号非法（k 从 1 起）"
-        n_h = (xh_count or {}).get(ia, 0)
-        if n_h == 0:
-            return (f"引用原子 {ia} 的显式 H，但未先写 [XH:...|{ia}] 画出该 H"
-                    f"（a#k 必须与 [XH] 成对，H 不是重原子无法凭空定位）")
-        if ik > n_h:
-            return f"原子 {ia} 只画了 {n_h} 个显式 H，引用第 {ik} 个超限"
-        return ""
     if "-" in pt:
         a, b = pt.split("-")
         try:
@@ -962,7 +1053,7 @@ def _validate_mech_arrow_pt(pt: str, n_atoms: int,
         except ValueError:
             return f"键端点格式错误「{pt}」（应为 原子a-原子b）"
         if not (0 <= ia < n_atoms and 0 <= ib < n_atoms):
-            return f"键端点「{pt}」越界（该分子只有 {n_atoms} 个重原子，0 起）"
+            return f"键端点「{pt}」越界（该分子只有 {n_atoms} 个原子，0 起）"
         gba = getattr(mol, "GetBondBetweenAtoms", None) if mol is not None else None
         if gba is not None:
             bond = gba(ia, ib)
@@ -980,7 +1071,7 @@ def _validate_mech_arrow_pt(pt: str, n_atoms: int,
     except ValueError:
         return f"端点格式错误「{pt}」"
     if not 0 <= ia < n_atoms:
-        return f"原子 {ia} 超出范围（该分子只有 {n_atoms} 个重原子，0 起）"
+        return f"原子 {ia} 超出范围（该分子只有 {n_atoms} 个原子，0 起）"
     return ""
 
 
@@ -1007,27 +1098,42 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
         return False, f"未知布局「{layout_name}」，支持 {'/'.join(COMPOSITE_LAYOUTS)}"
 
     # 收集组件：id → {smiles, at}（attrs 由 tag_parser 结构化提取，不再从 raw 二次解析）
+    # BLOCK 内 STRUCT 也注册进全局组件表（20260820：块内/跨块 MECHARROW
+    # 统一引用；显式 id 全局查重，自动编号块内用独立前缀避免冲突）
     comps = {}
     for child in children:
-        if child.type != "STRUCT":
-            continue
-        cid = child.attrs.get("id") or f"r{len(comps)}"
-        comps[cid] = {
-            "smiles": child.args[0].strip() if child.args and child.args[0] else "",
-            "at": child.attrs.get("at"),
-            # 大一统架构：arrow 令牌组件 = 箭头上附件（副反应物/副产物），
-            # 不参与主序列，由 ARROW 的 sup= 参数引用
-            "arrow": bool(child.attrs.get("arrow")),
-        }
-        # STRUCT 子标记本身递归校验（mode 分派）；容器内仅支持 skeleton/lewis
-        # （stereo/chair/newman 为独立画法的整图语义，顶层使用）
-        mode = child.attrs.get("mode", "skeleton")
-        if mode not in ("skeleton", "lewis"):
-            return False, (f"组件 {cid}: 容器内仅支持 mode=skeleton/lewis"
-                           f"（mode={mode} 请用顶层 [STRUCT:...] 标记）")
-        ok, reason = _validate_struct_args(child.args, child.attrs)
-        if not ok:
-            return False, f"组件 {cid}: {reason}"
+        if child.type == "STRUCT":
+            cid = child.attrs.get("id") or f"r{len(comps)}"
+            if cid in comps and child.attrs.get("id"):
+                return False, f"组件 id 重复「{cid}」"
+            comps[cid] = {
+                "smiles": child.args[0].strip() if child.args and child.args[0] else "",
+                "at": child.attrs.get("at"),
+                # 大一统架构：arrow 令牌组件 = 箭头上附件（副反应物/副产物），
+                # 不参与主序列，由 ARROW 的 sup= 参数引用
+                "arrow": bool(child.attrs.get("arrow")),
+            }
+            # STRUCT 子标记本身递归校验（mode 分派）；容器内仅支持 skeleton/lewis
+            # （stereo/chair/newman 为独立画法的整图语义，顶层使用）
+            mode = child.attrs.get("mode", "skeleton")
+            if mode not in ("skeleton", "lewis"):
+                return False, (f"组件 {cid}: 容器内仅支持 mode=skeleton/lewis"
+                               f"（mode={mode} 请用顶层 [STRUCT:...] 标记）")
+            ok, reason = _validate_struct_args(child.args, child.attrs)
+            if not ok:
+                return False, f"组件 {cid}: {reason}"
+        elif child.type == "BLOCK":
+            for bc in (child.args[0] if child.args else []):
+                if bc.type != "STRUCT":
+                    continue
+                cid = bc.attrs.get("id") or f"b{len(comps)}r{len(comps)}"
+                if cid in comps and bc.attrs.get("id"):
+                    return False, f"组件 id 重复「{cid}」（含 BLOCK 内）"
+                comps[cid] = {
+                    "smiles": bc.args[0].strip() if bc.args and bc.args[0] else "",
+                    "at": None,
+                    "arrow": False,
+                }
 
     # row 布局允许无 [STRUCT]（纯箭头/条件/连接符序列也合法）；reaction_mech /
     # energy 仍要求至少一个组件（机理引用与驻点挂靠都依赖组件）；reaction 布局
@@ -1061,55 +1167,23 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
                 atom_counts[cid] = mol.GetNumAtoms() if mol else 0
                 comp_mols[cid] = mol
 
-    # XH pre-scan：先收集各组件原子上的显式 H 计数，供 MECHARROW "a#k"
-    # 端点校验（XH 子标记在容器内任意位置，可能在 MECHARROW 之后）
-    xh_count = {}
-    for child in children:
-        if child.type == "XH" and len(child.args) >= 2:
-            ref = child.args[0].strip()
-            try:
-                i = int(child.args[1])
-            except ValueError:
-                continue
-            slot = xh_count.setdefault(ref, {})
-            slot[i] = slot.get(i, 0) + 1
-
     xh_usage = {}
+    # 顶层 + BLOCK 内 MECHARROW 统一校验（块内组件已注册进全局 comps，
+    # 块内/跨块混合引用自动支持）
+    mech_children = []
+    for child in children:
+        if child.type == "MECHARROW":
+            mech_children.append(child)
+        elif child.type == "BLOCK":
+            mech_children.extend(
+                bc for bc in (child.args[0] if child.args else [])
+                if bc.type == "MECHARROW")
+    # 子标记校验（顶层）：ARROW / BLOCK / CHARGE / HBOND / XH / BOND
+    # （MECHARROW 单独处理：顶层 + BLOCK 内统一，见下方 mech_children 循环）
     for child in children:
         ctype = child.type
         if ctype == "MECHARROW":
-            if not child.args or not child.args[0]:
-                return False, "MECHARROW 为空"
-            for spec in child.args[0].split(","):
-                m = _MECH_ARROW_RE.match(spec)
-                if not m:
-                    return False, f"MECHARROW 格式错误「{spec}」"
-                src_id, src_pt, _, dst_id, dst_pt, dst2_id, dst2_pt = m.groups()
-                if src_id not in comps or dst_id not in comps:
-                    return False, f"MECHARROW 引用未知组件「{src_id}→{dst_id}」"
-                if dst2_id is not None:
-                    if dst2_id not in comps:
-                        return False, f"MECHARROW 引用未知组件「{dst2_id}」"
-                    if "-" in dst_pt:
-                        return False, f"MECHARROW 成键空白位端点格式错误「{spec}」"
-                if _RDKIT_OK:
-                    src_reason = _validate_mech_arrow_pt(
-                        src_pt, atom_counts.get(src_id, 0),
-                        xh_count.get(src_id), comp_mols.get(src_id))
-                    if src_reason:
-                        return False, f"MECHARROW 源端点「{src_id}:{src_pt}」{src_reason}"
-                    dst_reason = _validate_mech_arrow_pt(
-                        dst_pt, atom_counts.get(dst_id, 0),
-                        xh_count.get(dst_id), comp_mols.get(dst_id))
-                    if dst_reason:
-                        return False, f"MECHARROW 目标端点「{dst_id}:{dst_pt}」{dst_reason}"
-                    if dst2_id is not None:
-                        dst2_reason = _validate_mech_arrow_pt(
-                            dst2_pt, atom_counts.get(dst2_id, 0),
-                            xh_count.get(dst2_id), comp_mols.get(dst2_id))
-                        if dst2_reason:
-                            return False, (f"MECHARROW 目标端点「{dst2_id}:{dst2_pt}」"
-                                           f"{dst2_reason}")
+            continue
         elif ctype == "ARROW" and len(child.args) >= 1:
             # 大一统架构容器内箭头：[ARROW:type=..., sup=..., 条件]
             a_type = (child.args[0] or "").strip() or "single"
@@ -1145,42 +1219,43 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
                         if not 0 <= i < n:
                             return False, f"CHARGE 原子编号 {i} 超出组件 {ref} 范围 0~{n - 1}"
             else:
-                # HBOND（语义分离后）：仅 HBOND:idA:a#k>idB:b
-                # 给体 H 由 XH:idA|a 画出（a#k 强制配对，复用 MECHARROW 规则），
-                # 受体为 idB 组件的原子 b；分子内/分子间同一套逻辑。
+                # HBOND（20260821 起语义）：HBOND:idA:a>idB:b——a 为给体组件
+                # 中显式 H 原子的真实序号（SMILES 显式 H 参与编号，如
+                # [H]OCCO[H] 的 0 号；a#k 语法废弃）；受体为 idB 组件的原子 b。
                 found = 0
                 for tok in pairs.split(","):
                     tok = tok.strip()
                     if not tok:
                         continue
-                    m = re.fullmatch(r"(\d+)#(\d+)>([A-Za-z0-9_]+):(\d+)", tok)
+                    m = re.fullmatch(r"(\d+)>([A-Za-z0-9_]+):(\d+)", tok)
                     if not m:
                         return False, (f"HBOND 标注格式错误「{tok}」"
-                                       f"（应为 原子#第k个H>组件id:原子，如 0#1>w2:1）")
-                    a, k, idb, b = int(m.group(1)), int(m.group(2)), \
-                        m.group(3), int(m.group(4))
+                                       f"（应为 给体H原子号>组件id:原子，如 0>w2:1）")
+                    a, idb, b = int(m.group(1)), m.group(2), int(m.group(3))
                     if idb not in comps:
                         return False, f"HBOND 引用未知组件「{idb}」"
                     found += 1
                     if _RDKIT_OK:
-                        # 给体 H 端点 a#k：常规必须先写 XH:idA|a（a#k 与 XH 成对）；
-                        # 例外——给体组件为孤立原子（重原子=1，水/氨等无骨架）时
-                        # 由渲染端假骨架补 H，免 XH 配对。
-                        donor_mol = comp_mols.get(ref)
-                        if not (donor_mol is not None
-                                and donor_mol.GetNumAtoms() == 1):
-                            reason = _validate_mech_arrow_pt(
-                                f"{a}#{k}", atom_counts.get(ref, 0),
-                                xh_count.get(ref), comp_mols.get(ref))
-                            if reason:
-                                return False, f"HBOND 给体端点「{ref}:{a}#{k}」{reason}"
+                        # 给体端点 a 必须落在给体组件范围内且为 H 原子
+                        # （显式 H 是真实原子；原子序号需在 SMILES 中真实存在）
+                        na = atom_counts.get(ref, 0)
+                        if not 0 <= a < na:
+                            return False, (f"HBOND 给体 H 原子编号 {a} 超出组件 "
+                                           f"{ref} 范围 0~{na - 1}")
+                        donor_atom = comp_mols.get(ref)
+                        gai = getattr(donor_atom, "GetAtomWithIdx", None)
+                        if gai is not None and \
+                                gai(a).GetAtomicNum() != 1:
+                            return False, (f"HBOND 给体端点「{ref}:{a}」不是 H 原子"
+                                           f"（应为 SMILES 显式 H 的原子序号，"
+                                           f"如 [H]OCCO[H] 的 0 号）")
                         # 受体原子范围
                         nb = atom_counts.get(idb, 0)
                         if not 0 <= b < nb:
                             return False, (f"HBOND 受体原子编号 {b} 超出组件 "
                                            f"{idb} 范围 0~{nb - 1}")
                 if not found:
-                    return False, f"HBOND 标注格式错误「{pairs}」（应为 a#k>idB:b 列表）"
+                    return False, f"HBOND 标注格式错误「{pairs}」（应为 给体H原子号>idB:b 列表）"
         elif ctype == "XH" and len(child.args) >= 2:
             ref = child.args[0].strip()
             if ref not in comps:
@@ -1212,6 +1287,40 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
                     return False, (f"BOND 键 {a}-{b} 在组件 {ref} 中不存在"
                                    f"（原子 {a} 与 {b} 之间没有化学键）")
 
+    # MECHARROW 统一校验（顶层 + BLOCK 内；块内组件已注册进全局 comps，
+    # 块内/跨块混合引用自动支持）
+    for child in mech_children:
+        if not child.args or not child.args[0]:
+            return False, "MECHARROW 为空"
+        for spec in child.args[0].split(","):
+            m = _MECH_ARROW_RE.match(spec)
+            if not m:
+                return False, f"MECHARROW 格式错误「{spec}」"
+            src_id, src_pt, _, dst_id, dst_pt, dst2_id, dst2_pt = m.groups()
+            if src_id not in comps or dst_id not in comps:
+                return False, f"MECHARROW 引用未知组件「{src_id}→{dst_id}」"
+            if dst2_id is not None:
+                if dst2_id not in comps:
+                    return False, f"MECHARROW 引用未知组件「{dst2_id}」"
+                if "-" in dst_pt:
+                    return False, f"MECHARROW 成键空白位端点格式错误「{spec}」"
+            if _RDKIT_OK:
+                src_reason = _validate_mech_arrow_pt(
+                    src_pt, atom_counts.get(src_id, 0), comp_mols.get(src_id))
+                if src_reason:
+                    return False, f"MECHARROW 源端点「{src_id}:{src_pt}」{src_reason}"
+                dst_reason = _validate_mech_arrow_pt(
+                    dst_pt, atom_counts.get(dst_id, 0), comp_mols.get(dst_id))
+                if dst_reason:
+                    return False, f"MECHARROW 目标端点「{dst_id}:{dst_pt}」{dst_reason}"
+                if dst2_id is not None:
+                    dst2_reason = _validate_mech_arrow_pt(
+                        dst2_pt, atom_counts.get(dst2_id, 0),
+                        comp_mols.get(dst2_id))
+                    if dst2_reason:
+                        return False, (f"MECHARROW 目标端点「{dst2_id}:{dst2_pt}」"
+                                       f"{dst2_reason}")
+
     if _RDKIT_OK:
         for ref, idxs in xh_usage.items():
             reason = _check_xh_h_usage(comp_mols.get(ref), idxs, f"组件 {ref} ")
@@ -1239,12 +1348,13 @@ def validate_tag(tag: RenderTag) -> ValidationResult:
             else (False, "COMPOSITE 缺少容器参数")
         return ValidationResult(tag, ok, reason)
     if ttype == "HBOND":
-        # 顶层 HBOND 已移除（2026-08-15 语义分离）：氢由 [XH] 画、HBOND 只画
-        # 点状虚线，且仅支持容器内 HBOND:idA:a#k>idB:b
+        # 顶层 HBOND 已移除（2026-08-15 语义分离）：氢由分子渲染（SMILES
+        # 显式 H）负责、HBOND 只画点状虚线，且仅支持容器内
+        # HBOND:idA:给体H原子号>idB:原子
         return ValidationResult(
             tag, False,
-            "HBOND 仅支持容器内使用（格式：供体组件:原子#第k个H>受体组件:原子），"
-            "氢原子请先用 XH 画出")
+            "HBOND 仅支持容器内使用（格式：给体组件:显式H原子号>受体组件:原子），"
+            "氢原子请用 SMILES 显式 H 写出（如 [H]OCCO[H]）")
     if ttype == "ENERGY":
         ok, reason = _validate_energy(args)
         return ValidationResult(tag, ok, reason)

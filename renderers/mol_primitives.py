@@ -215,8 +215,16 @@ def label_bond_margin(label: str) -> float:
 
 
 def format_partial_charge(raw: str) -> str:
-    """部分电荷文本排版：δ+ → $\\delta^+$，δ- → $\\delta^-$；其他原样返回。"""
+    """部分电荷文本排版：δ+ / + → $\\delta^+$，δ- / - → $\\delta^-$；其他原样。
+
+    20260821：STRUCT 参数化 charge= 支持裸 +/- 输入（LLM 免打 δ 字符），
+    渲染端按部分电荷惯例补 δ；旧 `idx:δ±` 写法（容器 CHARGE 子标记）兼容。
+    """
     raw = raw.strip()
+    if raw == "+":
+        raw = "δ+"
+    elif raw == "-":
+        raw = "δ-"
     if "δ" in raw:
         s = raw.replace("δ", "\\delta")
         if s.endswith("+"):
@@ -1810,14 +1818,15 @@ def mech_arrow_origin(mol, spec: str, shift=(0.0, 0.0),
                       lone_pair_offset: bool = True, toward=None,
                       prefer_single: bool = False, labeler=None,
                       label_gap: float = _MECH_LABEL_GAP, bend_side: float = 1.0,
-                      xh_points: dict | None = None,
                       as_target: bool = False):
     """解析机理箭头端点引用为画布坐标。
 
     参数:
         mol: RDKit Mol（需已有 2D 坐标）。
-        spec: "a"（原子 a）、"a-b"（原子 a 与 b 之间的键中点）或
-            "a#k"（原子 a 的第 k 个显式 H，k 从 1 起；需 xh_points 提供坐标）。
+        spec: "a"（原子序号，含 SMILES 显式 H 原子）或 "a-b"（原子 a 与 b
+            之间的键中点）。20260821：显式 H 是真实原子参与编号，原 a#k
+            语法废弃——引用 H 直接写其原子序号（如 CC([H])CC 的 2 号），
+            断键（C–H 键）写键中点 a-b（如 1-2）。
         shift: 分子在画布上的平移量。
         lone_pair_offset: 为 True 且端点是有孤对电子的杂原子时，坐标落在
             孤对电子点上（教科书风格）；箭头终点应为 False。
@@ -1832,11 +1841,8 @@ def mech_arrow_origin(mol, spec: str, shift=(0.0, 0.0),
         label_gap: aim_end 末端到标签正方形边缘的间距（_MECH_LABEL_GAP）。
         bend_side: 弯向（-1 向下 / +1 向上），多键端点按弯向取"靠外杠"：
             <0 取 y 最小杠（下）、>0 取 y 最大杠（上），再沿弯向外移 0.05。
-        xh_points: {原子序号: [(hx, hy), ...]} 显式 H 画布坐标（局部，未加 shift）；
-            spec 为 "a#k" 时必需——定位到第 k 个显式 H 节点。
-        as_target: True 时本端为箭头**终点**——"a#k" 定位到 H 节点本身
-            （箭头尖指向 H，而非 X—H 键中点）；False（起点）时保持断键语义
-            （从 X—H 键线中点出发）。
+        as_target: True 时本端为箭头**终点**——H 原子端点定位到 H 节点本身
+            （箭头尖指向 H）；False（起点）时普通原子端点语义。
 
     返回:
         (x, y, from_bond, on_electron, on_label)；spec 无效或原子越界返回 None。
@@ -1844,31 +1850,6 @@ def mech_arrow_origin(mol, spec: str, shift=(0.0, 0.0),
         on_label 为 True 时端点已吸附到标签边缘（调用方不应再内缩）。
     """
     spec = spec.strip()
-    if "#" in spec:
-        # 显式 H 端点："a#k" = 原子 a 的第 k 个显式 H（k 从 1 起）。
-        # 作起点（as_target=False）：该 H 是 X—H σ 键的一端，箭头从**键线中点**
-        # 出发（断键语义，向下弯）。键线 = 标签边缘（label_edge_point）→ H 节点：
-        # 与 a-b 键中点用修剪后键线段一致（问题 8：起点应落在 C—H 可视键中点）。
-        # 作终点（as_target=True）：箭头尖直接指向 H 节点本身（如碱夺 H 的
-        # 去质子箭头，靶点是 H 而非键）。
-        a, _, k = spec.partition("#")
-        try:
-            ia, ik = int(a), int(k)
-        except ValueError:
-            return None
-        if ia >= mol.GetNumAtoms():
-            return None
-        pts = (xh_points or {}).get(ia)
-        if not pts or not 1 <= ik <= len(pts):
-            return None
-        hx, hy = pts[ik - 1]
-        if as_target:
-            return (hx + shift[0], hy + shift[1], False, False, True)
-        sx, sy = label_edge_point(mol, ia, (hx, hy),
-                                  labeler=labeler or mol_default_labeler(mol))
-        mx = (sx + hx) / 2.0      # 键线中点（标签边缘 → H，局部坐标）
-        my = (sy + hy) / 2.0
-        return (mx + shift[0], my + shift[1], True, False, False)
     if "-" in spec:
         a, _, b = spec.partition("-")
         try:

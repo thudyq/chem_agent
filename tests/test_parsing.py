@@ -91,6 +91,17 @@ def test_struct_mode_named_params():
     t4 = parse_tags("[STRUCT:CCl,label=底物,id=s0]")[0]
     assert t4.attrs["mode"] == "skeleton"
     assert t4.attrs["id"] == "s0"
+    # 20260821：bond=/charge= 参数化标注（bond 与 newman 语义分派）
+    t5 = parse_tags("[STRUCT:CCC=O, bond=1-2, charge=0:+,3:-]")[0]
+    assert t5.args[0] == "CCC=O"
+    assert t5.attrs["mode"] == "skeleton"
+    assert t5.attrs["bond"] == "1-2"
+    assert t5.attrs["charge"] == "0:+,3:-"
+    # charge 值内逗号不污染 SMILES 截止（与 label 混用）
+    t6 = parse_tags("[STRUCT:CCC=O, charge=0:+, label=丙醛]")[0]
+    assert t6.args[0] == "CCC=O"
+    assert t6.attrs["charge"] == "0:+"
+    assert t6.args[1] == "丙醛"
 
 
 def test_composite_arrow_new_syntax():

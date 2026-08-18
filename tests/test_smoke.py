@@ -242,6 +242,26 @@ def test_smoke_reaction_retro():
     assert outs[0].count("0.05") >= 2 and outs[0].count("-0.05") >= 1
 
 
+def test_smoke_reaction_block_mecharrow_and_brackets():
+    """BLOCK 内 MECHARROW（共振式间转化）+ 方括号 []。"""
+    outs, bad = _render(
+        "[COMPOSITE:reaction][STRUCT:c1ccccc1,id=A,label=苯]"
+        "[ARROW:type=single,条件]"
+        "[BLOCK][STRUCT:C1=CC=CC=C1,id=b1]"
+        "[ARROW:type=resonance]"
+        "[STRUCT:C1C=CC=CC=1,id=b2]"
+        "[MECHARROW:b1:0>b2:1]"
+        "[/BLOCK]"
+        "[ARROW:type=single,条件]"
+        "[STRUCT:O=[N+]([O-])c1ccccc1,id=C,label=硝基苯][/COMPOSITE]")
+    assert len(outs) == 1 and bad == 0, [r.reason for r in bad]
+    _assert_ok(outs[0], "\\leftrightarrow")
+    # 方括号：左/右竖线（块 bbox 左右缘的裸 draw 竖线）
+    assert "\\draw" in outs[0]
+    # 块内机理箭头（红色）存在
+    assert "red" in outs[0]
+
+
 def test_smoke_lewis_with_label():
     outs, bad = _render("[LEWIS:O,label=水]")
     assert len(outs) == 1 and bad == 0
@@ -254,11 +274,19 @@ def test_smoke_charge():
     _assert_ok(outs[0], "delta")
 
 
+def test_smoke_struct_bond_charge_params():
+    """20260821：STRUCT 参数化标注（bond=/charge=）——单分子键突出 + δ± 节点。"""
+    outs, bad = _render("[STRUCT:CCC=O, bond=1-2, charge=0:+,3:-]")
+    assert len(outs) == 1 and bad == 0, [r.reason for r in bad]
+    _assert_ok(outs[0], "very thick, red")   # bond= 键突出
+    _assert_ok(outs[0], "delta")             # charge= 部分电荷（0:+ → δ+）
+
+
 def test_smoke_hbond():
-    # HBOND 语义分离后仅容器内：XH 画氢 + HBOND 画 teal 点状虚线
+    # HBOND 仅容器内：SMILES 显式 H（[H]OCCO 的 0 号）画氢 + HBOND 画 teal 点
     outs, bad = _render(
-        "[COMPOSITE:row][STRUCT:OCCO,id=diol]"
-        "[XH:diol|0][HBOND:diol:0#1>diol:3][/COMPOSITE]")
+        "[COMPOSITE:row][STRUCT:[H]OCCO,id=diol]"
+        "[HBOND:diol:0>diol:4][/COMPOSITE]")
     assert len(outs) == 1 and bad == 0
     _assert_ok(outs[0], "teal")
 

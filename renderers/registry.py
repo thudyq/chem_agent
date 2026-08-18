@@ -60,5 +60,6 @@ def render_tag(tag) -> str:
             tag.attrs.get("subs", ""),
             tag.attrs.get("bond", ""),
             tag.attrs.get("angle", ""),
+            tag.attrs.get("charge", ""),
         )
     return renderer(*tag.args)

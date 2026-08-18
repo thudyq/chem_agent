@@ -210,6 +210,32 @@ def test_struct_mode_chair_passes():
     assert "格式错误" in invalid2[0].reason
 
 
+def test_struct_bond_charge_params():
+    """20260821：STRUCT bond=/charge= 参数化标注校验（单分子标注新写法）。"""
+    # 合法：bond=a-b 真实成键（CCC=O 的 1-2 是 C=O 键）+ charge=idx:+/- 列表
+    _, invalid = _validate("[STRUCT:CCC=O, bond=1-2, charge=0:+,3:-]")
+    assert len(invalid) == 0
+    _, invalid = _validate("[STRUCT:CCC=O, charge=0:+]")
+    assert len(invalid) == 0
+    # bond 越界 / 不存在的键
+    _, invalid = _validate("[STRUCT:CCC=O, bond=0-5]")
+    assert len(invalid) == 1 and "超出原子范围" in invalid[0].reason
+    _, invalid = _validate("[STRUCT:CC=O, bond=0-2]")   # CC=O 的 0-2 无键
+    assert len(invalid) == 1 and "不存在" in invalid[0].reason
+    # charge 格式（只收裸 +/-）与越界
+    _, invalid = _validate("[STRUCT:CCC=O, charge=0:x]")
+    assert len(invalid) == 1 and "charge 标注格式错误" in invalid[0].reason
+    _, invalid = _validate("[STRUCT:CCC=O, charge=9:+]")
+    assert len(invalid) == 1 and "超出原子范围" in invalid[0].reason
+    # 容器内同样生效（与 [BOND]/[CHARGE] 子标记等价）
+    _, invalid = _validate(
+        "[COMPOSITE:row][STRUCT:CCC=O,id=pr,bond=1-2,charge=0:+][/COMPOSITE]")
+    assert len(invalid) == 0
+    _, invalid = _validate(
+        "[COMPOSITE:row][STRUCT:CCC=O,id=pr,bond=0-5][/COMPOSITE]")
+    assert len(invalid) == 1
+
+
 def test_composite_mode_restriction():
     """容器内 STRUCT 仅支持 skeleton/lewis；stereo/chair/newman 拦截（顶层使用）。"""
     _, invalid = _validate(
@@ -311,6 +337,42 @@ def test_reaction_retro_balance():
         "[ARROW:type=retro][STRUCT:CCc1ccccc1,id=P][/COMPOSITE]")
     assert len(invalid2) == 1
     assert "前体 C" in invalid2[0].reason
+
+
+def test_block_mecharrow_supported():
+    """BLOCK 内 MECHARROW（共振式间转化）放行；块内/跨块混合引用支持。"""
+    # 块内↔块内
+    _, invalid = _validate(
+        "[COMPOSITE:reaction]"
+        "[BLOCK][STRUCT:C1=CC=CC=C1,id=b1][ARROW:type=resonance]"
+        "[STRUCT:C1C=CC=CC=1,id=b2]"
+        "[MECHARROW:b1:0>b2:1][/BLOCK][/COMPOSITE]")
+    assert len(invalid) == 0
+    # 跨块（块内 → 块外）
+    _, invalid2 = _validate(
+        "[COMPOSITE:reaction]"
+        "[BLOCK][STRUCT:C1=CC=CC=C1,id=b1][ARROW:type=resonance]"
+        "[STRUCT:C1C=CC=CC=1,id=b2][/BLOCK]"
+        "[ARROW:type=single]"
+        "[STRUCT:c1ccccc1,id=C]"
+        "[MECHARROW:b2:0>C:0][/COMPOSITE]")
+    assert len(invalid2) == 0
+    # 块内引用未知组件 → 拦截
+    _, invalid3 = _validate(
+        "[COMPOSITE:reaction]"
+        "[BLOCK][STRUCT:C1=CC=CC=C1,id=b1]"
+        "[MECHARROW:ghost:0>b1:1][/BLOCK][/COMPOSITE]")
+    assert len(invalid3) == 1
+    assert "未知组件" in invalid3[0].reason
+
+
+def test_block_id_global_unique():
+    """块内/块外组件 id 全局查重。"""
+    _, invalid = _validate(
+        "[COMPOSITE:reaction][STRUCT:C1=CC=CC=C1,id=x]"
+        "[BLOCK][STRUCT:C1C=CC=CC=1,id=x][/BLOCK][/COMPOSITE]")
+    assert len(invalid) == 1
+    assert "id 重复" in invalid[0].reason
 
 
 def test_composite_row_without_struct_passes():
@@ -809,65 +871,67 @@ def test_composite_mecharrow_midpoint_bond_mixed_rejected(fake_rdkit):
 
 
 class TestMechArrowExplicitH:
-    """B1（20260812）：MECHARROW 端点 a#k（显式 H 引用）校验。
-
-    自由基夺氢机理：单碳组分 C（CH4）加 [XH] 显式画 H，用 ch4:0#1 引用。
+    """20260821：显式 H 是真实原子参与编号，MECHARROW 直接写 H 原子序号
+    （a#k 语法废弃）。自由基夺氢机理：单碳组分 C([H])([H])([H])[H]
+    （0 号 C、1~4 号 H），夺 H 用 ch4:1 引用。
     真实 RDKit（fake_rdkit 白名单不含 C/[Cl]/[CH3]）。
     """
 
     def test_explicit_h_endpoint_passes(self):
-        """[XH:ch4|0] + ch4:0#1 引用 → 放行。"""
+        """ch4:1（显式 H 原子序号）引用 → 放行。"""
         pytest.importorskip("rdkit")
         text = ("[COMPOSITE:reaction_mech]"
-                "[STRUCT:[Cl],id=cl,label=Cl·][PLUS][STRUCT:C,id=ch4,label=CH4][XH:ch4|0]"
+                "[STRUCT:[Cl],id=cl,label=Cl·][PLUS]"
+                "[STRUCT:C([H])([H])([H])[H],id=ch4,label=CH4]"
                 "[RXNARROW]"
                 "[STRUCT:Cl,id=hcl,label=HCl][PLUS][STRUCT:[CH3],id=me,label=·CH3]"
                 "[MECHARROW:cl:0>>cl:0+ch4:0]"
-                "[MECHARROW:ch4:0#1>>cl:0+ch4:0]"
-                "[MECHARROW:ch4:0#1>>me:0]"
+                "[MECHARROW:ch4:1>>cl:0+ch4:0]"
+                "[MECHARROW:ch4:1>>me:0]"
                 "[/COMPOSITE]")
         _, invalid = _validate(text)
         assert len(invalid) == 0
 
-    def test_explicit_h_without_xh_rejected(self):
-        """a#k 但组件未声明 [XH] → 拦截（提示需先画显式 H）。"""
+    def test_explicit_h_bond_break_passes(self):
+        """C–H 键断键（ch4:0-1 键中点）→ 放行（键真实存在）。"""
         pytest.importorskip("rdkit")
         text = ("[COMPOSITE:reaction_mech]"
-                "[STRUCT:[Cl],id=cl,label=Cl·][PLUS][STRUCT:C,id=ch4,label=CH4]"
-                "[RXNARROW]"
-                "[STRUCT:Cl,id=hcl,label=HCl][PLUS][STRUCT:[CH3],id=me,label=·CH3]"
-                "[MECHARROW:cl:0>>cl:0+ch4:0]"
-                "[MECHARROW:ch4:0#1>>me:0]"
-                "[/COMPOSITE]")
-        _, invalid = _validate(text)
-        assert len(invalid) == 1
-        assert "未先写 [XH" in invalid[0].reason
-
-    def test_explicit_h_index_out_of_range_rejected(self):
-        """k 超出该原子显式 H 数（[XH:ch4|0] 只画 1 个，写 0#2）→ 拦截。"""
-        pytest.importorskip("rdkit")
-        text = ("[COMPOSITE:reaction_mech]"
-                "[STRUCT:[Cl],id=cl,label=Cl·][PLUS][STRUCT:C,id=ch4,label=CH4][XH:ch4|0]"
-                "[RXNARROW]"
-                "[STRUCT:Cl,id=hcl,label=HCl][PLUS][STRUCT:[CH3],id=me,label=·CH3]"
-                "[MECHARROW:ch4:0#2>>me:0]"
-                "[/COMPOSITE]")
-        _, invalid = _validate(text)
-        assert len(invalid) == 1
-        assert "只画了" in invalid[0].reason
-
-    def test_legacy_implicit_h_bond_rejected(self):
-        """旧写法 ch4:0-1（隐含 H 键）仍拦截——提示改用 a#k（B1 回归）。"""
-        pytest.importorskip("rdkit")
-        text = ("[COMPOSITE:reaction_mech]"
-                "[STRUCT:[Cl],id=cl,label=Cl·][PLUS][STRUCT:C,id=ch4,label=CH4][XH:ch4|0]"
+                "[STRUCT:[Cl],id=cl,label=Cl·][PLUS]"
+                "[STRUCT:C([H])([H])([H])[H],id=ch4,label=CH4]"
                 "[RXNARROW]"
                 "[STRUCT:Cl,id=hcl,label=HCl][PLUS][STRUCT:[CH3],id=me,label=·CH3]"
                 "[MECHARROW:ch4:0-1>>me:0]"
                 "[/COMPOSITE]")
         _, invalid = _validate(text)
+        assert len(invalid) == 0
+
+    def test_explicit_h_out_of_range_rejected(self):
+        """H 原子序号超出范围 → 拦截。"""
+        pytest.importorskip("rdkit")
+        text = ("[COMPOSITE:reaction_mech]"
+                "[STRUCT:[Cl],id=cl,label=Cl·][PLUS]"
+                "[STRUCT:C([H])([H])([H])[H],id=ch4,label=CH4]"
+                "[RXNARROW]"
+                "[STRUCT:Cl,id=hcl,label=HCl][PLUS][STRUCT:[CH3],id=me,label=·CH3]"
+                "[MECHARROW:ch4:5>>me:0]"
+                "[/COMPOSITE]")
+        _, invalid = _validate(text)
         assert len(invalid) == 1
-        assert "键端点" in invalid[0].reason
+        assert "超出范围" in invalid[0].reason
+
+    def test_legacy_a_k_syntax_rejected(self):
+        """旧写法 ch4:0#1（a#k 语法，20260821 废弃）→ 格式错误拦截。"""
+        pytest.importorskip("rdkit")
+        text = ("[COMPOSITE:reaction_mech]"
+                "[STRUCT:[Cl],id=cl,label=Cl·][PLUS]"
+                "[STRUCT:C([H])([H])([H])[H],id=ch4,label=CH4]"
+                "[RXNARROW]"
+                "[STRUCT:Cl,id=hcl,label=HCl][PLUS][STRUCT:[CH3],id=me,label=·CH3]"
+                "[MECHARROW:ch4:0#1>>me:0]"
+                "[/COMPOSITE]")
+        _, invalid = _validate(text)
+        assert len(invalid) == 1
+        assert "格式错误" in invalid[0].reason
 
 
 def test_xh_toplevel_valid(fake_rdkit):
@@ -990,12 +1054,12 @@ def test_benzene_style_consistency_warning():
     text = (
         "[COMPOSITE:reaction_mech][STRUCT:C1C=CC=CC=1,label=苯,id=ar]"
         "[PLUS][STRUCT:[N+](=O)=O,label=NO2+,id=nu]"
-        "[RXNARROW][STRUCT:O=[N+]([O-])[CH]1C=CC=C[CH+]1,label=σ 络合物,id=sigma]"
+        "[RXNARROW][STRUCT:O=[N+]([O-])C([H])1C=CC=C[CH+]1,label=σ 络合物,id=sigma]"
         "[MECHARROW:ar:0-5>nu:0][/COMPOSITE]"
         "\n"
-        "[COMPOSITE:reaction_mech][STRUCT:O=[N+]([O-])[CH]1C=CC=C[CH+]1,label=σ 络合物,id=sigma]"
+        "[COMPOSITE:reaction_mech][STRUCT:O=[N+]([O-])C([H])1C=CC=C[CH+]1,label=σ 络合物,id=sigma]"
         "[RXNARROW][STRUCT:O=[N+]([O-])C1=CC=CC=C1,label=硝基苯][PLUS][STRUCT:[H+],label=H+]"
-        "[XH:sigma|3][MECHARROW:sigma:3#1>sigma:3-8][/COMPOSITE]"
+        "[MECHARROW:sigma:4>sigma:3-9][/COMPOSITE]"
     )
     _, invalid = _validate(text)
     assert len(invalid) == 0  # 不拦截

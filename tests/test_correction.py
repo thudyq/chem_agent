@@ -29,7 +29,7 @@ def flawed_renderers(monkeypatch):
     """STRUCT 渲染器：c1ccccc1 成功，其余（合法但模拟内部失败）返回失败串。"""
 
     def render_struct(smiles, label=None, mode="skeleton", subs="",
-                      bond="", angle=""):
+                      bond="", angle="", charge=""):
         if smiles == "c1ccccc1":
             return "RENDERED:c1ccccc1"
         return f"（结构渲染失败：无法为「{smiles}」生成结构式）"
