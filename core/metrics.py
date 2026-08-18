@@ -26,7 +26,7 @@ def evaluate_compliance(questions: list, *, max_corrections: int = 1) -> dict:
     from .llm_client import _is_truncated, ask_llm
     from .tag_parser import parse_tags
     from .tag_validator import validate_tags
-    from renderers.registry import RENDERER_REGISTRY
+    from renderers.registry import RENDERER_REGISTRY, render_tag
 
     stats = {
         "total": len(questions),
@@ -85,12 +85,11 @@ def evaluate_compliance(questions: list, *, max_corrections: int = 1) -> dict:
         for tag in valid:
             if tag.type == "REASONING":
                 continue
-            renderer = RENDERER_REGISTRY.get(tag.type)
-            if renderer is None:
+            if RENDERER_REGISTRY.get(tag.type) is None:
                 continue
             renderable += 1
             try:
-                out = renderer(*tag.args)
+                out = render_tag(tag)
             except Exception:
                 out = None
             ok = bool(out) and not out.startswith("（")

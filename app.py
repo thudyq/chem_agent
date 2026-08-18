@@ -10,7 +10,7 @@ from core.llm_client import ask_llm
 from core.tag_parser import parse_tags
 from core.tag_injector import inject_tags_into_text
 from core.tag_validator import degrade_text_friendly, validate_tags
-from renderers.registry import RENDERER_REGISTRY
+from renderers.registry import RENDERER_REGISTRY, render_tag
 # 渲染器失败串的统一前缀（各渲染器内部约定："（XX渲染失败：原因）"）
 _RENDER_ERROR_PREFIX = "（"
 
@@ -538,13 +538,12 @@ def _generate_with_corrections(user_question: str, model=None,
         for tag in valid_tags:
             if tag.type == "REASONING":
                 continue
-            renderer = RENDERER_REGISTRY.get(tag.type)
-            if renderer is None:
-                continue  # 未注册类型，注入时保留原标记
             try:
-                out = renderer(*tag.args)
+                out = render_tag(tag)
             except Exception as e:
                 out = f"（{tag.type} 渲染失败：{e}）"
+            if out is None:
+                continue  # 未注册类型，注入时保留原标记
             if out.startswith(_RENDER_ERROR_PREFIX):
                 failures.append((tag, out))
             else:

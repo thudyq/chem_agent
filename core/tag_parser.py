@@ -101,8 +101,15 @@ def _only_child_tags_between(text: str, lo: int, hi: int) -> bool:
     return True
 
 # COMPOSITE 容器内允许的带子标记 opener（冒号形式）
+# LEWIS/STEREO/CHAIR/NEWMAN 为分子旧标记：归一化为 STRUCT+mode 后
+# 由容器统一渲染（mode=lewis 显示孤对；stereo/chair/newman 由校验层
+# 限制为顶层使用，见 tag_validator）
 _INNER_OPENERS = {
     "STRUCT": "[STRUCT:",
+    "LEWIS": "[LEWIS:",
+    "STEREO": "[STEREO:",
+    "CHAIR": "[CHAIR:",
+    "NEWMAN": "[NEWMAN:",
     "MECHARROW": "[MECHARROW:",
     "CONDITION": "[CONDITION:",
     "RXNARROW": "[RXNARROW:",
@@ -120,6 +127,67 @@ _INNER_TOKENS = {
     "RESARROW": "[RESARROW]",
     "NEWLINE": "[NEWLINE]",
 }
+
+
+# 分子家族：旧标记 → STRUCT + mode 的归一化映射（20260818 重构）
+# LEWIS/STEREO/CHAIR/NEWMAN 与 STRUCT 是"同一分子 + 不同绘制模式"的变种，
+# 统一为 [STRUCT:SMILES, mode=...]；旧标记保留识别，解析时归一化为 STRUCT。
+_MOL_MODE_MAP = {
+    "LEWIS": "lewis",
+    "STEREO": "stereo",
+    "CHAIR": "chair",
+    "NEWMAN": "newman",
+}
+
+# NEWMAN 投影键参数格式：a-b（原子序号对）
+_BOND_SPEC_RE = re.compile(r"^\d+-\d+$")
+
+# STRUCT 支持的绘制模式（skeleton=默认键线式/结构简式）
+_STRUCT_MODES = ("skeleton", "lewis", "stereo", "chair", "newman")
+
+
+def _normalize_mol_tag(tag_type: str, content: str) -> tuple:
+    """旧分子标记（LEWIS/STEREO/CHAIR/NEWMAN）→ (args, attrs)。
+
+    args 统一为 [smi, label]（与 STRUCT 同构）；mode/subs/bond/angle 与
+    原标记名（orig_type，降级提示用）放入 attrs。
+    """
+    mode = _MOL_MODE_MAP[tag_type]
+    if tag_type in ("LEWIS", "STEREO"):
+        args = _parse_content(tag_type, content)   # [smi, label]
+        args = [args[0] if args else content, args[1] if len(args) > 1 else None]
+        return args, {"mode": mode, "orig_type": tag_type}
+    if tag_type == "CHAIR":
+        # [CHAIR:SMILES,1:ax,2:eq] → [smi, None] + subs（原 spec 原样传渲染器）
+        args = _parse_content(tag_type, content)   # [smi, spec]
+        spec = (args[1] if len(args) > 1 else "") or ""
+        return [args[0], None], {"mode": mode, "subs": spec, "orig_type": tag_type}
+    # NEWMAN：[SMILES, bond, angle]（兼容旧 [SMILES, 角度]——第二参数为
+    # 角度时归入 angle、键自动选择，由渲染器处理）
+    args = _parse_content(tag_type, content)       # [smi, bond, angle]
+    bond = (args[1] if len(args) > 1 else "") or ""
+    angle = (args[2] if len(args) > 2 else "") or ""
+    if angle == "" and bond and not _BOND_SPEC_RE.match(bond):
+        # 旧格式 [SMILES, 角度]：第二参数不是 a-b 键 → 是角度
+        angle, bond = bond, ""
+    return [args[0], None], {"mode": mode, "bond": bond, "angle": angle,
+                             "orig_type": tag_type}
+
+
+def _normalize_render_tag(tag_type: str, content: str, raw: str,
+                          start_pos: int, end_pos: int) -> RenderTag:
+    """构建 RenderTag：分子旧标记归一化为 STRUCT（type/mode 统一）。
+
+    归一化后校验与渲染只处理 STRUCT + attrs.mode，LLM 写旧标记或新写法
+    走同一条管线。
+    """
+    if tag_type in _MOL_MODE_MAP:
+        args, attrs = _normalize_mol_tag(tag_type, content)
+        return RenderTag(type="STRUCT", args=args, raw=raw,
+                         start_pos=start_pos, end_pos=end_pos, attrs=attrs)
+    attrs = _parse_struct_attrs(content) if tag_type == "STRUCT" else {}
+    return RenderTag(type=tag_type, args=_parse_content(tag_type, content),
+                     raw=raw, start_pos=start_pos, end_pos=end_pos, attrs=attrs)
 
 
 def _find_tag_end(text: str, start: int) -> int:
@@ -142,6 +210,16 @@ def _find_tag_end(text: str, start: int) -> int:
     return -1
 
 
+def _find_kv(content: str, key: str) -> tuple:
+    """定位 ",key=" 或 ", key="（容忍逗号后空格），返回 (逗号位置, 值起点)。
+
+    逗号位置用于裁剪 SMILES（截止到该参数）；值起点用于提取参数值。
+    未找到返回 (-1, -1)。
+    """
+    m = re.search(r",\s*" + re.escape(key) + r"=", content or "")
+    return (m.start(), m.end()) if m else (-1, -1)
+
+
 def _strip_fake_label(s: str) -> str:
     """剥离非 STRUCT 标记 SMILES 字段里误写的 ,label= 尾随（问题 C-2）。
 
@@ -161,17 +239,22 @@ def _parse_content(tag_type: str, content: str) -> list:
     """把标记内部内容拆为参数列表。SMILES 不含逗号，按逗号切分安全。"""
     if tag_type == "STRUCT":
         smi, label = content, None
-        li = content.find(",label=")
-        ii = content.find(",id=")
-        ai = content.find(",at=")
-        pi = content.find(",pos=")
-        cut = [p for p in (li, ii, ai, pi) if p != -1]
+        li, li_end = _find_kv(content, "label")
+        ii, ii_end = _find_kv(content, "id")
+        ai, ai_end = _find_kv(content, "at")
+        pi, pi_end = _find_kv(content, "pos")
+        mi, mi_end = _find_kv(content, "mode")
+        si, si_end = _find_kv(content, "subs")
+        bi, bi_end = _find_kv(content, "bond")
+        gi, gi_end = _find_kv(content, "angle")
+        cut = [p for p in (li, ii, ai, pi, mi, si, bi, gi) if p != -1]
         if cut:
             smi = content[: min(cut)]
         if li != -1:
-            lab_start = li + len(",label=")
-            after = [p for p in (ii, ai, pi) if p != -1 and p > li]
-            label = content[lab_start:min(after)] if after else content[lab_start:]
+            # 值截止到下一个参数的逗号位置（after 用 start）
+            after = [p for p in (ii, ai, pi, mi, si, bi, gi)
+                     if p != -1 and p > li]
+            label = content[li_end:min(after)] if after else content[li_end:]
         # LLM 偶发写出尾逗号（如 [STRUCT:CC[OH2+],]），归一化去掉
         return [smi.strip().rstrip(","), label]
     if tag_type in ("STEREO", "LEWIS"):
@@ -236,31 +319,55 @@ def _parse_content(tag_type: str, content: str) -> list:
 
 
 def _parse_struct_attrs(content: str) -> dict:
-    """提取 STRUCT 内容中的结构化属性 id/at/pos。
+    """提取 STRUCT 内容中的结构化属性 id/at/pos/mode/subs/bond/angle。
 
     与 _parse_content 的 STRUCT 分支共用查找逻辑，但额外返回属性值，
-    供 composite / tag_validator 直接读取（改进 3：避免从 raw 二次正则解析）。
+    供 composite / tag_validator / 渲染分派直接读取（改进 3：避免从
+    raw 二次正则解析）。mode 缺省 "skeleton"（键线式）。
     """
     attrs = {}
-    li = content.find(",label=")
-    ii = content.find(",id=")
-    ai = content.find(",at=")
-    pi = content.find(",pos=")
-    others = (li, ii, ai, pi)
+    li, li_end = _find_kv(content, "label")
+    ii, ii_end = _find_kv(content, "id")
+    ai, ai_end = _find_kv(content, "at")
+    pi, pi_end = _find_kv(content, "pos")
+    mi, mi_end = _find_kv(content, "mode")
+    si, si_end = _find_kv(content, "subs")
+    bi, bi_end = _find_kv(content, "bond")
+    gi, gi_end = _find_kv(content, "angle")
+    # 值截止用下一参数的逗号位置（start）；提取起点用本参数值起点（end）
+    others_start = [p for p in (li, ii, ai, pi, mi, si, bi, gi) if p != -1]
     if ii != -1:
-        after = [p for p in others if p != -1 and p > ii]
-        val = content[ii + len(",id="):min(after) if after else len(content)]
+        after = [p for p in others_start if p > ii]
+        val = content[ii_end:min(after) if after else len(content)]
         attrs["id"] = val.strip()
     if ai != -1:
-        after = [p for p in others if p != -1 and p > ai]
-        val = content[ai + len(",at="):min(after) if after else len(content)].strip()
+        after = [p for p in others_start if p > ai]
+        val = content[ai_end:min(after) if after else len(content)].strip()
         if val.isdigit():
             attrs["at"] = int(val)
     if pi != -1:
-        after = [p for p in others if p != -1 and p > pi]
-        val = content[pi + len(",pos="):min(after) if after else len(content)].strip()
+        after = [p for p in others_start if p > pi]
+        val = content[pi_end:min(after) if after else len(content)].strip()
         if val in ("above", "below"):
             attrs["pos"] = val
+    if mi != -1:
+        after = [p for p in others_start if p > mi]
+        val = content[mi_end:min(after) if after else len(content)].strip()
+        attrs["mode"] = val
+    else:
+        attrs["mode"] = "skeleton"
+    if si != -1:
+        after = [p for p in others_start if p > si]
+        val = content[si_end:min(after) if after else len(content)].strip()
+        attrs["subs"] = val
+    if bi != -1:
+        after = [p for p in others_start if p > bi]
+        val = content[bi_end:min(after) if after else len(content)].strip()
+        attrs["bond"] = val
+    if gi != -1:
+        after = [p for p in others_start if p > gi]
+        val = content[gi_end:min(after) if after else len(content)].strip()
+        attrs["angle"] = val
     return attrs
 
 
@@ -289,14 +396,9 @@ def _parse_inner_tags(inner: str, base: int) -> List[RenderTag]:
                 continue
             raw = inner[idx:end + 1]
             content = raw[len(opener):-1]
-            children.append(RenderTag(
-                type=tag_type,
-                args=_parse_content(tag_type, content),
-                raw=raw,
-                start_pos=base + idx,
-                end_pos=base + end + 1,
-                attrs=_parse_struct_attrs(content) if tag_type == "STRUCT" else {},
-            ))
+            # 分子旧标记（LEWIS/STEREO/CHAIR/NEWMAN）归一化为 STRUCT+mode
+            children.append(_normalize_render_tag(
+                tag_type, content, raw, base + idx, base + end + 1))
             search_from = end + 1
     for tag_type, token in _INNER_TOKENS.items():
         search_from = 0
@@ -378,14 +480,9 @@ def parse_tags(text: str) -> List[RenderTag]:
                 continue
             raw = text[idx:end + 1]
             content = raw[len(opener):-1]  # 去掉 "[TAG:" 与 "]"
-            tags.append(RenderTag(
-                type=tag_type,
-                args=_parse_content(tag_type, content),
-                raw=raw,
-                start_pos=idx,
-                end_pos=end + 1,
-                attrs=_parse_struct_attrs(content) if tag_type == "STRUCT" else {},
-            ))
+            # 分子旧标记（LEWIS/STEREO/CHAIR/NEWMAN）归一化为 STRUCT+mode
+            tags.append(_normalize_render_tag(
+                tag_type, content, raw, idx, end + 1))
             search_from = end + 1
     for m in _REASONING_RE.finditer(text):
         if _in_regions(m.start(), composite_regions):

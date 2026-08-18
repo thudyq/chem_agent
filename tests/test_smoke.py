@@ -16,7 +16,7 @@ rdkit = pytest.importorskip("rdkit", reason="rdkit 未安装，跳过冒烟测�
 from core.tag_injector import inject_tags_into_text
 from core.tag_parser import parse_tags
 from core.tag_validator import validate_tags
-from renderers.registry import RENDERER_REGISTRY
+from renderers.registry import render_tag
 
 
 def _render(text):
@@ -25,9 +25,9 @@ def _render(text):
     valid, invalid = validate_tags(tags)
     outs = []
     for t in valid:
-        fn = RENDERER_REGISTRY.get(t.type)
-        if fn is not None:
-            outs.append(fn(*t.args))
+        out = render_tag(t)
+        if out is not None:
+            outs.append(out)
     return outs, len(invalid)
 
 
@@ -176,6 +176,32 @@ def test_smoke_lewis():
     _assert_ok(outs[0], "\\fill")
 
 
+def test_smoke_struct_mode_lewis_equals_old_tag():
+    """分子家族统一：STRUCT mode=lewis 与旧 [LEWIS:] 输出一致。"""
+    outs_new, _ = _render("[STRUCT:O, mode=lewis, label=水]")
+    outs_old, _ = _render("[LEWIS:O,label=水]")
+    assert len(outs_new) == 1 and len(outs_old) == 1
+    assert outs_new[0] == outs_old[0]
+    _assert_ok(outs_new[0], "\\fill", "\\node[below]")
+
+
+def test_smoke_struct_mode_newman_equals_old_tag():
+    """STRUCT mode=newman（bond/angle 参数）与旧 [NEWMAN:...] 输出一致。"""
+    outs_new, _ = _render("[STRUCT:CC, mode=newman, bond=0-1, angle=60]")
+    outs_old, _ = _render("[NEWMAN:CC,0-1,60]")
+    assert len(outs_new) == 1 and len(outs_old) == 1
+    assert outs_new[0] == outs_old[0]
+    _assert_ok(outs_new[0], "circle")
+
+
+def test_smoke_composite_mode_lewis():
+    """容器内 mode=lewis 组件显示孤对电子点（Lewis 式分子进 COMPOSITE）。"""
+    outs, bad = _render(
+        "[COMPOSITE:row][STRUCT:O, mode=lewis, id=w, label=水][/COMPOSITE]")
+    assert len(outs) == 1 and bad == 0
+    _assert_ok(outs[0], "\\fill")
+
+
 def test_smoke_lewis_with_label():
     outs, bad = _render("[LEWIS:O,label=水]")
     assert len(outs) == 1 and bad == 0
@@ -218,9 +244,9 @@ def test_smoke_pipeline_inject():
     assert len(invalid) == 0, [r.reason for r in invalid]
     rendered = {}
     for t in valid:
-        fn = RENDERER_REGISTRY.get(t.type)
-        if fn is not None:
-            rendered[t.raw] = fn(*t.args)
+        out = render_tag(t)
+        if out is not None:
+            rendered[t.raw] = out
     result = inject_tags_into_text(text, tags, rendered)
     assert "[STRUCT:" not in result and "[REACTION:" not in result, "标记应被替换"
     assert "\\begin{tikzpicture}" in result

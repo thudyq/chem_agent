@@ -13,7 +13,7 @@ from core.tag_parser import parse_tags
 from core.tag_injector import inject_tags_into_text
 from renderers.composite import render_composite
 from renderers.mol_primitives import format_chem_text
-from renderers.registry import RENDERER_REGISTRY
+from renderers.registry import render_tag
 
 rdkit = pytest.importorskip("rdkit", reason="rdkit 未安装，跳过渲染测试")
 
@@ -1017,9 +1017,9 @@ def test_registry_dispatch_and_injection():
     tags = parse_tags(text)
     rendered = {}
     for tag in tags:
-        renderer = RENDERER_REGISTRY.get(tag.type)
-        assert renderer is not None
-        rendered[tag.raw] = renderer(*tag.args)
+        out = render_tag(tag)
+        assert out is not None
+        rendered[tag.raw] = out
     out = inject_tags_into_text(text, tags, rendered)
     assert "[COMPOSITE" not in out
     assert "[STRUCT" not in out

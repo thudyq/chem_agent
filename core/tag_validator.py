@@ -558,8 +558,65 @@ def _check_composite_balance(children: list, layout_name: str) -> str:
     return ""
 
 
-def _validate_struct_args(args: list) -> Tuple[bool, str]:
-    """校验单个 STRUCT 参数（顶层或容器内）：SMILES 非空 + label 长度。"""
+# STRUCT 绘制模式（分子家族重构，20260818）：与 tag_parser._STRUCT_MODES 一致。
+# skeleton=键线式/结构简式（默认）；lewis=电子式（+孤对）；stereo=楔形式；
+# chair=椅式构象；newman=纽曼投影。
+_STRUCT_MODES = ("skeleton", "lewis", "stereo", "chair", "newman")
+
+
+def _check_newman_angle(angle: str) -> Tuple[bool, str]:
+    """NEWMAN 二面角校验（0~360 数字）。"""
+    if not angle:
+        return False, "缺少角度"
+    try:
+        a = float(angle)
+    except (TypeError, ValueError):
+        return False, f"角度「{angle}」不是数字"
+    if not 0 <= a <= 360:
+        return False, f"角度 {a:g} 超出 0~360"
+    return True, ""
+
+
+def _check_chair_subs(smi: str, spec: str) -> Tuple[bool, str]:
+    """CHAIR 取代基规格校验（mode=chair 专用）：SMILES 含环己烷六元碳环 +
+    环位 1~6 + ax/eq 格式 + 该环位有非环取代基（真实 rdkit 才查环，
+    fake mol 无 GetRingInfo 时降级跳过）。"""
+    if _RDKIT_OK:
+        mol = _parse_mol(smi)
+        if mol is not None and hasattr(mol, "GetRingInfo"):
+            from utils.rdkit_utils import cyclohexane_ring
+            ring = cyclohexane_ring(mol)
+            if ring is None:
+                return False, f"SMILES 中未找到环己烷六元环「{smi}」"
+            ring_set = set(ring)
+            for tok in (spec or "").split(","):
+                tok = tok.strip()
+                if not tok:
+                    continue
+                if tok.lower() == "flip":
+                    continue    # 镜像画法令牌（翻转对比第二张）
+                m = re.fullmatch(
+                    r"(\d+):(ax|eq|axial|equatorial)", tok.lower())
+                if not m:
+                    return False, f"CHAIR 取代位格式错误「{tok}」（应为 位:ax/eq）"
+                pos = int(m.group(1))
+                if not 1 <= pos <= 6:
+                    return False, f"CHAIR 环位 {pos} 超出范围 1~6"
+                has_sub = any(
+                    nbr.GetIdx() not in ring_set
+                    for nbr in mol.GetAtomWithIdx(
+                        ring[pos - 1]).GetNeighbors())
+                if not has_sub:
+                    return False, f"CHAIR 环位 {pos} 无取代基可标注"
+    return True, ""
+
+
+def _validate_struct_args(args: list, attrs: dict = None) -> Tuple[bool, str]:
+    """校验单个 STRUCT 参数（顶层或容器内）：SMILES 非空 + label 长度 + 模式参数。
+
+    attrs 携带 mode/subs/bond/angle（分子家族重构：mode 分派各画法的专项校验）。
+    """
+    attrs = attrs or {}
     if not args or not args[0] or not args[0].strip():
         return False, "SMILES 为空"
     ok, reason = _label_ok(args[1] if len(args) > 1 else None)
@@ -568,6 +625,21 @@ def _validate_struct_args(args: list) -> Tuple[bool, str]:
     smi = args[0].strip()
     if not _smiles_ok(smi):
         return False, f"无效 SMILES「{smi}」"
+    mode = attrs.get("mode", "skeleton")
+    if mode not in _STRUCT_MODES:
+        return False, (f"未知 STRUCT 模式「{mode}」，支持 "
+                       f"{'/'.join(_STRUCT_MODES)}")
+    if mode == "chair":
+        ok, reason = _check_chair_subs(smi, attrs.get("subs", ""))
+        if not ok:
+            return False, reason
+    elif mode == "newman":
+        ok, reason = _check_newman_bond(smi, attrs.get("bond", ""))
+        if not ok:
+            return False, reason
+        ok, reason = _check_newman_angle(attrs.get("angle", ""))
+        if not ok:
+            return False, reason
     return True, ""
 
 
@@ -576,7 +648,12 @@ _NEWMAN_BOND_RE = re.compile(r"^\d+-\d+$")
 
 
 def _check_newman_bond(smi: str, bond_spec: str) -> Tuple[bool, str]:
-    """NEWMAN 键参数存在性校验（a-b 为 SMILES 中的一条键）。"""
+    """NEWMAN 键参数存在性校验（a-b 为 SMILES 中的一条键）。
+
+    bond_spec 为空（旧格式，自动选键）→ 直接通过。
+    """
+    if not bond_spec:
+        return True, ""
     try:
         a, b = (int(x) for x in bond_spec.split("-"))
     except ValueError:
@@ -767,8 +844,13 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
             "smiles": child.args[0].strip() if child.args and child.args[0] else "",
             "at": child.attrs.get("at"),
         }
-        # STRUCT 子标记本身递归校验
-        ok, reason = _validate_struct_args(child.args)
+        # STRUCT 子标记本身递归校验（mode 分派）；容器内仅支持 skeleton/lewis
+        # （stereo/chair/newman 为独立画法的整图语义，顶层使用）
+        mode = child.attrs.get("mode", "skeleton")
+        if mode not in ("skeleton", "lewis"):
+            return False, (f"组件 {cid}: 容器内仅支持 mode=skeleton/lewis"
+                           f"（mode={mode} 请用顶层 [STRUCT:...] 标记）")
+        ok, reason = _validate_struct_args(child.args, child.attrs)
         if not ok:
             return False, f"组件 {cid}: {reason}"
 
@@ -964,11 +1046,10 @@ def validate_tag(tag: RenderTag) -> ValidationResult:
     if ttype == "ENERGY":
         ok, reason = _validate_energy(args)
         return ValidationResult(tag, ok, reason)
-    if ttype == "NEWMAN":
-        ok, reason = _validate_newman(args)
-        return ValidationResult(tag, ok, reason)
     if ttype == "STRUCT":
-        ok, reason = _validate_struct_args(args)
+        # 分子家族统一入口：LEWIS/STEREO/CHAIR/NEWMAN 已由解析层归一化为
+        # STRUCT + attrs.mode，mode 分派各画法的专项校验
+        ok, reason = _validate_struct_args(args, tag.attrs)
         return ValidationResult(tag, ok, reason)
     if ttype == "REACTION":
         # 通用 SMILES 字段检查 + 原子守恒（化学校验 T2-3）
@@ -1042,49 +1123,6 @@ def validate_tag(tag: RenderTag) -> ValidationResult:
             reason = _check_xh_h_usage(mol, xh_idxs, "XH ")
             if reason:
                 return ValidationResult(tag, False, reason)
-        return ValidationResult(tag, True)
-    if ttype == "CHAIR":
-        # [CHAIR:SMILES,位:ax/eq,...]：SMILES 合法 + 含环己烷六元碳环 +
-        # 环位 1~6 + ax/eq 格式 + 该环位有非环取代基（真实 rdkit 才查环，
-        # fake mol 无 GetRingInfo 时降级跳过）
-        if not args or not args[0] or not args[0].strip():
-            return ValidationResult(tag, False, "SMILES 为空")
-        smi = args[0].strip()
-        if not _smiles_ok(smi):
-            return ValidationResult(tag, False, f"无效 SMILES「{smi}」")
-        spec = (args[1] if len(args) > 1 else "").strip()
-        if _RDKIT_OK:
-            mol = _parse_mol(smi)
-            if mol is not None and hasattr(mol, "GetRingInfo"):
-                from utils.rdkit_utils import cyclohexane_ring
-                ring = cyclohexane_ring(mol)
-                if ring is None:
-                    return ValidationResult(
-                        tag, False, f"SMILES 中未找到环己烷六元环「{smi}」")
-                ring_set = set(ring)
-                for tok in spec.split(","):
-                    tok = tok.strip()
-                    if not tok:
-                        continue
-                    if tok.lower() == "flip":
-                        continue    # 镜像画法令牌（翻转对比第二张）
-                    m = re.fullmatch(
-                        r"(\d+):(ax|eq|axial|equatorial)", tok.lower())
-                    if not m:
-                        return ValidationResult(
-                            tag, False,
-                            f"CHAIR 取代位格式错误「{tok}」（应为 位:ax/eq）")
-                    pos = int(m.group(1))
-                    if not 1 <= pos <= 6:
-                        return ValidationResult(
-                            tag, False, f"CHAIR 环位 {pos} 超出范围 1~6")
-                    has_sub = any(
-                        nbr.GetIdx() not in ring_set
-                        for nbr in mol.GetAtomWithIdx(
-                            ring[pos - 1]).GetNeighbors())
-                    if not has_sub:
-                        return ValidationResult(
-                            tag, False, f"CHAIR 环位 {pos} 无取代基可标注")
         return ValidationResult(tag, True)
 
     # 通用带 SMILES 字段的标记：字段非空 + SMILES 合法
@@ -1232,6 +1270,12 @@ def validate_tags(tags: List[RenderTag]) -> Tuple[List[RenderTag], List[Validati
     return valid, invalid
 
 
+def _tag_name_for(tag: RenderTag) -> str:
+    """降级提示的标记中文名：分子旧标记归一化后 type=STRUCT，
+    优先用 attrs.orig_type（LEWIS→"Lewis 结构式"等）保留友好名。"""
+    return _TAG_NAMES.get(tag.attrs.get("orig_type") or tag.type, tag.type)
+
+
 def degrade_text(tag: RenderTag, reason: str) -> str:
     """校验失败标记的降级提示文本。
 
@@ -1242,14 +1286,14 @@ def degrade_text(tag: RenderTag, reason: str) -> str:
     msg = reason
     if msg.startswith(_CHEM_PREFIX):
         msg = msg[len(_CHEM_PREFIX):].split("（", 1)[0].strip()
-    return f"（{tag_name(tag.type)}图示无法渲染：{msg}，已省略）"
+    return f"（{_tag_name_for(tag)}图示无法渲染：{msg}，已省略）"
 
 
 def degrade_text_friendly(tag: RenderTag) -> str:
     """用户可见降级提示（友好版）：不含校验技术细节（原子守恒/元素差/索引
     等），只告知该处图示未生成——普通用户不关心内部校验原因。详细原因仍由
     reason（P2 修正 prompt / diagnostics / metrics）承载。"""
-    return f"（{tag_name(tag.type)}图示无法渲染，已省略）"
+    return f"（{_tag_name_for(tag)}图示无法渲染，已省略）"
 
 
 if __name__ == "__main__":

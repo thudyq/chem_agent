@@ -407,6 +407,9 @@ def _collect_components(children):
                 "label": label,
                 "at": child.attrs.get("at"),
                 "pos": child.attrs.get("pos", "above"),
+                # 分子家族重构（20260818）：容器内 mode ∈ {skeleton, lewis}
+                # （校验层限制）；mode=lewis 时该组件显示孤对电子点
+                "mode": child.attrs.get("mode", "skeleton"),
             })
             sequence.append(("mol", len(structs) - 1))
         elif child.type == "PLUS":
@@ -805,6 +808,8 @@ def render_composite(layout: str, children: list) -> str:
             "xh": anno.get("xh", []),
             "bonds": anno.get("bonds", []),
             "explicit_hs": explicit_hs,
+            # 分子家族重构：容器内绘制模式（skeleton/lewis）
+            "mode": comp.get("mode", "skeleton"),
         }
 
     # 氢键场景构象调整（布局前）：分子内氢键给体/受体折到主链同一侧
@@ -948,17 +953,20 @@ def render_composite(layout: str, children: list) -> str:
     lines = [r"\begin{tikzpicture}"]
 
     # 键线式默认不标孤对电子（规范第 3 条）；仅机理场景（弯箭头起点）、
-    # 共振场景（孤对电子参与共轭）自动画出
-    show_lone_pairs = (
+    # 共振场景（孤对电子参与共轭）自动画出；mode=lewis 组件（分子家族
+    # 重构：容器内 Lewis 式分子）同样显示孤对
+    global_lone_pairs = (
         bool(mech_specs)
         or any(el[0] == "resarrow" for el in sequence)
     )
 
     # 每个分子一个 scope（布局引擎积木），组件级标注（电荷/氢键）随分子移动
     for comp in structs:
+        comp_lone_pairs = global_lone_pairs or \
+            mols[comp["id"]].get("mode") == "lewis"
         lines.extend(_molecule_with_annotations_lines(
             mols[comp["id"]], show_numbers=show_numbers,
-            show_lone_pairs=show_lone_pairs,
+            show_lone_pairs=comp_lone_pairs,
             hbond_toward=hbond_toward.get(comp["id"], {}),
             hbond_away=hbond_away.get(comp["id"], {})))
 

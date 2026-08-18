@@ -38,12 +38,17 @@ def _bond_angles(tikz: str) -> list:
 class TestParse:
     def test_parse_plain(self):
         tags = parse_tags("[CHAIR:C1CCCCC1]")
-        assert tags[0].type == "CHAIR"
-        assert tags[0].args == ["C1CCCCC1", ""]
+        # 分子家族重构：旧标记归一化为 STRUCT + attrs.mode
+        assert tags[0].type == "STRUCT"
+        assert tags[0].args == ["C1CCCCC1", None]
+        assert tags[0].attrs["mode"] == "chair"
+        assert tags[0].attrs["orig_type"] == "CHAIR"
 
     def test_parse_with_subs(self):
         tags = parse_tags("[CHAIR:BrC1CCCCC1,1:ax]")
-        assert tags[0].args == ["BrC1CCCCC1", "1:ax"]
+        assert tags[0].type == "STRUCT"
+        assert tags[0].args == ["BrC1CCCCC1", None]
+        assert tags[0].attrs["subs"] == "1:ax"
 
 
 class TestValidate:
@@ -175,11 +180,13 @@ class TestGeometry:
 class TestFlip:
     def test_parse_flip(self):
         tags = parse_tags("[CHAIR:C1CCCCC1,flip]")
-        assert tags[0].args == ["C1CCCCC1", "flip"]
+        assert tags[0].type == "STRUCT"
+        assert tags[0].attrs["subs"] == "flip"
 
     def test_flip_token_position_free(self):
         tags = parse_tags("[CHAIR:CC1CCCCC1,1:eq,flip]")
-        assert tags[0].args == ["CC1CCCCC1", "1:eq,flip"]
+        assert tags[0].type == "STRUCT"
+        assert tags[0].attrs["subs"] == "1:eq,flip"
 
     def test_flip_valid(self, fake_rdkit):
         _, invalid = _validate("[CHAIR:BrC1CCCCC1,flip,1:ax]")

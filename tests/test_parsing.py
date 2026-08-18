@@ -50,23 +50,47 @@ def test_struct_trailing_comma_normalized():
 
 
 def test_stereo_with_label():
-    """STEREO 支持可选 ,label=名称（契约扩展，与 STRUCT 同构）。"""
+    """STEREO 归一化为 STRUCT+mode（分子家族重构），label 保留。"""
     tags = parse_tags("[STEREO:C[C@@H](O)C(=O)O,label=(R)-乳酸]")
     assert len(tags) == 1
     t = tags[0]
-    assert t.type == "STEREO"
+    assert t.type == "STRUCT"
+    assert t.attrs["mode"] == "stereo"
+    assert t.attrs["orig_type"] == "STEREO"
     assert t.args[0] == "C[C@@H](O)C(=O)O"
     assert t.args[1] == "(R)-乳酸"
 
 
 def test_lewis_with_label():
-    """LEWIS 支持可选 ,label=名称（与 STEREO 同款扩展，Drawbacks B 节第 2 条）。"""
+    """LEWIS 归一化为 STRUCT+mode，label 保留。"""
     tags = parse_tags("[LEWIS:O,label=水]")
     assert len(tags) == 1
     t = tags[0]
-    assert t.type == "LEWIS"
+    assert t.type == "STRUCT"
+    assert t.attrs["mode"] == "lewis"
     assert t.args[0] == "O"
     assert t.args[1] == "水"
+
+
+def test_struct_mode_named_params():
+    """[STRUCT:SMILES, mode=...] 命名参数解析（分子家族统一写法，容忍逗号后空格）。"""
+    t = parse_tags("[STRUCT:O, mode=lewis, label=水]")[0]
+    assert t.type == "STRUCT"
+    assert t.args == ["O", "水"]
+    assert t.attrs["mode"] == "lewis"
+    t2 = parse_tags("[STRUCT:CC, mode=newman, bond=0-1, angle=60]")[0]
+    assert t2.args[0] == "CC"
+    assert t2.attrs["mode"] == "newman"
+    assert t2.attrs["bond"] == "0-1"
+    assert t2.attrs["angle"] == "60"
+    t3 = parse_tags("[STRUCT:BrC1CCCCC1, mode=chair, subs=1:ax]")[0]
+    assert t3.args[0] == "BrC1CCCCC1"
+    assert t3.attrs["mode"] == "chair"
+    assert t3.attrs["subs"] == "1:ax"
+    # 缺省 mode = skeleton；与 label/id/at/pos 混用
+    t4 = parse_tags("[STRUCT:CCl,label=底物,id=s0]")[0]
+    assert t4.attrs["mode"] == "skeleton"
+    assert t4.attrs["id"] == "s0"
 
 
 def test_composite_prose_mention_not_swallowed():
@@ -144,19 +168,25 @@ def test_arrow():
 
 
 def test_newman():
-    """补充：NEWMAN。"""
+    """NEWMAN 归一化为 STRUCT+mode（旧格式 [SMILES,角度] → bond 空、angle 生效）。"""
     tags = parse_tags("[NEWMAN:CC,60]")
     assert len(tags) == 1
-    assert tags[0].type == "NEWMAN"
-    assert tags[0].args == ["CC", "60", ""]
+    t = tags[0]
+    assert t.type == "STRUCT"
+    assert t.attrs["mode"] == "newman"
+    assert t.attrs["bond"] == ""
+    assert t.attrs["angle"] == "60"
 
 
 def test_newman_with_bond():
     """NEWMAN 三参数：[SMILES, a-b, 角度]（投影观察键 + 二面角）。"""
     tags = parse_tags("[NEWMAN:CC,0-1,60]")
     assert len(tags) == 1
-    assert tags[0].type == "NEWMAN"
-    assert tags[0].args == ["CC", "0-1", "60"]
+    t = tags[0]
+    assert t.type == "STRUCT"
+    assert t.attrs["mode"] == "newman"
+    assert t.attrs["bond"] == "0-1"
+    assert t.attrs["angle"] == "60"
 
 
 def test_energy():

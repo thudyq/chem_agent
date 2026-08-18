@@ -43,13 +43,34 @@ def smiles_to_chemfig(smiles: str, aromatic: bool = True):
     return result
 
 
-def render_structure(smiles: str, label: str = None) -> str:
+def render_structure(smiles: str, label: str = None, mode: str = "skeleton",
+                     subs: str = "", bond: str = "", angle: str = "") -> str:
     """[STRUCT] 渲染：SMILES → TikZ 结构式；可选 label 置于结构下方。
+
+    分子家族统一入口（20260818 重构）：mode 分派各画法——
+        skeleton（默认）：键线式/结构简式（本函数主体逻辑）
+        lewis：电子式（+孤对电子点）    stereo：楔形式
+        chair：椅式构象                newman：纽曼投影
+    旧标记（[LEWIS]/[STEREO]/[CHAIR]/[NEWMAN]）经解析层归一化为
+    STRUCT+mode 后同样进入本入口。
 
     芳香小写（c1ccccc1）画圈；凯库勒大写保留输入单双键位置（不同 Kekulé
     式渲染不同——如硝基苯 C1C=CC=CC=1 vs C1=CC=CC=C1 双键错开）。
     失败时返回可读的错误提示字符串（非空、非异常）。
     """
+    if mode == "lewis":
+        from .lewis import render_lewis
+        return render_lewis(smiles, label)
+    if mode == "stereo":
+        from .stereo import render_stereo
+        return render_stereo(smiles, label)
+    if mode == "chair":
+        from .chair import render_chair
+        return render_chair(smiles, subs)
+    if mode == "newman":
+        from .newman import render_newman
+        return render_newman(smiles, bond, angle)
+
     from .mol_primitives import (
         aromatic_ring_info, has_aromatic_lowercase, prepare_mol, wrap_format_text,
     )
@@ -94,7 +115,9 @@ if __name__ == "__main__":
     print(render_structure("C1=CC=CC=C1"))
     print("\n[3] 乙酸（带 label）:")
     print(render_structure("CC(=O)O", label="乙酸"))
-    print("\n[4] 无效 SMILES:")
+    print("\n[4] 分子家族 mode 分派（与旧标记等价）:")
+    print(render_structure("O", mode="lewis", label="水"))
+    print("\n[5] 无效 SMILES:")
     print(render_structure("XYZ无效"))
-    print("\n[5] 空 SMILES:")
+    print("\n[6] 空 SMILES:")
     print(render_structure(""))

@@ -174,6 +174,56 @@ def test_composite_no_struct_rejected():
     assert "缺少 [STRUCT]" in invalid[0].reason
 
 
+def test_struct_mode_invalid_rejected():
+    """STRUCT mode 非法枚举拦截。"""
+    _, invalid = _validate("[STRUCT:O, mode=xyz]")
+    assert len(invalid) == 1
+    assert "未知 STRUCT 模式" in invalid[0].reason
+
+
+def test_struct_mode_lewis_stereo_passes():
+    """STRUCT mode=lewis/stereo 放行（分子家族统一写法）。"""
+    _, invalid = _validate("[STRUCT:O, mode=lewis, label=水]")
+    assert len(invalid) == 0
+    _, invalid2 = _validate(
+        "[STRUCT:C[C@H](O)C(=O)O, mode=stereo, label=(R)-乳酸]")
+    assert len(invalid2) == 0
+
+
+def test_struct_mode_newman_passes():
+    """STRUCT mode=newman：bond 存在性 + angle 范围校验（与 [NEWMAN] 等价）。"""
+    _, invalid = _validate("[STRUCT:CC, mode=newman, bond=0-1, angle=60]")
+    assert len(invalid) == 0
+    _, invalid2 = _validate("[STRUCT:CC, mode=newman, bond=0-1, angle=xyz]")
+    assert len(invalid2) == 1
+    assert "角度" in invalid2[0].reason
+    _, invalid3 = _validate("[STRUCT:CC, mode=newman, bond=0-5, angle=60]")
+    assert len(invalid3) == 1
+
+
+def test_struct_mode_chair_passes():
+    """STRUCT mode=chair：subs 校验（与 [CHAIR] 等价）。"""
+    _, invalid = _validate("[STRUCT:BrC1CCCCC1, mode=chair, subs=1:ax]")
+    assert len(invalid) == 0
+    _, invalid2 = _validate("[STRUCT:BrC1CCCCC1, mode=chair, subs=1:xx]")
+    assert len(invalid2) == 1
+    assert "格式错误" in invalid2[0].reason
+
+
+def test_composite_mode_restriction():
+    """容器内 STRUCT 仅支持 skeleton/lewis；stereo/chair/newman 拦截（顶层使用）。"""
+    _, invalid = _validate(
+        "[COMPOSITE:row][STRUCT:O, mode=lewis, id=w][/COMPOSITE]")
+    assert len(invalid) == 0
+    _, invalid2 = _validate(
+        "[COMPOSITE:row][STRUCT:O, mode=stereo, id=w][/COMPOSITE]")
+    assert len(invalid2) == 1
+    assert "skeleton/lewis" in invalid2[0].reason
+    _, invalid3 = _validate(
+        "[COMPOSITE:row][STRUCT:CC, mode=newman, id=w][/COMPOSITE]")
+    assert len(invalid3) == 1
+
+
 def test_composite_row_without_struct_passes():
     """row 布局允许无 [STRUCT]（纯箭头/条件/连接符序列合法）——要求已删除。"""
     _, invalid = _validate("[COMPOSITE:row][PLUS][RXNARROW:条件][/COMPOSITE]")
