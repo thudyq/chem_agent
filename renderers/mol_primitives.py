@@ -997,13 +997,18 @@ def lone_pair_tikz(mol, idx: int, shift=(0.0, 0.0), explicit_hs: int = 0) -> lis
 
 
 def mol_visual_bbox(mol, labeler=None,
-                    include_lone_pairs: bool = True):
+                    include_lone_pairs: bool = True,
+                    charge_mirror: bool = True):
     """分子视觉包围盒 (min_x, min_y, max_x, max_y)。
 
     在原子坐标基础上计入标签半径与孤对电子点的外延，
     供布局间距计算使用，避免相邻组件重叠。
     labeler: 原子标签函数；缺省按 mol_default_labeler 的
     重原子数规则选择（与绘制端一致）。
+    charge_mirror: 形式电荷圈只在上半部（45°/135°），默认把其上界镜像
+    到 y 下界（使带电分子 bbox 中心仍落在原子线上，布局排布不整体下移）；
+    为 False 时只计真实上界——用于"朝某侧附件贴靠"的场景（如副反应物/
+    副产物贴箭头放置，需要真实朝向边，镜像下界会失真）。
     """
     xs, ys = [], []
     labeler = labeler or mol_default_labeler(mol)
@@ -1022,10 +1027,11 @@ def mol_visual_bbox(mol, labeler=None,
             xs.append(x + d0 * math.cos(r) + 0.1 * math.cos(r))
             dy = d0 * math.sin(r) + 0.1
             ys.append(y + dy)
-            # 电荷圈总在上半部（45°/135°），只计入上界会把包围盒中心抬高、
-            # 使带电分子整体下移（OH⁻/Cl⁻ 标签比中性分子低 ~0.05）；镜像
-            # 下界抵消单侧偏移，让包围盒中心仍落在原子线上。
-            ys.append(y - dy)
+            if charge_mirror:
+                # 电荷圈总在上半部（45°/135°），只计入上界会把包围盒中心抬高、
+                # 使带电分子整体下移（OH⁻/Cl⁻ 标签比中性分子低 ~0.05）；镜像
+                # 下界抵消单侧偏移，让包围盒中心仍落在原子线上。
+                ys.append(y - dy)
         if include_lone_pairs:
             groups, singles = lone_pair_dot_groups(mol, atom.GetIdx())
             for (x1, y1), (x2, y2) in groups:

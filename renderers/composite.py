@@ -1099,6 +1099,36 @@ def render_composite(layout: str, children: list) -> str:
     for rx, yoff in res_positions:
         lines.append(f"  \\node[font=\\large] at ({rx:.2f},{-yoff:.2f}) {{$\\leftrightarrow$}};")
 
+    # 附件与箭头的通用边距（20260820 布局避让，实测校准）：
+    # 附件垂直位置由 bbox 朝向箭头的**真实边**决定（charge_mirror=False——
+    # 不带电荷圈镜像补偿，避免 OH⁻ 等"电荷在上"组件的 bbox 下界失真）：
+    # 上方：bbox 真实底边距箭头 0.15；下方：bbox 真实顶边距箭头 0.15。
+    # 边距推算：标签半高 ≈0.18 + 可逆箭头横线占位 0.05 ≈ 0.23，实测取 0.15
+    # 目视合适（_SUP_GAP 可调）。水平以箭头中点为中心；同侧多附件按 bbox
+    # 宽横向排布（间距 0.2），避免相互重叠。
+    _SUP_GAP = 0.15
+    _SUP_GAP_X = 0.2
+
+    def _sup_group(ids):
+        """同侧附件按 bbox 宽从中心向两侧排布，返回 [(中心偏移x, mol, bbox)]。"""
+        placed = []
+        for sid in ids:
+            info = mols.get(sid)
+            if info is None:
+                continue
+            bb = mol_visual_bbox(info["mol"], include_lone_pairs=False,
+                                 charge_mirror=False)
+            placed.append((bb[2] - bb[0], info["mol"], bb))
+        if not placed:
+            return []
+        total_w = sum(w for w, _, _ in placed) + _SUP_GAP_X * (len(placed) - 1)
+        x = -total_w / 2.0
+        out = []
+        for w, amol, bb in placed:
+            out.append((x + w / 2.0, amol, bb))   # 中心偏移（相对箭头中点）
+            x += w + _SUP_GAP_X
+        return out
+
     for x1, x2, cond, yoff, a_kind, sup in main_arrows:
         # 主反应箭头（→/⇌/↔/⇒ 统一）：共享函数与 reaction/arrow 共用；
         # kind 由 [ARROW:type=...] 显式传入（旧 ⇌ 令牌由函数内部识别）
@@ -1107,23 +1137,20 @@ def render_composite(layout: str, children: list) -> str:
         # 与普通结构式同一绘制管线（可参与机理箭头引用）
         if sup:
             mx = (x1 + x2) / 2.0
-            for s in sup:
-                s = s.strip()
-                if not s:
-                    continue
-                sign, sid = (s[0], s[1:]) if s[0] in "+-" else ("+", s)
-                info = mols.get(sid)
-                if info is None:
-                    continue
-                amol = info["mol"]
-                bb = mol_visual_bbox(amol, include_lone_pairs=False)
-                aw, ah = bb[2] - bb[0], bb[3] - bb[1]
-                cx = bb[0] + aw / 2.0
-                cy = bb[1] + ah / 2.0
-                dy = 0.75 + ah / 2.0 if sign == "+" else -(0.75 + ah / 2.0)
+            up_items = [s.strip()[1:] for s in sup
+                        if s.strip() and not s.strip().startswith("-")]
+            dn_items = [s.strip()[1:] for s in sup
+                        if s.strip() and s.strip().startswith("-")]
+            for amx, amol, bb in _sup_group(up_items):
+                cx = bb[0] + (bb[2] - bb[0]) / 2.0
+                sy = -yoff + _SUP_GAP - bb[1]      # 真实底边距箭头 0.15
                 lines.extend(molecule_scope_lines(
-                    amol, (mx - cx, -yoff + dy - cy),
-                    show_lone_pairs=False))
+                    amol, (mx + amx - cx, sy), show_lone_pairs=False))
+            for amx, amol, bb in _sup_group(dn_items):
+                cx = bb[0] + (bb[2] - bb[0]) / 2.0
+                sy = -yoff - _SUP_GAP - bb[3]      # 真实顶边距箭头 0.15
+                lines.extend(molecule_scope_lines(
+                    amol, (mx + amx - cx, sy), show_lone_pairs=False))
 
     # 加号实际坐标（y 取负：布局 yoff 向下为正，渲染取反）——供成键空位避让
     plus_xy = [(px, -yoff) for px, yoff in plus_positions]
