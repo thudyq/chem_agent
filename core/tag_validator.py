@@ -815,7 +815,8 @@ def _check_chair_subs(smi: str, spec: str) -> Tuple[bool, str]:
                 m = re.fullmatch(
                     r"(\d+):(ax|eq|axial|equatorial)", tok.lower())
                 if not m:
-                    return False, f"CHAIR 取代位格式错误「{tok}」（应为 位:ax/eq）"
+                    return False, (f"CHAIR 取代位格式错误「{tok}」（应为 位:ax/eq，"
+                                   f"环位 1~6 按环碳 SMILES 序号排序）")
                 pos = int(m.group(1))
                 if not 1 <= pos <= 6:
                     return False, f"CHAIR 环位 {pos} 超出范围 1~6"
