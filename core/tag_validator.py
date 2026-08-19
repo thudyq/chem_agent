@@ -1070,11 +1070,17 @@ def _validate_mech_arrow_pt(pt: str, n_atoms: int,
         if gba is not None:
             bond = gba(ia, ib)
             if bond is None:
-                # 列出 ia 的实际连接原子，帮助模型重数索引（可操作化）
+                # 列出两端的实际连接原子，帮助模型重数索引（可操作化）
                 gai = getattr(mol, "GetAtomWithIdx", None)
-                nbrs = [n.GetIdx() for n in gai(ia).GetNeighbors()] \
+                nbrs_a = [n.GetIdx() for n in gai(ia).GetNeighbors()] \
                     if gai is not None else []
-                hint = f"，原子 {ia} 实际连接 {nbrs}" if nbrs else ""
+                nbrs_b = [n.GetIdx() for n in gai(ib).GetNeighbors()] \
+                    if gai is not None else []
+                hint = ""
+                if nbrs_a:
+                    hint += f"，原子 {ia} 实际连接 {nbrs_a}"
+                if nbrs_b:
+                    hint += f"，原子 {ib} 实际连接 {nbrs_b}"
                 return (f"键端点「{pt}」引用原子 {ia} 与 {ib} 之间的键，"
                         f"但该分子中这两原子没有成键（先确认键的真实连接{hint}）")
         return ""

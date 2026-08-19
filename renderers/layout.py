@@ -363,6 +363,16 @@ def molecule_scope_lines(mol, shift: Tuple[float, float], *,
             for dx, dy in singles:
                 lines.append(f"    \\fill ({dx:.2f},{dy:.2f}) circle (0.028);")
                 occ.add_circle(dx, dy, DOT_R)
+    else:
+        # 自由基单电子不受孤对电子开关影响：不画点会被误读为离子
+        # （如 ·CH3 变成 CH3±）——show_lone_pairs=False 只抑制孤对电子对
+        for atom in mol.GetAtoms():
+            idx = atom.GetIdx()
+            _, singles = lone_pair_dot_groups(
+                mol, idx, explicit_hs=hs.get(idx, 0))
+            for dx, dy in singles:
+                lines.append(f"    \\fill ({dx:.2f},{dy:.2f}) circle (0.028);")
+                occ.add_circle(dx, dy, DOT_R)
     lines.append("  \\end{scope}")
     return lines
 

@@ -694,13 +694,30 @@ def _render_energy_layout(points_str: str, structs: list, mols: dict,
         else:
             cinfo = mols[comp["id"]]
             bbox = mol_visual_bbox(cinfo["mol"], include_lone_pairs=False)
-        shift = place_bbox(bbox, x, y, comp["pos"], margin=0.6)
-        for _ in range(20):  # 最多右移 20×0.4 = 8.0
-            rect = (bbox[0] + shift[0], bbox[1] + shift[1],
-                    bbox[2] + shift[0], bbox[3] + shift[1])
-            if not any(_rects_intersect(rect, o) for o in occupied):
+        # 驻点结构防重叠：按"小边距→大边距、声明 pos→另一侧"优先级尝试
+        # （宽结构横向间距不足时上下错开或加高，避免整体右移脱点）；
+        # 全部碰撞才右移（兜底）
+        preferred = comp["pos"]
+        alt = "below" if preferred == "above" else "above"
+        shift = rect = None
+        for m in (0.6, 0.9, 1.3, 1.8, 2.4):
+            for pos in (preferred, alt):
+                cand = place_bbox(bbox, x, y, pos, margin=m)
+                cand_rect = (bbox[0] + cand[0], bbox[1] + cand[1],
+                             bbox[2] + cand[0], bbox[3] + cand[1])
+                if not any(_rects_intersect(cand_rect, o) for o in occupied):
+                    shift, rect = cand, cand_rect
+                    break
+            if shift is not None:
                 break
-            shift = (shift[0] + 0.4, shift[1])
+        if shift is None:
+            shift = place_bbox(bbox, x, y, preferred, margin=0.6)
+            for _ in range(20):  # 最多右移 20×0.4 = 8.0
+                rect = (bbox[0] + shift[0], bbox[1] + shift[1],
+                        bbox[2] + shift[0], bbox[3] + shift[1])
+                if not any(_rects_intersect(rect, o) for o in occupied):
+                    break
+                shift = (shift[0] + 0.4, shift[1])
         if mc is not None:
             mc["shift"] = shift
             mol_placements.append(mc)

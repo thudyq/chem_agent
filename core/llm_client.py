@@ -57,6 +57,16 @@ def _is_truncated(content: str) -> str | None:
     return None
 
 
+class _ThinkingUnsupported(Exception):
+    """HTTP 400 明确拒绝 thinking/reasoning_effort 字段的模型
+    （如 gemini 系——传了不认识的字段直接 400，而非忽略）。"""
+
+
+# 进程内记录不支持 thinking 字段的模型：首次 400 后摘除字段，
+# 后续 stage 不再携带（gemini-3.x-flash 等）
+_NO_THINKING_MODELS: set = set()
+
+
 def _stream_chat(url: str, headers: dict, payload: dict,
                  on_piece=None) -> tuple[str | None, str, int]:
     """SSE 流式调用：逐帧累积 content，返回 (content, finish_reason, reasoning_chars)。
@@ -84,8 +94,17 @@ def _stream_chat(url: str, headers: dict, payload: dict,
     with _SESSION.post(url, headers=headers, json=payload,
                        stream=True, timeout=DEFAULT_TIMEOUT) as resp:
         if resp.status_code != 200:
-            print(f"[ask_llm] HTTP {resp.status_code}: {resp.text[:200]}")
+            body = resp.text[:300]
+            print(f"[ask_llm] HTTP {resp.status_code}: {body[:200]}")
+            if resp.status_code == 400 and (
+                    "Cannot find field" in body
+                    or ("Unknown name" in body
+                        and ("thinking" in body or "reasoning_effort" in body))):
+                raise _ThinkingUnsupported(body)
             return None, "", 0
+        # SSE 按 UTF-8 解码：响应头缺 charset 时 requests 默认 ISO-8859-1，
+        # 中文会被按 latin-1 误读（双重编码乱码，gemini 端点实测出现）
+        resp.encoding = "utf-8"
         for line in resp.iter_lines(decode_unicode=True):
             if not line or not line.startswith("data:"):
                 continue
@@ -213,11 +232,12 @@ def ask_llm(
     with _SEMAPHORE:  # B3：限流——同时最多 max_concurrent 个 LLM 调用
         for stage_i, (current_model, (tmode, teffort)) in enumerate(stages):
             payload["model"] = current_model
-            if tmode is None:
+            if tmode is None or current_model in _NO_THINKING_MODELS:
                 payload.pop("thinking", None)
             else:
                 payload["thinking"] = {"type": tmode}
-            if teffort and tmode != "disabled":
+            if (teffort and tmode != "disabled"
+                    and current_model not in _NO_THINKING_MODELS):
                 payload["reasoning_effort"] = teffort
             else:
                 payload.pop("reasoning_effort", None)
@@ -229,6 +249,15 @@ def ask_llm(
                 try:
                     content, finish_reason, reasoning_chars = _stream_chat(
                         url, headers, payload, on_piece=on_piece)
+                except _ThinkingUnsupported:
+                    # 模型不认识 thinking/reasoning_effort 字段（如 gemini
+                    # flash）：摘除后本进程内不再携带，立即重试（不计失败）
+                    print(f"[ask_llm] 模型 {current_model} 不支持 thinking 参数，"
+                          f"已移除该字段")
+                    _NO_THINKING_MODELS.add(current_model)
+                    payload.pop("thinking", None)
+                    payload.pop("reasoning_effort", None)
+                    continue
                 except requests.exceptions.Timeout as e:
                     print(f"[ask_llm] 第 {attempt}/{retries} 次请求超时"
                           f"（数据间隔 >{DEFAULT_TIMEOUT}s，模型思考过久或网络慢）: {e}")

@@ -1447,3 +1447,38 @@ def test_sup_mech_arrow_position():
     assert sx > 1.0
     # 被引用附件显示孤对电子（OH- 上方区域有电子点）
     assert out.count("\\fill") >= 1
+
+
+def test_radical_single_electron_always_shown():
+    """自由基单电子点不随孤对电子开关隐藏（20260819 基线反馈修复）：
+    无 MECHARROW 的反应式中 ·CH3 也必须画单电子点，否则被误读为离子。"""
+    text = ("[COMPOSITE:reaction]"
+            "[STRUCT:[CH3],id=a,label=·CH3][PLUS][STRUCT:[CH3],id=b,label=·CH3]"
+            "[ARROW:type=single][STRUCT:CC,id=c,label=乙烷][/COMPOSITE]")
+    out = render_composite(*parse_tags(text)[0].args)
+    assert "渲染失败" not in out
+    assert out.count("\\fill") == 2      # 两个 ·CH3 各一个单电子点
+
+
+def test_energy_layout_wide_structs_stay_on_points():
+    """energy 布局：宽驻点结构（叔丁基系列）横向间距不足时上下错开，
+    挂在各自驻点附近（x 对准驻点），不得整体右移脱点（20260819 基线反馈）。"""
+    text = ("[COMPOSITE:energy]"
+            "[ENERGY:0,85,60,95,30]"
+            "[STRUCT:CC(C)(C)Br.[OH2],label=反应物,at=0]"
+            "[STRUCT:C[C+](C)C,label=碳正离子中间体,at=2]"
+            "[STRUCT:CC(C)(C)O,label=产物,at=4]"
+            "[/COMPOSITE]")
+    out = render_composite(*parse_tags(text)[0].args)
+    assert "渲染失败" not in out
+    from renderers.layout import energy_point_coords
+    pts = energy_point_coords([0, 85, 60, 95, 30])["points"]
+    px = {i: x for i, _v, x, _y in pts}
+    # 三个结构 scope 的 shift.x 应对准各自驻点（容差 ±1.2，宽结构居中偏移）
+    shifts = re.findall(
+        r"\\begin\{scope\}\[shift=\{\(([-\d.]+),[-\d.]+\)\}\]", out)
+    xs = sorted(float(s) for s in shifts[5:])   # 前 5 个是驻点标记
+    assert len(xs) == 3
+    assert abs(xs[0] - px[0]) < 1.2, f"反应物脱点: {xs[0]} vs {px[0]}"
+    assert abs(xs[1] - px[2]) < 1.2, f"中间体脱点: {xs[1]} vs {px[2]}"
+    assert abs(xs[2] - px[4]) < 1.2, f"产物脱点: {xs[2]} vs {px[4]}"
