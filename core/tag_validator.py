@@ -1225,6 +1225,7 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
                 if bc.type == "MECHARROW")
     # 子标记校验（顶层）：ARROW / BLOCK / CHARGE / HBOND / XH / BOND
     # （MECHARROW 单独处理：顶层 + BLOCK 内统一，见下方 mech_children 循环）
+    sup_ref_counts = {}   # 附件组件 id → 被 ARROW sup 引用次数（唯一性校验）
     for child in children:
         ctype = child.type
         if ctype == "MECHARROW":
@@ -1245,6 +1246,7 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
                 if not comps[sid].get("arrow"):
                     return False, (f"ARROW 附件组件「{sid}」未声明 arrow 令牌"
                                    f"（副反应物/副产物需 [STRUCT:...,id={sid},arrow]）")
+                sup_ref_counts[sid] = sup_ref_counts.get(sid, 0) + 1
         elif ctype == "BLOCK":
             ok, reason = _check_block(child.args[0] if child.args else [])
             if not ok:
@@ -1397,6 +1399,20 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
                     if dst2_reason:
                         return False, (f"MECHARROW 目标端点「{dst2_id}:{dst2_pt}」"
                                        f"{dst2_reason}")
+
+    # arrow 令牌组件唯一引用：必须被恰好一个 ARROW 的 sup 引用——
+    # 不引用则组件不可见（渲染端只经 sup 通道绘制附件），多引用则
+    # 同组件画多份、机理箭头引用的坐标写回歧义
+    for cid, info in comps.items():
+        if not info.get("arrow"):
+            continue
+        n = sup_ref_counts.get(cid, 0)
+        if n == 0:
+            return False, (f"箭头附件组件「{cid}」未被任何 ARROW 的 sup 引用"
+                           f"（arrow 令牌组件必须被唯一一个 ARROW 引用）")
+        if n > 1:
+            return False, (f"箭头附件组件「{cid}」被 {n} 个 ARROW 引用"
+                           f"（arrow 令牌组件必须被唯一一个 ARROW 引用）")
 
     if _RDKIT_OK:
         for ref, idxs in xh_usage.items():

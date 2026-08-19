@@ -84,7 +84,7 @@ reaction 布局的守恒校验（逐步、不跨步）：单→单只查碳原�
 
 容器内组件的画法模式：reaction 布局可用 skeleton/lewis/stereo/chair（禁 newman）；row/energy 布局不限（含 newman）。stereo/chair/newman 组件仅作展示——不支持 MECHARROW/HBOND/CHARGE 引用，也不能作箭头附件（arrow 令牌）。
 
-箭头附件（副反应物/副产物）：组件声明 arrow 令牌后不参与主序列，由 ARROW 的 sup 参数引用——sup=+id 画在箭头上方（副反应物）、sup=-id 画在下方（副产物）。
+箭头附件（副反应物/副产物）：组件声明 arrow 令牌后不参与主序列，由 ARROW 的 sup 参数引用——sup=+id 画在箭头上方（副反应物）、sup=-id 画在下方（副产物）。每个 arrow 令牌组件必须被恰好一个 ARROW 引用（不引用或多个引用都会报错）；附件可参与 MECHARROW 引用（如从副反应物画机理箭头）。
 
 多步反应/机理：在同一个 COMPOSITE 内按顺序排列，每步一个 ARROW 串联（A → B → C），各步条件独立标注（见示例 6）。
 

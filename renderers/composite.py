@@ -962,6 +962,7 @@ def render_composite(layout: str, children: list) -> str:
         b_items = []
         b_ids = []
         b_mech = []
+        b_labels = {}   # 块内组件 id → (label 文本, STRUCT 子标记)——label 渲染用
         for bc in bchildren:
             if bc.type == "STRUCT":
                 bmol = prepare_mol(bc.args[0].strip() if bc.args else "",
@@ -973,6 +974,12 @@ def render_composite(layout: str, children: list) -> str:
                 bid_ = bc.attrs.get("id") or f"b{bid}_{len(b_ids)}"
                 b_ids.append(bid_)
                 b_items.append(("mol", bid_, bmol))
+                # label 随块内组件移动：记录原始 label 文本供渲染
+                # （主行组件 label 在布局后单独画；块内组件 label 需在此
+                # 预渲染阶段一并产出——20260821 修复：此前块内 label 丢失）
+                blabel = bc.args[1] if len(bc.args) > 1 else None
+                if blabel:
+                    b_labels[bid_] = blabel
             elif bc.type == "ARROW":
                 b_items.append(("resarrow",))
             elif bc.type == "MECHARROW" and bc.args:
@@ -992,6 +999,18 @@ def render_composite(layout: str, children: list) -> str:
         for placed in blayout.mols:
             b_lines.extend(molecule_scope_lines(placed.mol, placed.shift,
                                                 show_lone_pairs=b_lp))
+            # 块内组件 label（中文/角色标注显示在分子下方；纯化学式
+            # label 分子本身已展示，不重复——与主行组件同一判定）
+            blabel = b_labels.get(placed.key)
+            if blabel and not is_formula_label(blabel):
+                bb = placed.bbox
+                cx = (bb[0] + bb[2]) / 2.0 + placed.shift[0]
+                ly = bb[1] + placed.shift[1] - 0.35
+                text = wrap_format_text(blabel)
+                align = "align=center, " if "\\\\" in text else ""
+                b_lines.append(
+                    f"  \\node[{align}below] at ({cx:.2f},{ly:.2f}) {{{text}}};"
+                )
         for rx in blayout.resarrows:
             b_lines.append(
                 f"  \\node[font=\\large] at ({rx:.2f},0) {{$\\leftrightarrow$}};")
@@ -1250,43 +1269,59 @@ def render_composite(layout: str, children: list) -> str:
 
     def _sup_group(ids):
         """同侧附件按 bbox 宽从中心向两侧排布，
-        返回 [(中心偏移x, mol, 化学式文本或None, bbox)]。"""
+        返回 [(中心偏移x, sid, mol, 化学式文本或None, bbox)]。"""
         placed = []
         for sid in ids:
             info = mols.get(sid)
             if info is not None:
                 bb = mol_visual_bbox(info["mol"], include_lone_pairs=False,
                                      charge_mirror=False)
-                placed.append((bb[2] - bb[0], info["mol"], None, bb))
+                placed.append((bb[2] - bb[0], sid, info["mol"], None, bb))
                 continue
             tc = textcomps.get(sid)
             if tc is not None:
                 # 化学式文本附件（双轨制）：按文本尺寸参与排布
                 w_t, h_t = label_wrapped_size(tc["text"])
                 bb = (-w_t / 2.0, -h_t / 2.0, w_t / 2.0, h_t / 2.0)
-                placed.append((w_t, None, tc["text"], bb))
+                placed.append((w_t, sid, None, tc["text"], bb))
         if not placed:
             return []
         total_w = sum(w for w, *_ in placed) + _SUP_GAP_X * (len(placed) - 1)
         x = -total_w / 2.0
         out = []
-        for w, amol, atext, bb in placed:
-            out.append((x + w / 2.0, amol, atext, bb))
+        for w, sid, amol, atext, bb in placed:
+            out.append((x + w / 2.0, sid, amol, atext, bb))
             x += w + _SUP_GAP_X
         return out
 
-    def _draw_sup(amx, amol, atext, bb, sy, mx):
-        """画一个附件：分子走 scope 管线，化学式文本画节点（双轨制）。"""
+    def _draw_sup(sid, amx, amol, atext, bb, sy, mx, minus=False):
+        """画一个附件：分子走 scope 管线，化学式文本画节点（双轨制）。
+        minus=True（sup=-F 副产物）时在组件左侧 0.15 处画负号（正号按
+        惯例不画）；负号纵坐标与组件标签中心对齐——分子取原子坐标跨度
+        中心（不计电荷圈/孤对电子对 bbox 的抬高，如 Br- 对齐 Br 标签
+        而非 bbox 中心），化学式文本取文本中心。
+        分子附件把实际绘制位置写回 mols[sid]["shift"]——附件不进主序列
+        布局，shift 缺省 (0,0)，不写回则 MECHARROW 引用端点落空；
+        被 MECHARROW 引用的附件画出孤对电子（与箭头起点区域一致）。"""
         cx = bb[0] + (bb[2] - bb[0]) / 2.0
+        px = mx + amx - cx
         if amol is not None:
-            lines.extend(molecule_scope_lines(
-                amol, (mx + amx - cx, sy), show_lone_pairs=False))
+            ys = [atom_pos(amol, a.GetIdx())[1] for a in amol.GetAtoms()]
+            cy = sy + (min(ys) + max(ys)) / 2.0
         else:
             cy = sy + (bb[1] + bb[3]) / 2.0
+        if minus:
+            lines.append(
+                f"  \\node at ({px + bb[0] - 0.15:.2f},{cy:.2f}) {{$-$}};")
+        if amol is not None:
+            mols[sid]["shift"] = (px, sy)
+            lines.extend(molecule_scope_lines(
+                amol, (px, sy),
+                show_lone_pairs=sid in main_mech_ids))
+        else:
             lines.append(
                 f"  \\node[fill=white, inner sep=1pt] at "
-                f"({mx + amx - cx:.2f},{cy:.2f}) "
-                f"{{{wrap_format_text(atext)}}};")
+                f"({px:.2f},{cy:.2f}) {{{wrap_format_text(atext)}}};")
 
     for x1, x2, cond, yoff, a_kind, sup in main_arrows:
         # 主反应箭头（→/⇌/↔/⇒ 统一）：共享函数与 reaction/arrow 共用；
@@ -1300,12 +1335,12 @@ def render_composite(layout: str, children: list) -> str:
                         if s.strip() and not s.strip().startswith("-")]
             dn_items = [s.strip()[1:] for s in sup
                         if s.strip() and s.strip().startswith("-")]
-            for amx, amol, atext, bb in _sup_group(up_items):
+            for amx, sid, amol, atext, bb in _sup_group(up_items):
                 sy = -yoff + _SUP_GAP - bb[1]      # 真实底边距箭头 0.15
-                _draw_sup(amx, amol, atext, bb, sy, mx)
-            for amx, amol, atext, bb in _sup_group(dn_items):
+                _draw_sup(sid, amx, amol, atext, bb, sy, mx)
+            for amx, sid, amol, atext, bb in _sup_group(dn_items):
                 sy = -yoff - _SUP_GAP - bb[3]      # 真实顶边距箭头 0.15
-                _draw_sup(amx, amol, atext, bb, sy, mx)
+                _draw_sup(sid, amx, amol, atext, bb, sy, mx, minus=True)
 
     # 加号实际坐标（y 取负：布局 yoff 向下为正，渲染取反）——供成键空位避让
     plus_xy = [(px, -yoff) for px, yoff in plus_positions]

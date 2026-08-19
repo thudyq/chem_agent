@@ -262,6 +262,20 @@ def test_smoke_reaction_block_mecharrow_and_brackets():
     assert "red" in outs[0]
 
 
+def test_smoke_reaction_block_labels():
+    """BLOCK 内 STRUCT 的 label 正常渲染（20260821 修复：此前块内 label 丢失）。"""
+    outs, bad = _render(
+        "[COMPOSITE:reaction]"
+        "[BLOCK][STRUCT:C1=CC=CC=C1,label=式 I]"
+        "[ARROW:type=resonance]"
+        "[STRUCT:C1C=CC=CC=1,label=式 II][/BLOCK]"
+        "[/COMPOSITE]")
+    assert len(outs) == 1 and bad == 0, [r.reason for r in bad]
+    # 两个 label 均渲染为分子下方节点（中文/角色标注，非纯化学式）
+    assert "\\node[below]" in outs[0]
+    assert "式 I" in outs[0] and "式 II" in outs[0]
+
+
 def test_smoke_lewis_with_label():
     outs, bad = _render("[LEWIS:O,label=水]")
     assert len(outs) == 1 and bad == 0

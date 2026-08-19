@@ -1371,3 +1371,79 @@ def test_formula_comp_coeff_and_sup():
     out2 = render_composite(*tags2[0].args)
     assert "渲染失败" not in out2
     assert "H$_2$" in out2                           # 附件文本节点
+
+
+def test_sup_minus_sign_rendered():
+    """sup=-F 副产物：负号渲染在箭头下方组件左侧（sup=+E 正号按惯例不画）。"""
+    from core.tag_validator import validate_tags
+    text = ("[COMPOSITE:reaction]"
+            "[STRUCT:CCO,id=a,label=乙醇][PLUS][STRUCT:CC(=O)O,id=b,label=乙酸]"
+            "[STRUCT:O,id=w,arrow,label=水]"
+            "[ARROW:type=single,sup=-w,浓H2SO4]"
+            "[STRUCT:CC(=O)OCC,id=c,label=乙酸乙酯]"
+            "[/COMPOSITE]")
+    tags = parse_tags(text)
+    _, invalid = validate_tags(tags)
+    assert not invalid
+    out = render_composite(*tags[0].args)
+    assert "渲染失败" not in out
+    minus = re.search(r"\\node at \(([-\d.]+),([-\d.]+)\) \{\$-\$\};", out)
+    assert minus is not None, "sup=-F 的负号未渲染"
+    assert float(minus.group(2)) < 0      # 负号在箭头下方（副产物侧）
+
+
+def test_sup_minus_sign_aligns_label_center():
+    """sup=-F 负号定位：距组件 bbox 左缘 0.15，纵坐标与组件标签中心对齐
+    （Cl- 的 bbox 上界被电荷圈抬高，负号应对齐 Cl 标签而非 bbox 中心）。"""
+    from core.tag_validator import validate_tags
+    text = ("[COMPOSITE:reaction]"
+            "[STRUCT:CCl,id=a][PLUS][STRUCT:[OH-],id=b]"
+            "[STRUCT:[Cl-],id=cl,arrow]"
+            "[ARROW:type=single,sup=-cl]"
+            "[STRUCT:CO,id=c]"
+            "[/COMPOSITE]")
+    tags = parse_tags(text)
+    _, invalid = validate_tags(tags)
+    assert not invalid
+    out = render_composite(*tags[0].args)
+    assert "渲染失败" not in out
+    minus = re.search(r"\\node at \(([-\d.]+),([-\d.]+)\) \{\$-\$\};", out)
+    assert minus is not None
+    # Cl 标签所在 scope 的 shift y 即标签中心 y（Cl- 单原子，标签在局部原点）
+    cl_y = None
+    lines = out.splitlines()
+    for i, ln in enumerate(lines):
+        m = re.match(r"\s*\\begin\{scope\}\[shift=\{\(([-\d.]+),([-\d.]+)\)\}\]", ln)
+        if m and i + 1 < len(lines) and "{Cl}" in lines[i + 1]:
+            cl_y = float(m.group(2))
+            break
+    assert cl_y is not None
+    assert abs(float(minus.group(2)) - cl_y) < 0.05
+
+
+def test_sup_mech_arrow_position():
+    """sup 附件参与 MECHARROW（Drawbacks 一-9）：附件绘制坐标写回，
+    机理箭头端点落在附件实际位置（箭头上方），而非缺省 (0,0)；
+    被引用附件画出孤对电子。"""
+    from core.tag_validator import validate_tags
+    text = ("[COMPOSITE:reaction]"
+            "[STRUCT:CCl,id=a,label=CH3Cl]"
+            "[STRUCT:[OH-],id=nu,arrow,label=OH-]"
+            "[ARROW:type=single,sup=+nu]"
+            "[STRUCT:CO,id=b,label=CH3OH][PLUS][STRUCT:[Cl-],id=cl,label=Cl-]"
+            "[MECHARROW:nu:0>a:0][MECHARROW:a:0-1>a:1]"
+            "[/COMPOSITE]")
+    tags = parse_tags(text)
+    _, invalid = validate_tags(tags)
+    assert not invalid
+    out = render_composite(*tags[0].args)
+    assert "渲染失败" not in out
+    start = re.search(
+        r"\\draw\[->, thick, red\] \(([-\d.]+),([-\d.]+)\)", out)
+    assert start is not None
+    sx, sy = float(start.group(1)), float(start.group(2))
+    # nu 附件画在主箭头上方（y>0），机理箭头起点应在上方区域而非 (0,0) 虚空
+    assert sy > 0
+    assert sx > 1.0
+    # 被引用附件显示孤对电子（OH- 上方区域有电子点）
+    assert out.count("\\fill") >= 1

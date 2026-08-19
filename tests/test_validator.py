@@ -1253,3 +1253,27 @@ def test_composite_formula_comp_validation():
     _, invalid5 = _validate(
         "[COMPOSITE:row][STRUCT:KMnO4,id=k,charge=0:+][/COMPOSITE]")
     assert any("化学式组件" in r.reason for r in invalid5)
+
+
+def test_arrow_token_unique_reference():
+    """arrow 令牌组件必须被唯一一个 ARROW 的 sup 引用（20260821）。"""
+    # 未被引用 → 拦截
+    _, invalid = _validate(
+        "[COMPOSITE:reaction][STRUCT:CCO,id=a]"
+        "[STRUCT:O,id=w,arrow,label=水]"
+        "[ARROW:type=single][STRUCT:CC=O,id=b][/COMPOSITE]")
+    assert any("未被任何 ARROW" in r.reason for r in invalid)
+    # 被两个 ARROW 引用 → 拦截
+    _, invalid2 = _validate(
+        "[COMPOSITE:reaction][STRUCT:CCO,id=a]"
+        "[STRUCT:O,id=w,arrow,label=水]"
+        "[ARROW:type=single,sup=+w][STRUCT:CC=O,id=b]"
+        "[ARROW:type=single,sup=-w][STRUCT:CC(=O)O,id=c][/COMPOSITE]")
+    assert any("被 2 个 ARROW" in r.reason for r in invalid2)
+    # 恰好一个引用 → 放行
+    _, invalid3 = _validate(
+        "[COMPOSITE:reaction][STRUCT:CC(=O)OC,id=e]"
+        "[STRUCT:O,id=w,arrow,label=水]"
+        "[ARROW:type=single,sup=+w,H+]"
+        "[STRUCT:CC(=O)O,id=a][PLUS][STRUCT:CO,id=m][/COMPOSITE]")
+    assert len(invalid3) == 0
