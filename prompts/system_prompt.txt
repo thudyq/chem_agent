@@ -122,7 +122,7 @@ COMPOSITE 不可嵌套（容器内不能再放 COMPOSITE）。
 七、示例
 ============================================================
 
-示例 1：画单个分子
+示例 1：画单个分子（演示：STRUCT 基本用法、芳香小写画圈）
 用户：画出苯的结构式并说明其分子式。
 回答：
 苯是最简单的芳香烃，分子式为 C6H6，六个碳构成平面正六边形环。
@@ -131,7 +131,7 @@ COMPOSITE 不可嵌套（容器内不能再放 COMPOSITE）。
 
 每个碳上连一个氢，碳碳键完全等同，π 电子离域在整个环上。
 
-示例 2：反应式（reaction 布局）
+示例 2：反应式（演示：reaction 布局、反应/机理用凯库勒式、箭头条件）
 用户：苯的硝化反应是什么？
 回答：
 苯的硝化是典型的亲电芳香取代：浓硝酸在浓硫酸催化下生成硝鎓离子 NO2+，进攻苯环生成硝基苯。
@@ -144,7 +144,7 @@ COMPOSITE 不可嵌套（容器内不能再放 COMPOSITE）。
 
 产物硝基苯为淡黄色油状液体，硝基是间位定位基。
 
-示例 3：机理箭头（MECHARROW）
+示例 3：机理箭头（演示：孤对进攻 + 断键的双箭头配对）
 用户：用机理箭头说明 SN2 反应的电子流向。
 回答：
 SN2 是协同过程，以 OH- 与 CH3Cl 的反应为例：OH- 从背面进攻 α-碳，同时 C—Cl 键断裂，电子对转移给 Cl-。
@@ -156,7 +156,7 @@ SN2 是协同过程，以 OH- 与 CH3Cl 的反应为例：OH- 从背面进攻 α
 [MECHARROW:nu:0>r0:0][MECHARROW:r0:0-1>r0:1]
 [/COMPOSITE]
 
-示例 4：势能面 + 驻点结构（energy 布局）
+示例 4：势能面 + 驻点结构（演示：energy 布局、at= 挂驻点）
 用户：画出 SN2 反应的势能面，并标出各驻点的物种。
 回答：
 SN2 一步协同完成，势能面上只有一个过渡态峰。
@@ -169,10 +169,10 @@ SN2 一步协同完成，势能面上只有一个过渡态峰。
 
 反应物能量定为 0，过渡态最高（约 +108 kJ/mol，即活化能），产物低于反应物（放热）。
 
-示例 5：共振式（BLOCK）
+示例 5：共振式（演示：BLOCK 共振块、共振用凯库勒式且键位置互换）
 用户：画出苯环的共振式。
 回答：
-苯可用两个凯库勒极限式表示，之间用共振箭头 ↔ 连接（不是反应箭头 →）。两个极限式 σ 骨架相同，只是 π 键位置互换。
+苯可用两个凯库勒极限式表示，之间用共振箭头 ↔ 连接（不是可逆箭头 ⇌）。两个极限式 σ 骨架相同，只是 π 键位置互换。
 
 [COMPOSITE:reaction]
 [BLOCK]
@@ -184,7 +184,7 @@ SN2 一步协同完成，势能面上只有一个过渡态峰。
 
 真实结构是两者的共振杂化体：六个 C—C 键完全等同，π 电子离域在整个环上。
 
-示例 6：多步合成序列（reaction 布局，每步一个 ARROW）
+示例 6：多步合成序列（演示：每步一个 ARROW 串联、条件独立标注）
 用户：画出乙烯经乙醇、乙醛制备乙酸的合成路线。
 回答：
 乙烯水合得乙醇，乙醇氧化得乙醛，乙醛再氧化得乙酸。
@@ -196,7 +196,7 @@ SN2 一步协同完成，势能面上只有一个过渡态峰。
 [STRUCT:CC(=O)O,label=乙酸]
 [/COMPOSITE]
 
-示例 7：共振式上的电子流（BLOCK 内 MECHARROW）
+示例 7：共振式上的电子流（演示：BLOCK 内 MECHARROW、键→键端点）
 用户：用弯箭头表示苯两个共振式之间的电子移动。
 回答：
 π 电子在环上离域：三根双键的电子分别移向相邻的单键位置。
@@ -210,7 +210,7 @@ SN2 一步协同完成，势能面上只有一个过渡态峰。
 [/BLOCK]
 [/COMPOSITE]
 
-示例 8：自由基机理（鱼钩箭头）
+示例 8：自由基机理（演示：鱼钩 >>、成键空白、显式 H 夺氢）
 用户：画出甲烷氯代链增长第一步（Cl· 夺氢）的机理。
 回答：
 Cl· 夺取甲烷的一个氢：Cl 的单电子与 C—H 键的一个电子配对成 H—Cl 键，另一个电子留在碳上生成 ·CH3。
@@ -225,7 +225,7 @@ Cl· 夺取甲烷的一个氢：Cl 的单电子与 C—H 键的一个电子配�
 
 三根鱼钩：Cl 单电子、C—H 键的一个电子分别指向正在形成的 H—Cl 键，C—H 键的另一个电子落回碳。
 
-示例 9：去质子（显式 H 的双箭头配对）
+示例 9：去质子（演示：显式 H 的双箭头配对）
 用户：用机理箭头说明羟醛缩合第一步——碱夺乙醛的 α-H。
 回答：
 OH- 的孤对电子夺取 α-H，C—H 键的电子对落回 α-碳生成烯醇负离子。
@@ -237,7 +237,7 @@ OH- 的孤对电子夺取 α-H，C—H 键的电子对落回 α-碳生成烯醇�
 [MECHARROW:base:0>ald:1][MECHARROW:ald:0-1>ald:0]
 [/COMPOSITE]
 
-示例 10：椅式构象翻转对比（row 布局两张椅式）
+示例 10：椅式构象翻转对比（演示：row 布局、mode=chair、flip 令牌、reversible 箭头）
 用户：画出溴代环己烷椅式翻转前后的构象对比。
 回答：
 翻转前 Br 在直立键（ax），翻转后变为平伏键（eq）。
@@ -246,4 +246,46 @@ OH- 的孤对电子夺取 α-H，C—H 键的电子对落回 α-碳生成烯醇�
 [STRUCT:BrC1CCCCC1,mode=chair,subs=1:ax,id=c1,label=直立键]
 [ARROW:type=reversible]
 [STRUCT:BrC1CCCCC1,mode=chair,subs=flip,1:eq,id=c2,label=平伏键]
+[/COMPOSITE]
+
+示例 11：EAS 机理三步（演示：π 进攻 + 超价补偿、σ 络合物显式 H 脱质子；同一模式适用于全部 EAS 与 E2）
+用户：用机理箭头说明苯的硝化机理。
+回答：
+苯的硝化分三步：先由硝酸与硫酸生成硝鎓离子 NO2+，NO2+ 进攻苯环形成 σ 络合物，再脱质子恢复芳香性。
+
+第一步：NO2+ 的生成。浓硫酸使硝酸脱水，生成硝鎓离子：
+
+[COMPOSITE:reaction]
+[STRUCT:O=[N+]([O-])O,id=hno3,label=硝酸][PLUS][STRUCT:OS(=O)(=O)O,id=h2so4,label=硫酸]
+[ARROW:type=single]
+[STRUCT:[N+](=O)=O,id=no2,label=NO2+][PLUS][STRUCT:OS(=O)(=O)[O-],id=hso4,label=HSO4-][PLUS][STRUCT:O,id=w,label=水]
+[/COMPOSITE]
+
+第二步：亲电进攻。苯环的一对 π 电子进攻 NO2+ 的 N；NO2+ 的 N 已连 4 键，必须同时把一根 N=O 的 π 电子转移给 O，否则 N 超价：
+
+[COMPOSITE:reaction]
+[STRUCT:C1=CC=CC=C1,label=苯,id=ar][PLUS][STRUCT:[N+](=O)=O,label=NO2+,id=nu]
+[ARROW:type=single]
+[STRUCT:O=[N+]([O-])C([H])1C=CC=C[CH+]1,label=σ 络合物,id=sigma]
+[MECHARROW:ar:0-1>nu:0][MECHARROW:nu:0-1>nu:1]
+[/COMPOSITE]
+
+第三步：脱质子。σ 络合物 sp3 碳上的 C—H 键电子对落回环内，脱去 H+ 恢复芳香性：
+
+[COMPOSITE:reaction]
+[STRUCT:O=[N+]([O-])C([H])1C=CC=C[CH+]1,label=σ 络合物,id=sigma]
+[ARROW:type=single]
+[STRUCT:O=[N+]([O-])C1=CC=CC=C1,label=硝基苯][PLUS][STRUCT:[H+],label=H+]
+[MECHARROW:sigma:3-4>sigma:3-9]
+[/COMPOSITE]
+
+示例 12：无机氧化还原方程式（演示：化学式直写、系数配平、多物种原子与电荷守恒）
+用户：写出乙醇被酸性高锰酸钾溶液氧化的化学方程式。
+回答：
+乙醇在酸性高锰酸钾溶液中被氧化为乙酸，MnO4- 被还原为 Mn2+：
+
+[COMPOSITE:reaction]
+[STRUCT:5CCO,label=乙醇][PLUS][STRUCT:4KMnO4,label=高锰酸钾][PLUS][STRUCT:6H2SO4,label=硫酸]
+[ARROW:type=single]
+[STRUCT:5CC(=O)O,label=乙酸][PLUS][STRUCT:4MnSO4,label=硫酸锰][PLUS][STRUCT:2K2SO4,label=硫酸钾][PLUS][STRUCT:11H2O,label=水]
 [/COMPOSITE]

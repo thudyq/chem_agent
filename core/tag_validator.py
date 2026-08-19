@@ -1610,12 +1610,12 @@ def _warn_benzene_consistency(tags: List[RenderTag],
             smi = child.args[0].strip()
             if not smi:
                 continue
+            # 化学计量系数前缀（2CCO 等）剥离后再探测；探测性解析统一
+            # 静音——化学式组件（KMnO4 等）解析失败是常态，无诊断价值
+            parsed_c = _parse_coeff(smi)
+            smi = parsed_c[1] if parsed_c else smi
             try:
-                # 游离氢组分（[H+]/[H]/[H-]）解析触发 RemoveHs 无害警告，静默
-                cm = (mute_rdkit_warnings() if FREE_H_COMPONENT_RE
-                      and FREE_H_COMPONENT_RE.search(smi)
-                      else contextlib.nullcontext())
-                with cm:
+                with mute_rdkit_warnings(include_error=True):
                     m = Chem.MolFromSmiles(smi)
                 if m is None:
                     continue
