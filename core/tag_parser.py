@@ -102,8 +102,8 @@ def _only_child_tags_between(text: str, lo: int, hi: int) -> bool:
 
 # COMPOSITE 容器内允许的带子标记 opener（冒号形式）
 # LEWIS/STEREO/CHAIR/NEWMAN 为分子旧标记：归一化为 STRUCT+mode 后
-# 由容器统一渲染（mode=lewis 显示孤对；stereo/chair/newman 由校验层
-# 限制为顶层使用，见 tag_validator）
+# 由容器统一渲染（mode=lewis 显示孤对；stereo/chair/newman 预渲染为
+# 不透明展示组件，reaction 布局禁 newman，见 tag_validator）
 # ARROW 为大一统架构的新箭头标记（[ARROW:type=...,sup=...,条件]）；
 # RXNARROW/RESARROW/CONDITION 为旧箭头标记（兼容保留，新架构不用）
 _INNER_OPENERS = {

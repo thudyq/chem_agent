@@ -78,7 +78,7 @@ if __name__ == "__main__":
         adjust_hbond_conformation, lone_pair_angles, _ang_diff,
         _covalent_bond_len,
         partial_charge_pos, main_arrow_lines, split_species_coeff, wrap_format_text,
-        is_formula_label, heavy_atom_count,
+        is_formula_label, heavy_atom_count, label_wrapped_size,
     )
     from renderers.layout import (
         energy_annotation_placement, energy_point_coords, energy_point_roles,
@@ -99,7 +99,7 @@ else:
         adjust_hbond_conformation, lone_pair_angles, _ang_diff,
         _covalent_bond_len,
         partial_charge_pos, main_arrow_lines, split_species_coeff, wrap_format_text,
-        is_formula_label, heavy_atom_count,
+        is_formula_label, heavy_atom_count, label_wrapped_size,
     )
     from .layout import (
         energy_annotation_placement, energy_point_coords, energy_point_roles,
@@ -285,6 +285,66 @@ def _pick_bend_side(p0, p1, from_bond, aim_end, sm, dm):
     return side
 
 
+def _explicit_h_neighbor(mol, pt: str):
+    """pt 为显式 H 原子序号时返回 (H序号, 重原子邻居序号)；否则 None。"""
+    if not pt.isdigit():
+        return None
+    a = int(pt)
+    if a >= mol.GetNumAtoms():
+        return None
+    if mol.GetAtomWithIdx(a).GetAtomicNum() != 1:
+        return None
+    heavy = [n.GetIdx() for n in mol.GetAtomWithIdx(a).GetNeighbors()
+             if n.GetAtomicNum() != 1]
+    return (a, heavy[0]) if heavy else None
+
+
+def _align_h_transfer(mols: dict, mech_arrows: list, order: list) -> list:
+    """夺氢/氢转移朝向对齐（布局前调用，影响 bbox）。
+
+    MECHARROW 端点为组件 X 的显式 H、且另一端点属于组件 Y 时，旋转 X 使
+    重原子→H 键水平朝向 Y（Y 在序列左侧则 H 朝左）——呈现 X· + H—CH3
+    的教科书排布：成键空白落在 X 与 H 之间而非重原子上，鱼钩不再跨过
+    分子交叉。RDKit 2D 坐标与 SMILES 书写顺序无关（[H]C 依然 H 在右），
+    只能靠渲染端旋转。返回旋转过的组件 id 列表（便于测试）。
+    """
+    rotated = set()
+    for src_id, src_pt, dst_id, dst_pt, _kind, dst2_id, dst2_pt in mech_arrows:
+        cands = []
+        if dst2_id is not None:
+            # 成键空白 id:a+id:b：任一端为显式 H 且属不同组件
+            cands.append((dst_id, dst_pt, dst2_id))
+            cands.append((dst2_id, dst2_pt, dst_id))
+        else:
+            cands.append((src_id, src_pt, dst_id))
+            cands.append((dst_id, dst_pt, src_id))
+        for cid, pt, other_cid in cands:
+            if cid == other_cid or cid in rotated:
+                continue
+            info, other = mols.get(cid), mols.get(other_cid)
+            if info is None or other is None:
+                continue
+            res = _explicit_h_neighbor(info["mol"], pt)
+            if res is None:
+                continue
+            if cid not in order or other_cid not in order:
+                continue
+            a, heavy = res
+            mol = info["mol"]
+            hx, hy = atom_pos(mol, a)
+            cx, cy = atom_pos(mol, heavy)
+            cur = math.degrees(math.atan2(hy - cy, hx - cx))
+            target = 180.0 if order.index(cid) > order.index(other_cid) else 0.0
+            rotate = (target - cur) % 360.0
+            if rotate > 180.0:
+                rotate -= 360.0
+            if abs(rotate) < 1e-6:
+                continue
+            rotate_mol_coords(mol, rotate, center=(cx, cy))
+            rotated.add(cid)
+    return sorted(rotated)
+
+
 def draw_mech_arrows(mols: dict, arrows: list,
                      plus_positions: list | None = None) -> list:
     """绘制机理弯箭头（p0/p1 定位、端点吸附避让），返回 TikZ 行列表。
@@ -385,6 +445,7 @@ def _collect_components(children):
             label = child.args[1] if len(child.args) > 1 else None
             parsed = split_species_coeff(child.args[0])
             smi = parsed[0][1] if parsed else child.args[0].strip()
+            mode = child.attrs.get("mode", "skeleton")
             structs.append({
                 "id": cid,
                 "smiles": smi,
@@ -392,16 +453,24 @@ def _collect_components(children):
                 "label": label,
                 "at": child.attrs.get("at"),
                 "pos": child.attrs.get("pos", "above"),
-                # 分子家族重构（20260818）：容器内 mode ∈ {skeleton, lewis}
-                # （校验层限制）；mode=lewis 时该组件显示孤对电子点
-                "mode": child.attrs.get("mode", "skeleton"),
+                # 分子家族重构（20260818）：容器内 mode 按布局放开——
+                # reaction 禁 newman，row/energy 不限（20260821 扩充）；
+                # mode=lewis 时该组件显示孤对电子点；stereo/chair/newman
+                # 预渲染为不透明组件（见 modecomps）
+                "mode": mode,
+                # 立体画法参数：chair 取代基规格 / newman 投影键与二面角
+                "subs": child.attrs.get("subs", ""),
+                "bond_spec": child.attrs.get("bond", "")
+                if mode == "newman" else "",
+                "angle": child.attrs.get("angle", ""),
                 # 大一统架构（20260819）：arrow 令牌 = 箭头上附件（副反应物/
                 # 副产物），不参与主序列，由 ARROW 的 sup= 参数引用
                 "arrow": bool(child.attrs.get("arrow")),
             })
             # 20260821：STRUCT 参数化标注（bond=/charge=）并入组件注解，
             # 与容器内 [BOND:id|a-b] / [CHARGE:id|idx:+/-] 子标记等效
-            if child.attrs.get("bond"):
+            # （newman 的 bond= 是投影观察键，不属于键突出标注）
+            if child.attrs.get("bond") and mode != "newman":
                 annotations.setdefault(cid, {}).setdefault("bonds", []).append(
                     child.attrs["bond"])
             if child.attrs.get("charge"):
@@ -567,12 +636,17 @@ def _molecule_with_annotations_lines(info: dict, *, show_numbers: bool,
 
 
 def _render_energy_layout(points_str: str, structs: list, mols: dict,
-                          show_numbers: bool) -> str:
+                          show_numbers: bool, modecomps: dict = None,
+                          textcomps: dict = None) -> str:
     """energy 布局：势能面曲线 + 驻点结构组件（R-3）。
 
     每个 STRUCT 通过 at= 挂到能量点上（pos=above/below，默认 above），
     分子按视觉包围盒置于驻点正上方/下方；驻点标签优先用 STRUCT 的 label。
+    modecomps：立体画法组件（stereo/chair/newman）的预渲染 lines+bbox；
+    textcomps：化学式文本组件（双轨制）——均按 scope/节点平移绘制。
     """
+    modecomps = modecomps or {}
+    textcomps = textcomps or {}
     try:
         values = [float(v.strip()) for v in points_str.split(",") if v.strip()]
     except ValueError:
@@ -610,9 +684,16 @@ def _render_energy_layout(points_str: str, structs: list, mols: dict,
     mol_placements = []
     for comp in sorted(structs, key=lambda c: c["at"]):
         _, _, x, y = info["points"][comp["at"]]
-        cinfo = mols[comp["id"]]
-        mol = cinfo["mol"]
-        bbox = mol_visual_bbox(mol, include_lone_pairs=False)
+        mc = modecomps.get(comp["id"])
+        tc = textcomps.get(comp["id"])
+        if mc is not None:
+            bbox = mc["bbox"]
+        elif tc is not None:
+            w_t, h_t = label_wrapped_size(tc["text"])
+            bbox = (-w_t / 2.0, -h_t / 2.0, w_t / 2.0, h_t / 2.0)
+        else:
+            cinfo = mols[comp["id"]]
+            bbox = mol_visual_bbox(cinfo["mol"], include_lone_pairs=False)
         shift = place_bbox(bbox, x, y, comp["pos"], margin=0.6)
         for _ in range(20):  # 最多右移 20×0.4 = 8.0
             rect = (bbox[0] + shift[0], bbox[1] + shift[1],
@@ -620,8 +701,16 @@ def _render_energy_layout(points_str: str, structs: list, mols: dict,
             if not any(_rects_intersect(rect, o) for o in occupied):
                 break
             shift = (shift[0] + 0.4, shift[1])
-        cinfo["shift"] = shift
-        mol_placements.append(cinfo)
+        if mc is not None:
+            mc["shift"] = shift
+            mol_placements.append(mc)
+        elif tc is not None:
+            tc["shift"] = shift
+            tc["bbox"] = bbox
+            mol_placements.append(tc)
+        else:
+            cinfo["shift"] = shift
+            mol_placements.append(cinfo)
         occupied.append(rect)
 
     box_x, box_y, box_anchor, axis_top = energy_annotation_placement(
@@ -652,8 +741,23 @@ def _render_energy_layout(points_str: str, structs: list, mols: dict,
         lines.append("  \\end{scope}")
 
     for cinfo in mol_placements:
-        lines.extend(_molecule_with_annotations_lines(
-            cinfo, show_numbers=show_numbers, show_lone_pairs=False))
+        if "lines" in cinfo:
+            # 立体画法组件：预渲染 lines 按驻点 shift 平移绘制
+            lines.append(
+                f"  \\begin{{scope}}[shift={{"
+                f"({cinfo['shift'][0]:.2f},{cinfo['shift'][1]:.2f})}}]")
+            lines.extend(cinfo["lines"])
+            lines.append("  \\end{scope}")
+        elif "text" in cinfo:
+            # 化学式文本组件（双轨制）：文本节点按驻点 shift 平移
+            sx, sy = cinfo["shift"]
+            cy = sy + (cinfo["bbox"][1] + cinfo["bbox"][3]) / 2.0
+            lines.append(
+                f"  \\node[fill=white, inner sep=1pt] at ({sx:.2f},{cy:.2f}) "
+                f"{{{wrap_format_text(cinfo['text'])}}};")
+        else:
+            lines.extend(_molecule_with_annotations_lines(
+                cinfo, show_numbers=show_numbers, show_lone_pairs=False))
 
     ea = max(values) - values[0]
     dh = values[-1] - values[0]
@@ -664,6 +768,33 @@ def _render_energy_layout(points_str: str, structs: list, mols: dict,
     )
     lines.append(r"\end{tikzpicture}")
     return "\n".join(lines)
+
+
+def _mode_scope_lines(comp: dict, allow_aromatic):
+    """立体画法组件（stereo/chair/newman）→ (scope_lines, bbox)。
+
+    预渲染为不透明组件（复用 BLOCK 的"lines+bbox 布局定位"机制）；
+    失败返回 (None, 错误提示串)。stereo 复用分子坐标（按 _MOL_SCALE
+    缩放，与其他组件同尺度）；chair/newman 自带几何与包围盒。
+    """
+    from .stereo import stereo_scope_lines
+    from .chair import chair_scope_lines
+    from .newman import newman_scope_lines
+
+    mode = comp["mode"]
+    if mode == "stereo":
+        mol = prepare_mol(comp["smiles"], allow_aromatic=allow_aromatic)
+        if mol is None:
+            return None, f"无效 SMILES「{comp['smiles']}」"
+        scale_mol_coords(mol, _MOL_SCALE)
+        return stereo_scope_lines(mol), \
+            mol_visual_bbox(mol, include_lone_pairs=False)
+    if mode == "chair":
+        return chair_scope_lines(comp["smiles"], comp["subs"])
+    if mode == "newman":
+        return newman_scope_lines(comp["smiles"], comp["bond_spec"],
+                                  comp["angle"])
+    return None, f"未知画法模式「{mode}」"
 
 
 def render_composite(layout: str, children: list) -> str:
@@ -714,9 +845,27 @@ def render_composite(layout: str, children: list) -> str:
     )
 
     mols = {}
+    modecomps = {}   # 立体画法组件（stereo/chair/newman）：id → {lines, bbox}
+    textcomps = {}   # 化学式文本组件（双轨制）：id → {text, label, coeff}
     for comp in structs:
+        if comp["mode"] in ("stereo", "chair", "newman"):
+            scope, bbox_or_err = _mode_scope_lines(comp, allow_aromatic)
+            if scope is None:
+                return (f"（COMPOSITE 渲染失败：{bbox_or_err}"
+                        f"（组件 {comp['id']}）")
+            modecomps[comp["id"]] = {"lines": scope, "bbox": bbox_or_err}
+            continue
         mol = prepare_mol(comp["smiles"], allow_aromatic=allow_aromatic)
         if mol is None:
+            # 双轨制：非 SMILES 但为纯化学式（KMnO4、H2SO4、CaCO3 等）
+            # 走文本节点轨道（与旧 REACTION 一致）；其余无效 SMILES 报错
+            if is_formula_label(comp["smiles"]):
+                textcomps[comp["id"]] = {
+                    "text": comp["smiles"],
+                    "label": comp["label"],
+                    "coeff": comp.get("coeff", 1.0),
+                }
+                continue
             return f"（COMPOSITE 渲染失败：无效 SMILES「{comp['smiles']}」（组件 {comp['id']}）"
         scale_mol_coords(mol, _MOL_SCALE)
         anno = annotations.get(comp["id"], {})
@@ -750,6 +899,14 @@ def render_composite(layout: str, children: list) -> str:
                  if n.GetAtomicNum() != 1]
         if heavy:
             adjust_hbond_conformation(mol, heavy[0], b)
+
+    # 夺氢/氢转移朝向对齐（布局前）：MECHARROW 引用的显式 H 旋转朝向
+    # 另一组件（Cl· + H—CH3 的 H 朝左对准 Cl·）。energy 布局组件各自
+    # 挂在驻点上，不做此旋转；立体画法组件（modecomps）不在 mols 中，
+    # 天然跳过。
+    if mech_specs and layout_name != "energy":
+        order = [structs[el[1]]["id"] for el in sequence if el[0] == "mol"]
+        _align_h_transfer(mols, _parse_mech_arrows(mech_specs), order)
 
     # HBOND 给体/受体引用（20260821：显式 H 参与编号，a#k 废弃；给体 H 为
     # SMILES 显式 H 原子，如 [H]OCCO[H] 的 0 号。水/氨等小分子直接用
@@ -787,7 +944,7 @@ def render_composite(layout: str, children: list) -> str:
         if energy_child is None or not energy_child.args:
             return "（COMPOSITE 渲染失败：energy 布局需要 [ENERGY:点序列] 组件）"
         return _render_energy_layout(energy_child.args[0], structs, mols,
-                                     show_numbers)
+                                     show_numbers, modecomps, textcomps)
 
     # 统一布局引擎：组件序列 → 位置/加号/共振箭头/反应箭头（视觉包围盒防重叠）
     # [BLOCK] 共振块预渲染：块内 STRUCT + 共振箭头 → 内部布局 → lines + bbox
@@ -867,8 +1024,28 @@ def render_composite(layout: str, children: list) -> str:
     for el in sequence:
         if el[0] == "mol":
             cid = structs[el[1]]["id"]
-            items.append(("mol", cid, mols[cid]["mol"],
-                          mols[cid]["coeff"]))
+            mc = modecomps.get(cid)
+            tc = textcomps.get(cid)
+            if mc is not None:
+                # 立体画法组件：预渲染 lines+bbox 走 BLOCK 同款不透明组件
+                # 通道（布局定位 + scope shift 绘制）；label 烘进行内
+                mc_lines = list(mc["lines"])
+                label = structs[el[1]]["label"]
+                if label and not is_formula_label(label):
+                    bb = mc["bbox"]
+                    text = wrap_format_text(label)
+                    align = "align=center, " if "\\\\" in text else ""
+                    mc_lines.append(
+                        f"  \\node[{align}below] at "
+                        f"({(bb[0] + bb[2]) / 2.0:.2f},{bb[1] - 0.20:.2f}) "
+                        f"{{{text}}};")
+                items.append(("block", cid, mc_lines, mc["bbox"]))
+            elif tc is not None:
+                # 化学式文本组件（双轨制）：布局引擎 text 组件通道
+                items.append(("text", cid, tc["text"], tc["coeff"]))
+            else:
+                items.append(("mol", cid, mols[cid]["mol"],
+                              mols[cid]["coeff"]))
         elif el[0] == "block":
             lines, bbox, _ = block_data[el[1]]
             items.append(("block", f"block{el[1]}", lines, bbox))
@@ -904,6 +1081,10 @@ def render_composite(layout: str, children: list) -> str:
         for placed in row_layout.mols:
             mols[placed.key]["shift"] = (placed.shift[0], placed.shift[1] - yoff)
             mols[placed.key]["bbox"] = placed.bbox
+        for placed in row_layout.texts:
+            textcomps[placed.key]["shift"] = \
+                (placed.shift[0], placed.shift[1] - yoff)
+            textcomps[placed.key]["bbox"] = placed.bbox
         plus_positions.extend((px, yoff) for px in row_layout.pluses)
         res_positions.extend((rx, yoff) for rx in row_layout.resarrows)
         main_arrows.extend([a.x1, a.x2, a.condition, yoff, a.kind, a.sup]
@@ -955,9 +1136,11 @@ def render_composite(layout: str, children: list) -> str:
 
     # 每个分子一个 scope（布局引擎积木），组件级标注（电荷/氢键）随分子移动。
     # 附件（arrow 令牌：副反应物/副产物）不在此渲染——由各 ARROW 的 sup
-    # 渲染在箭头上下（避免箭头两侧重复出现）。
+    # 渲染在箭头上下（避免箭头两侧重复出现）；立体画法组件（modecomps）
+    # 不在此渲染——走 BLOCK 同款不透明组件通道（见下方 blocks 循环）。
     for comp in structs:
-        if comp.get("arrow"):
+        if comp.get("arrow") or comp["id"] in modecomps \
+                or comp["id"] in textcomps:
             continue
         comp_lone_pairs = global_lone_pairs or \
             mols[comp["id"]].get("mode") == "lewis"
@@ -966,6 +1149,20 @@ def render_composite(layout: str, children: list) -> str:
             show_lone_pairs=comp_lone_pairs,
             hbond_toward=hbond_toward.get(comp["id"], {}),
             hbond_away=hbond_away.get(comp["id"], {})))
+
+    # 化学式文本组件（双轨制）：布局定位后的文本节点 + 系数
+    for cid, tc in textcomps.items():
+        if cid not in [structs[el[1]]["id"] for el in sequence
+                       if el[0] == "mol"]:
+            continue   # 附件（arrow 令牌）由 sup 通道绘制
+        sx, sy = tc["shift"]
+        if tc["coeff"] != 1.0:
+            bx = tc["bbox"][0] + sx - 0.15
+            lines.append(
+                f"  \\node at ({bx:.2f},{sy:.2f}) {{{_fmt_coeff(tc['coeff'])}}};")
+        lines.append(
+            f"  \\node[fill=white, inner sep=1pt] at ({sx:.2f},{sy:.2f}) "
+            f"{{{wrap_format_text(tc['text'])}}};")
 
     # [BLOCK] 共振块：内部行（含分子 scope）整体平移（布局引擎定位）
     for row_layout, yoff in zip(rows, y_offsets):
@@ -1002,6 +1199,23 @@ def render_composite(layout: str, children: list) -> str:
     for comp in structs:
         if comp.get("arrow"):
             continue   # 附件 label 不显示（其结构式在箭头上下）
+        if comp["id"] in modecomps:
+            continue   # 立体画法组件 label 已烘进预渲染 lines
+        if comp["id"] in textcomps:
+            tc = textcomps[comp["id"]]
+            label = tc["label"]
+            if label and not is_formula_label(label) and "bbox" in tc:
+                min_x, min_y, max_x, _ = tc["bbox"]
+                shift = tc["shift"]
+                cx = (min_x + max_x) / 2.0 + shift[0]
+                ly = min_y + shift[1] - 0.35
+                text = wrap_format_text(label)
+                align = "align=center, " if "\\\\" in text else ""
+                lines.append(
+                    f"  \\node[{align}below] at ({cx:.2f},{ly:.2f}) "
+                    f"{{{text}}};"
+                )
+            continue
         info = mols[comp["id"]]
         label = info["label"]
         # 纯化学式 label（CH3Cl、Cl·、·CH3、OH-）分子本身已展示，不重复；
@@ -1035,24 +1249,44 @@ def render_composite(layout: str, children: list) -> str:
     _SUP_GAP_X = 0.2
 
     def _sup_group(ids):
-        """同侧附件按 bbox 宽从中心向两侧排布，返回 [(中心偏移x, mol, bbox)]。"""
+        """同侧附件按 bbox 宽从中心向两侧排布，
+        返回 [(中心偏移x, mol, 化学式文本或None, bbox)]。"""
         placed = []
         for sid in ids:
             info = mols.get(sid)
-            if info is None:
+            if info is not None:
+                bb = mol_visual_bbox(info["mol"], include_lone_pairs=False,
+                                     charge_mirror=False)
+                placed.append((bb[2] - bb[0], info["mol"], None, bb))
                 continue
-            bb = mol_visual_bbox(info["mol"], include_lone_pairs=False,
-                                 charge_mirror=False)
-            placed.append((bb[2] - bb[0], info["mol"], bb))
+            tc = textcomps.get(sid)
+            if tc is not None:
+                # 化学式文本附件（双轨制）：按文本尺寸参与排布
+                w_t, h_t = label_wrapped_size(tc["text"])
+                bb = (-w_t / 2.0, -h_t / 2.0, w_t / 2.0, h_t / 2.0)
+                placed.append((w_t, None, tc["text"], bb))
         if not placed:
             return []
-        total_w = sum(w for w, _, _ in placed) + _SUP_GAP_X * (len(placed) - 1)
+        total_w = sum(w for w, *_ in placed) + _SUP_GAP_X * (len(placed) - 1)
         x = -total_w / 2.0
         out = []
-        for w, amol, bb in placed:
-            out.append((x + w / 2.0, amol, bb))   # 中心偏移（相对箭头中点）
+        for w, amol, atext, bb in placed:
+            out.append((x + w / 2.0, amol, atext, bb))
             x += w + _SUP_GAP_X
         return out
+
+    def _draw_sup(amx, amol, atext, bb, sy, mx):
+        """画一个附件：分子走 scope 管线，化学式文本画节点（双轨制）。"""
+        cx = bb[0] + (bb[2] - bb[0]) / 2.0
+        if amol is not None:
+            lines.extend(molecule_scope_lines(
+                amol, (mx + amx - cx, sy), show_lone_pairs=False))
+        else:
+            cy = sy + (bb[1] + bb[3]) / 2.0
+            lines.append(
+                f"  \\node[fill=white, inner sep=1pt] at "
+                f"({mx + amx - cx:.2f},{cy:.2f}) "
+                f"{{{wrap_format_text(atext)}}};")
 
     for x1, x2, cond, yoff, a_kind, sup in main_arrows:
         # 主反应箭头（→/⇌/↔/⇒ 统一）：共享函数与 reaction/arrow 共用；
@@ -1066,16 +1300,12 @@ def render_composite(layout: str, children: list) -> str:
                         if s.strip() and not s.strip().startswith("-")]
             dn_items = [s.strip()[1:] for s in sup
                         if s.strip() and s.strip().startswith("-")]
-            for amx, amol, bb in _sup_group(up_items):
-                cx = bb[0] + (bb[2] - bb[0]) / 2.0
+            for amx, amol, atext, bb in _sup_group(up_items):
                 sy = -yoff + _SUP_GAP - bb[1]      # 真实底边距箭头 0.15
-                lines.extend(molecule_scope_lines(
-                    amol, (mx + amx - cx, sy), show_lone_pairs=False))
-            for amx, amol, bb in _sup_group(dn_items):
-                cx = bb[0] + (bb[2] - bb[0]) / 2.0
+                _draw_sup(amx, amol, atext, bb, sy, mx)
+            for amx, amol, atext, bb in _sup_group(dn_items):
                 sy = -yoff - _SUP_GAP - bb[3]      # 真实顶边距箭头 0.15
-                lines.extend(molecule_scope_lines(
-                    amol, (mx + amx - cx, sy), show_lone_pairs=False))
+                _draw_sup(amx, amol, atext, bb, sy, mx)
 
     # 加号实际坐标（y 取负：布局 yoff 向下为正，渲染取反）——供成键空位避让
     plus_xy = [(px, -yoff) for px, yoff in plus_positions]

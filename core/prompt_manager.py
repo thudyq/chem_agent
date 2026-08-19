@@ -4,12 +4,6 @@
 from pathlib import Path
 
 _PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "system_prompt.txt"
-_ARROW_INSTRUCTION_PATH = (
-    Path(__file__).resolve().parent.parent / "prompts" / "Instruction-for-Arrows.md"
-)
-_STRUCTURE_INSTRUCTION_PATH = (
-    Path(__file__).resolve().parent.parent / "prompts" / "Instruction-for-Structure.md"
-)
 _SMILES_INSTRUCTION_PATH = (
     Path(__file__).resolve().parent.parent / "prompts" / "Instruction-for-SMILES.md"
 )
@@ -23,13 +17,19 @@ def _load_instruction(path: Path) -> str:
 
 
 def load_arrow_instructions() -> str:
-    """加载箭头使用规范。"""
-    return _load_instruction(_ARROW_INSTRUCTION_PATH)
+    """箭头规范已并入主提示（20260821 重构：Instruction-for-Arrows.md 删除）。
+
+    保留函数签名供外部兼容；返回空串。
+    """
+    return ""
 
 
 def load_structure_instructions() -> str:
-    """加载结构式使用规范。"""
-    return _load_instruction(_STRUCTURE_INSTRUCTION_PATH)
+    """结构式规范已并入主提示（20260821 重构：Instruction-for-Structure.md 删除）。
+
+    保留函数签名供外部兼容；返回空串。
+    """
+    return ""
 
 
 def load_smiles_instructions() -> str:
@@ -46,36 +46,14 @@ def load_hbond_instructions() -> str:
 
 
 def load_system_prompt() -> str:
-    """从 prompts/system_prompt.txt 加载系统提示，并追加箭头与结构式规范。
+    """从 prompts/system_prompt.txt 加载系统提示，并追加 SMILES 书写规范。
 
-    文件不存在时返回空串，调用方可据此降级。箭头与结构式规范作为独立文件
-    维护，避免系统提示过长且便于后续更新。
+    文件不存在时返回空串，调用方可据此降级。箭头/结构式/氢键规范已并入
+    主提示（20260821 重构），SMILES 规范作为唯一独立文件维护。
     """
     if not _PROMPT_PATH.exists():
         return ""
     system_prompt = _PROMPT_PATH.read_text(encoding="utf-8")
-
-    arrow_instructions = load_arrow_instructions()
-    if arrow_instructions:
-        system_prompt = (
-            system_prompt
-            + "\n\n"
-            + "============================================================\n"
-            + "箭头使用规范（来自 prompts/Instruction-for-Arrows.md）\n"
-            + "============================================================\n\n"
-            + arrow_instructions
-        )
-
-    structure_instructions = load_structure_instructions()
-    if structure_instructions:
-        system_prompt = (
-            system_prompt
-            + "\n\n"
-            + "============================================================\n"
-            + "结构式使用规范（来自 prompts/Instruction-for-Structure.md）\n"
-            + "============================================================\n\n"
-            + structure_instructions
-        )
 
     smiles_instructions = load_smiles_instructions()
     if smiles_instructions:

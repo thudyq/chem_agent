@@ -12,23 +12,15 @@ from .mol_primitives import atom_label, atom_pos, charge_tikz, \
     label_bond_margin, mol_visual_bbox, prepare_mol, wrap_format_text
 
 
-def render_stereo(smiles: str, label: str = None) -> str:
-    """[STEREO] 渲染：含立体信息的 SMILES → 楔形式 TikZ。失败返回错误提示。
+def stereo_scope_lines(mol) -> list:
+    """楔形式 scope 绘制行（不含 tikzpicture 包装与 label）。
 
-    label 可选：置于结构下方（如 (R)-乳酸）。
+    供顶层 render_stereo 与 COMPOSITE 容器内 mode=stereo 组件复用——
+    容器负责布局平移（scope shift），此处按 mol 当前坐标原样输出。
     """
-    try:
-        from rdkit import Chem
-        from rdkit.Chem import BondDir
-    except ImportError:
-        return "（立体结构渲染失败：rdkit 未安装）"
+    from rdkit.Chem import BondDir
 
-    mol = prepare_mol(smiles)
-    if mol is None:
-        return f"（立体结构渲染失败：无效 SMILES「{smiles}」）"
-
-    lines = ["\\begin{tikzpicture}"]
-
+    lines = []
     for b in mol.GetBonds():
         i, j = b.GetBeginAtomIdx(), b.GetEndAtomIdx()
         xi, yi = atom_pos(mol, i)
@@ -88,7 +80,25 @@ def render_stereo(smiles: str, label: str = None) -> str:
         charge = charge_tikz(mol, idx)
         if charge:
             lines.append(f"  {charge}")
+    return lines
 
+
+def render_stereo(smiles: str, label: str = None) -> str:
+    """[STEREO] 渲染：含立体信息的 SMILES → 楔形式 TikZ。失败返回错误提示。
+
+    label 可选：置于结构下方（如 (R)-乳酸）。
+    """
+    try:
+        from rdkit import Chem  # noqa: F401
+    except ImportError:
+        return "（立体结构渲染失败：rdkit 未安装）"
+
+    mol = prepare_mol(smiles)
+    if mol is None:
+        return f"（立体结构渲染失败：无效 SMILES「{smiles}」）"
+
+    lines = ["\\begin{tikzpicture}"]
+    lines.extend(stereo_scope_lines(mol))
     if label:
         min_x, min_y, max_x, _ = mol_visual_bbox(mol, include_lone_pairs=False)
         text = wrap_format_text(label)

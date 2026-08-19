@@ -1189,3 +1189,185 @@ def test_hbond_pseudo_requires_xh_for_bonded_donor():
     _, invalid = validate_tags(tags)
     assert len(invalid) == 1
     assert "不是 H 原子" in invalid[0].reason
+
+
+# ---------- 容器内立体画法组件（stereo/chair/newman，20260821 扩充） ----------
+
+
+def test_mode_comp_stereo_in_reaction():
+    """reaction 布局 stereo 组件：楔形式（虚楔短横线）随 scope 平移绘制。"""
+    text = ("[COMPOSITE:reaction]"
+            "[STRUCT:C[C@H](O)C(=O)O,mode=stereo,id=a,label=(R)-乳酸]"
+            "[ARROW:type=single]"
+            "[STRUCT:C[C@H](O)C(=O)O,mode=stereo,id=b]"
+            "[/COMPOSITE]")
+    tags = parse_tags(text)
+    out = render_composite(*tags[0].args)
+    assert "渲染失败" not in out
+    assert out.count("\\begin{scope}[shift=") >= 2   # 两个不透明组件 scope
+    assert out.count("\\draw[thick]") >= 5            # 虚楔形渐宽短横
+    assert "(R)-乳酸" in out                          # label 烘进 lines
+
+
+def test_mode_comp_chair_pair_in_row():
+    """row 布局椅式翻转对比：正常 + flip 两张椅式 + 可逆箭头。"""
+    text = ("[COMPOSITE:row]"
+            "[STRUCT:BrC1CCCCC1,mode=chair,subs=1:ax,id=c1,label=直立键]"
+            "[ARROW:type=reversible]"
+            "[STRUCT:BrC1CCCCC1,mode=chair,subs=flip,1:eq,id=c2,label=平伏键]"
+            "[/COMPOSITE]")
+    tags = parse_tags(text)
+    out = render_composite(*tags[0].args)
+    assert "渲染失败" not in out
+    assert out.count("\\begin{scope}[shift=") >= 2
+    assert "直立键" in out and "平伏键" in out
+    assert "Br" in out
+
+
+def test_mode_comp_newman_in_row_and_energy():
+    """newman 组件：row 布局与 energy 驻点均可放置（圆 + 前后键）。"""
+    text = ("[COMPOSITE:row]"
+            "[STRUCT:CC,mode=newman,bond=0-1,angle=60,id=n1,label=交叉式]"
+            "[ARROW:type=single,hν]"
+            "[STRUCT:CC,mode=newman,bond=0-1,angle=0,id=n2,label=重叠式]"
+            "[/COMPOSITE]")
+    out = render_composite(*parse_tags(text)[0].args)
+    assert "渲染失败" not in out
+    assert out.count("circle (0.50)") == 2           # 两个纽曼投影前碳圆
+    assert "交叉式" in out and "重叠式" in out
+
+    text_e = ("[COMPOSITE:energy][ENERGY:0,12]"
+              "[STRUCT:CC,mode=newman,bond=0-1,angle=0,id=e1,at=0,pos=below]"
+              "[STRUCT:CC,mode=newman,bond=0-1,angle=60,id=e2,at=1,pos=above]"
+              "[/COMPOSITE]")
+    out_e = render_composite(*parse_tags(text_e)[0].args)
+    assert "渲染失败" not in out_e
+    assert out_e.count("circle (0.50)") == 2
+    assert "scope" in out_e                          # 驻点 scope 平移绘制
+
+
+def test_mode_comp_mixed_with_skeleton():
+    """立体画法组件与普通组件混排（row）：布局互不干扰。"""
+    text = ("[COMPOSITE:row]"
+            "[STRUCT:c1ccccc1,id=ar,label=苯]"
+            "[ARROW:type=single,Br2 / FeBr3]"
+            "[STRUCT:BrC1CCCCC1,mode=chair,subs=1:ax,id=c,label=椅式]"
+            "[/COMPOSITE]")
+    out = render_composite(*parse_tags(text)[0].args)
+    assert "渲染失败" not in out
+    assert "\\begin{scope}[shift=" in out            # 椅式不透明组件
+    assert "苯" in out and "椅式" in out
+
+
+def test_h_transfer_orientation():
+    """夺氢朝向对齐（20260821）：H—CH3 的 H 朝左对准 Cl·（RDKit 坐标与
+    SMILES 书写顺序无关，[H]C 依然 H 在右，只能渲染端旋转）。"""
+    from core.tag_validator import validate_tags
+    text = ("[COMPOSITE:reaction]"
+            "[STRUCT:[Cl],id=cl,label=Cl·][PLUS][STRUCT:C([H]),id=ch4,label=CH4]"
+            "[ARROW:type=single]"
+            "[STRUCT:Cl,id=hcl,label=HCl][PLUS][STRUCT:[CH3],id=me,label=·CH3]"
+            "[MECHARROW:cl:0>>cl:0+ch4:1]"
+            "[MECHARROW:ch4:0-1>>cl:0+ch4:1][MECHARROW:ch4:0-1>>ch4:0]"
+            "[/COMPOSITE]")
+    tags = parse_tags(text)
+    _, invalid = validate_tags(tags)
+    assert not invalid
+    out = render_composite(*tags[0].args)
+    assert "渲染失败" not in out
+    # 朝向对齐：ch4 显式 H 节点在 CH3 标签左侧（H 朝左对准 Cl·）
+    h_m = re.search(r"at \((-?[\d.]+),-?[\d.]+\) \{H\}", out)
+    c_m = re.search(r"at \((-?[\d.]+),-?[\d.]+\) \{CH\$_\{3\}\$\}", out)
+    assert h_m and c_m
+    assert float(h_m.group(1)) < float(c_m.group(1))
+
+
+def test_h_transfer_orientation_reverse_order():
+    """朝向对齐随组件顺序翻转：Cl· 在右时 H 朝右。"""
+    from core.tag_validator import validate_tags
+    text = ("[COMPOSITE:reaction]"
+            "[STRUCT:C([H]),id=ch4,label=CH4][PLUS][STRUCT:[Cl],id=cl,label=Cl·]"
+            "[ARROW:type=single]"
+            "[STRUCT:[CH3],id=me,label=·CH3][PLUS][STRUCT:Cl,id=hcl,label=HCl]"
+            "[MECHARROW:cl:0>>cl:0+ch4:1]"
+            "[MECHARROW:ch4:0-1>>cl:0+ch4:1][MECHARROW:ch4:0-1>>ch4:0]"
+            "[/COMPOSITE]")
+    tags = parse_tags(text)
+    _, invalid = validate_tags(tags)
+    assert not invalid
+    out = render_composite(*tags[0].args)
+    assert "渲染失败" not in out
+    h_m = re.search(r"at \((-?[\d.]+),-?[\d.]+\) \{H\}", out)
+    c_m = re.search(r"at \((-?[\d.]+),-?[\d.]+\) \{CH\$_\{3\}\$\}", out)
+    assert h_m and c_m
+    assert float(h_m.group(1)) > float(c_m.group(1))
+
+
+# ---------- COMPOSITE 双轨制（化学式文本组件，20260821） ----------
+
+
+def test_formula_comp_full_formula_reaction():
+    """全化学式反应式：CaO + CO2 → CaCO3（文本节点 + 原子守恒通过）。"""
+    from core.tag_validator import validate_tags
+    text = ("[COMPOSITE:reaction]"
+            "[STRUCT:CaO,id=a,label=氧化钙][PLUS]"
+            "[STRUCT:CO2,id=b,label=二氧化碳]"
+            "[ARROW:type=single]"
+            "[STRUCT:CaCO3,id=c,label=碳酸钙]"
+            "[/COMPOSITE]")
+    tags = parse_tags(text)
+    _, invalid = validate_tags(tags)
+    assert not invalid
+    out = render_composite(*tags[0].args)
+    assert "渲染失败" not in out
+    for formula in ("CaO", "CO", "CaCO"):
+        assert formula in out
+    assert "氧化钙" in out and "碳酸钙" in out     # 中文 label 显示
+
+
+def test_formula_comp_mixed_with_smiles():
+    """化学式与 SMILES 混排：H2O 文本组件参与反应与守恒。"""
+    from core.tag_validator import validate_tags
+    text = ("[COMPOSITE:reaction]"
+            "[STRUCT:C=C,label=乙烯][PLUS][STRUCT:H2O,id=w,label=水]"
+            "[ARROW:type=single,催化剂]"
+            "[STRUCT:CCO,label=乙醇]"
+            "[/COMPOSITE]")
+    tags = parse_tags(text)
+    _, invalid = validate_tags(tags)
+    assert not invalid
+    out = render_composite(*tags[0].args)
+    assert "渲染失败" not in out
+    assert "H$_2$O" in out                          # 化学式自动下标
+    assert "水" in out
+
+
+def test_formula_comp_coeff_and_sup():
+    """化学式组件带系数（2H2）+ 化学式 sup 附件（KMnO4 挂箭头上）。"""
+    from core.tag_validator import validate_tags
+    # 2H2 + O2 → 2H2O（全化学式 + 系数守恒）
+    text = ("[COMPOSITE:reaction]"
+            "[STRUCT:2H2,id=h2,label=氢气][PLUS][STRUCT:O2,id=o2,label=氧气]"
+            "[ARROW:type=single,点燃]"
+            "[STRUCT:2H2O,id=w,label=水]"
+            "[/COMPOSITE]")
+    tags = parse_tags(text)
+    _, invalid = validate_tags(tags)
+    assert not invalid
+    out = render_composite(*tags[0].args)
+    assert "渲染失败" not in out
+    assert out.count("{2}") >= 2                    # 两个系数节点
+
+    # 化学式 sup 附件：H2 画在箭头上方（乙炔加氢，守恒含附件）
+    text2 = ("[COMPOSITE:reaction]"
+             "[STRUCT:C2H2,id=a,label=乙炔]"
+             "[STRUCT:H2,id=h,arrow,label=氢气]"
+             "[ARROW:type=single,sup=+h,Ni]"
+             "[STRUCT:C2H4,id=b,label=乙烯]"
+             "[/COMPOSITE]")
+    tags2 = parse_tags(text2)
+    _, invalid2 = validate_tags(tags2)
+    assert not invalid2
+    out2 = render_composite(*tags2[0].args)
+    assert "渲染失败" not in out2
+    assert "H$_2$" in out2                           # 附件文本节点

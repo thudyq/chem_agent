@@ -237,17 +237,71 @@ def test_struct_bond_charge_params():
 
 
 def test_composite_mode_restriction():
-    """容器内 STRUCT 仅支持 skeleton/lewis；stereo/chair/newman 拦截（顶层使用）。"""
+    """容器内 mode 按布局放开（20260821）：reaction 禁 newman，row/energy 不限。"""
     _, invalid = _validate(
         "[COMPOSITE:row][STRUCT:O, mode=lewis, id=w][/COMPOSITE]")
     assert len(invalid) == 0
+    # row 布局：stereo/chair/newman 均放行
     _, invalid2 = _validate(
-        "[COMPOSITE:row][STRUCT:O, mode=stereo, id=w][/COMPOSITE]")
-    assert len(invalid2) == 1
-    assert "skeleton/lewis" in invalid2[0].reason
+        "[COMPOSITE:row][STRUCT:C[C@H](O)C(=O)O, mode=stereo, id=w]"
+        "[/COMPOSITE]")
+    assert len(invalid2) == 0
     _, invalid3 = _validate(
-        "[COMPOSITE:row][STRUCT:CC, mode=newman, id=w][/COMPOSITE]")
-    assert len(invalid3) == 1
+        "[COMPOSITE:row][STRUCT:CC, mode=newman, bond=0-1, angle=60, id=w]"
+        "[/COMPOSITE]")
+    assert len(invalid3) == 0
+    # reaction 布局：stereo/chair 放行、newman 拦截
+    _, invalid4 = _validate(
+        "[COMPOSITE:reaction][STRUCT:C[C@H](O)C(=O)O, mode=stereo, id=a]"
+        "[ARROW:type=single][STRUCT:C[C@H](O)C(=O)O, mode=stereo, id=b]"
+        "[/COMPOSITE]")
+    assert len(invalid4) == 0
+    _, invalid5 = _validate(
+        "[COMPOSITE:reaction][STRUCT:CC, mode=newman, bond=0-1, angle=60, id=w]"
+        "[/COMPOSITE]")
+    assert len(invalid5) == 1
+    assert "mode=newman" in invalid5[0].reason
+    # energy 布局：newman 放行
+    _, invalid6 = _validate(
+        "[COMPOSITE:energy][ENERGY:0,10]"
+        "[STRUCT:CC, mode=newman, bond=0-1, angle=60, id=w, at=0][/COMPOSITE]")
+    assert len(invalid6) == 0
+
+
+def test_opaque_comp_reference_rejected():
+    """立体画法组件（stereo/chair/newman）仅展示：机理/标注/附件引用拦截。"""
+    # MECHARROW 端点引用 stereo 组件
+    _, invalid = _validate(
+        "[COMPOSITE:reaction][STRUCT:CCl,id=r0][PLUS][STRUCT:[OH-],id=nu]"
+        "[ARROW:type=single][STRUCT:CO][PLUS][STRUCT:[Cl-]]"
+        "[MECHARROW:nu:0>r0:0]"
+        "[STRUCT:C[C@H](O)C(=O)O, mode=stereo, id=st]"
+        "[MECHARROW:nu:0>st:1][/COMPOSITE]")
+    assert any("立体画法组件" in r.reason for r in invalid)
+    # CHARGE 标注引用 chair 组件
+    _, invalid2 = _validate(
+        "[COMPOSITE:row][STRUCT:BrC1CCCCC1, mode=chair, subs=1:ax, id=c]"
+        "[CHARGE:c|0:δ+][/COMPOSITE]")
+    assert any("立体画法组件" in r.reason for r in invalid2)
+    # 箭头附件（arrow 令牌）不允许立体画法组件
+    _, invalid3 = _validate(
+        "[COMPOSITE:reaction][STRUCT:CCO,id=a]"
+        "[STRUCT:BrC1CCCCC1, mode=chair, subs=1:ax, id=w, arrow]"
+        "[ARROW:type=single,sup=+w][STRUCT:CC=O,id=b][/COMPOSITE]")
+    assert any("arrow 令牌" in r.reason for r in invalid3)
+
+
+def test_composite_coefficient_prefix():
+    """容器内 STRUCT 支持化学计量系数前缀（2CCO）：剥离后校验 SMILES。"""
+    _, invalid = _validate(
+        "[COMPOSITE:reaction][STRUCT:2CCO,id=a][ARROW:type=single,O2]"
+        "[STRUCT:2CC=O,id=b][/COMPOSITE]")
+    assert len(invalid) == 0
+    _, invalid2 = _validate(
+        "[COMPOSITE:reaction][STRUCT:0CCO,id=a][ARROW:type=single]"
+        "[STRUCT:CC=O,id=b][/COMPOSITE]")
+    assert len(invalid2) == 1
+    assert "系数" in invalid2[0].reason
 
 
 # ---------- 大一统架构：reaction 布局（20260819） ----------
@@ -1172,3 +1226,30 @@ def test_reaction_formula_unbalanced_rejected():
     assert len(invalid) == 1
     assert "化学校验" in invalid[0].reason
 
+
+
+def test_composite_formula_comp_validation():
+    """COMPOSITE 双轨制（20260821）：化学式组件放行；原子级引用/标注拦截。"""
+    # 化学式组件放行（守恒通过）
+    _, invalid = _validate(
+        "[COMPOSITE:reaction][STRUCT:CaO,id=a][PLUS][STRUCT:CO2,id=b]"
+        "[ARROW:type=single][STRUCT:CaCO3,id=c][/COMPOSITE]")
+    assert len(invalid) == 0
+    # 化学式组件参与守恒（不配平拦截）
+    _, invalid2 = _validate(
+        "[COMPOSITE:reaction][STRUCT:CCO,id=a][STRUCT:KMnO4,id=k]"
+        "[ARROW:type=single][STRUCT:CC=O,id=b][/COMPOSITE]")
+    assert any("原子不守恒" in r.reason for r in invalid2)
+    # MECHARROW 引用化学式组件 → 拦截（无原子可索引）
+    _, invalid3 = _validate(
+        "[COMPOSITE:reaction][STRUCT:CCl,id=r0][PLUS][STRUCT:[OH-],id=nu]"
+        "[ARROW:type=single][STRUCT:CO][PLUS][STRUCT:[Cl-]]"
+        "[STRUCT:NaCl,id=s][MECHARROW:nu:0>s:0][/COMPOSITE]")
+    assert any("化学式组件" in r.reason for r in invalid3)
+    # 化学式组件 mode/bond/charge 标注 → 拦截
+    _, invalid4 = _validate(
+        "[COMPOSITE:row][STRUCT:KMnO4,id=k,mode=lewis][/COMPOSITE]")
+    assert any("化学式组件" in r.reason for r in invalid4)
+    _, invalid5 = _validate(
+        "[COMPOSITE:row][STRUCT:KMnO4,id=k,charge=0:+][/COMPOSITE]")
+    assert any("化学式组件" in r.reason for r in invalid5)

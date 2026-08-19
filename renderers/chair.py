@@ -107,20 +107,21 @@ def _parse_spec(spec: str) -> tuple:
     return mirror, out
 
 
-def render_chair(smiles: str, spec: str = "") -> str:
-    """[CHAIR] 渲染：环己烷椅式骨架 + 可选取代基标注。失败返回错误提示。"""
-    try:
-        from rdkit import Chem  # noqa: F401
-    except ImportError:
-        return "（椅式构象渲染失败：rdkit 未安装）"
+def chair_scope_lines(smiles: str, spec: str = ""):
+    """椅式 scope 绘制行 + 视觉包围盒（不含 tikzpicture 包装）。
 
+    供顶层 render_chair 与 COMPOSITE 容器内 mode=chair 组件复用——
+    容器负责布局平移（scope shift）。成功返回 (lines, bbox)；
+    失败返回 (None, 错误提示串)。
+    """
     from utils.rdkit_utils import cyclohexane_ring
     mol = prepare_mol(smiles)
     if mol is None:
-        return f"（椅式构象渲染失败：无效 SMILES「{smiles}」）"
+        return None, f"（椅式构象渲染失败：无效 SMILES「{smiles}」）"
     ring = cyclohexane_ring(mol)
     if ring is None:
-        return f"（椅式构象渲染失败：SMILES 中未找到环己烷六元环「{smiles}」）"
+        return None, (f"（椅式构象渲染失败：SMILES 中未找到环己烷六元环"
+                      f"「{smiles}」）")
     ring_set = set(ring)
     mirror, subs = _parse_spec(spec)
 
@@ -129,7 +130,9 @@ def render_chair(smiles: str, spec: str = "") -> str:
     cx = sum(v[0] for v in vs) / 6.0
     cy = sum(v[1] for v in vs) / 6.0
 
-    lines = ["\\begin{tikzpicture}"]
+    lines = []
+    xs = [v[0] for v in vs]
+    ys = [v[1] for v in vs]
     for i in range(6):
         x1, y1 = vs[i]
         x2, y2 = vs[(i + 1) % 6]
@@ -156,9 +159,25 @@ def render_chair(smiles: str, spec: str = "") -> str:
         lines.append(
             f"  \\node[fill=white, inner sep=1pt] at ({ex:.2f},{ey:.2f}) "
             f"{{{format_chem_text(label)}}};")
+        xs += [bx, ex]
+        ys += [by, ey]
 
-    lines.append("\\end{tikzpicture}")
-    return "\n".join(lines)
+    pad = 0.25   # 标签字符半径余量（包围盒用于布局避让）
+    bbox = (min(xs) - pad, min(ys) - pad, max(xs) + pad, max(ys) + pad)
+    return lines, bbox
+
+
+def render_chair(smiles: str, spec: str = "") -> str:
+    """[CHAIR] 渲染：环己烷椅式骨架 + 可选取代基标注。失败返回错误提示。"""
+    try:
+        from rdkit import Chem  # noqa: F401
+    except ImportError:
+        return "（椅式构象渲染失败：rdkit 未安装）"
+
+    scope, err = chair_scope_lines(smiles, spec)
+    if scope is None:
+        return err
+    return "\n".join(["\\begin{tikzpicture}"] + scope + ["\\end{tikzpicture}"])
 
 
 if __name__ == "__main__":

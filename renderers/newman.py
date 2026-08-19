@@ -50,21 +50,17 @@ def _pick_bond(mol, bond_spec: str):
     return None
 
 
-def render_newman(smiles: str, bond_spec: str = "", angle: str = "60") -> str:
-    """[NEWMAN] 渲染：SMILES + 投影键 + 二面角 → 纽曼投影 TikZ 代码。
+def _newman_body(smiles: str, bond_spec: str = "", angle: str = "60"):
+    """纽曼投影绘制主体（原点居中，未缩放）：返回 (body_lines, half, None)；
+    失败返回 (None, None, 错误提示串)。half 为包围盒半边长（未计缩放）。
 
-    兼容旧调用 render_newman(smiles, "60")——第二参数不是 a-b 格式时
-    视为角度（旧格式，自动选键）。
-    失败（无效 SMILES/键不存在/无 C-C 单键/rdkit 未装）返回可读错误提示。
+    供 render_newman（顶层）与 newman_scope_lines（COMPOSITE 容器内
+    mode=newman 组件）复用。
     """
-    try:
-        from rdkit import Chem
-    except ImportError:
-        return "（纽曼投影渲染失败：rdkit 未安装）"
-
+    from rdkit import Chem
     mol = Chem.MolFromSmiles(smiles) if smiles else None
     if mol is None:
-        return f"（纽曼投影渲染失败：无效 SMILES「{smiles}」）"
+        return None, None, f"（纽曼投影渲染失败：无效 SMILES「{smiles}」）"
 
     spec = (bond_spec or "").strip()
     if _BOND_SPEC_RE.match(spec):
@@ -78,8 +74,8 @@ def render_newman(smiles: str, bond_spec: str = "", angle: str = "60") -> str:
     bond = _pick_bond(mol, spec)
     if bond is None:
         if spec:
-            return f"（纽曼投影渲染失败：键 {spec} 不存在）"
-        return f"（纽曼投影渲染失败：「{smiles}」无 C-C 单键）"
+            return None, None, f"（纽曼投影渲染失败：键 {spec} 不存在）"
+        return None, None, f"（纽曼投影渲染失败：「{smiles}」无 C-C 单键）"
 
     front_atom, back_atom = bond.GetBeginAtom(), bond.GetEndAtom()
 
@@ -113,7 +109,7 @@ def render_newman(smiles: str, bond_spec: str = "", angle: str = "60") -> str:
                        360.0 - abs(deg - f) % 360.0) < _COLLIDE
                    for f in front_angles)
 
-    lines = ["\\begin{tikzpicture}[scale=1.1]"]
+    lines = []
     # 后键：从圆周(R)向外到 D（圆外部分 = 2R/3），先画（灰色、粗线与圆一致，在后）；
     # 重叠式中后键与后标签同步顺时针偏移 15°，避免被前键完全遮挡
     for a, sub in zip(back_angles, back_subs):
@@ -131,8 +127,40 @@ def render_newman(smiles: str, bond_spec: str = "", angle: str = "60") -> str:
         lines.append(f"  \\node at ({lx:.2f},{ly:.2f}) {{\\small {sub}}};")
     # 前碳：空心大圆（最后画，圆环压在键交叉之上，保持清晰）
     lines.append(f"  \\draw[thick] (0,0) circle ({R:.2f});")
-    lines.append("\\end{tikzpicture}")
-    return "\n".join(lines)
+    return lines, LBL + 0.25, None
+
+
+def newman_scope_lines(smiles: str, bond_spec: str = "", angle: str = "60"):
+    """纽曼投影 scope 绘制行 + 视觉包围盒（含 1.1 缩放，与顶层一致）。
+
+    供 COMPOSITE 容器内 mode=newman 组件使用——容器负责布局平移
+    （scope shift）。成功返回 (lines, bbox)；失败返回 (None, 错误提示串)。
+    """
+    body, half, err = _newman_body(smiles, bond_spec, angle)
+    if body is None:
+        return None, err
+    lines = ["  \\begin{scope}[scale=1.1]"] + body + ["  \\end{scope}"]
+    h = half * 1.1
+    return lines, (-h, -h, h, h)
+
+
+def render_newman(smiles: str, bond_spec: str = "", angle: str = "60") -> str:
+    """[NEWMAN] 渲染：SMILES + 投影键 + 二面角 → 纽曼投影 TikZ 代码。
+
+    兼容旧调用 render_newman(smiles, "60")——第二参数不是 a-b 格式时
+    视为角度（旧格式，自动选键）。
+    失败（无效 SMILES/键不存在/无 C-C 单键/rdkit 未装）返回可读错误提示。
+    """
+    try:
+        from rdkit import Chem  # noqa: F401
+    except ImportError:
+        return "（纽曼投影渲染失败：rdkit 未安装）"
+
+    body, _, err = _newman_body(smiles, bond_spec, angle)
+    if body is None:
+        return err
+    return "\n".join(["\\begin{tikzpicture}[scale=1.1]"] + body +
+                     ["\\end{tikzpicture}"])
 
 
 if __name__ == "__main__":

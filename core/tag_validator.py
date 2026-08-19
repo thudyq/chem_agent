@@ -247,7 +247,7 @@ _FORMULA_TOKEN_RE = re.compile(r"([A-Z][a-z]?)(\d*)")
 # 可识别的真实元素（有机/常见无机，及常见无机/氧化还原元素 Mn、Cr、
 # Ba 等——KMnO4、H2SO4、MnSO4、K2SO4、CrCl3 等教科书化学式由此可解析）。
 # 刻意不含 Ar（氩）、Ac（锕）等——它们是 prompt 允许的通用基团缩写
-# （Ar=芳基、Ac=乙酰基，见 Instruction-for-Structure.md），
+# （Ar=芳基、Ac=乙酰基，见主提示 STRUCT 条目），
 # 误判为化学式会把缩写 label 打回。
 _REAL_ELEMENTS = {
     "H", "B", "C", "N", "O", "F", "Si", "P", "S", "Cl", "Br", "I",
@@ -595,6 +595,17 @@ def _check_composite_balance(children: list, layout_name: str) -> str:
 # 箭头类型（大一统架构，20260819）：single=正向 → / reversible=可逆 ⇌ /
 # resonance=共振 ↔ / retro=逆合成 ⇒
 _ARROW_TYPES = ("single", "reversible", "resonance", "retro")
+
+
+def _opaque_comp(comps: dict, cid: str) -> bool:
+    """组件是否为立体画法组件（stereo/chair/newman，仅展示的不透明单元，
+    不支持 MECHARROW/HBOND/CHARGE/XH/BOND 等原子级引用）。"""
+    return comps.get(cid, {}).get("mode") in ("stereo", "chair", "newman")
+
+
+def _formula_comp(comps: dict, cid: str) -> bool:
+    """组件是否为化学式文本组件（双轨制，无原子可索引，不支持端点/标注引用）。"""
+    return bool(comps.get(cid, {}).get("formula"))
 
 
 def _check_block(block_children: list) -> Tuple[bool, str]:
@@ -1106,22 +1117,56 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
             cid = child.attrs.get("id") or f"r{len(comps)}"
             if cid in comps and child.attrs.get("id"):
                 return False, f"组件 id 重复「{cid}」"
+            # 化学计量系数前缀（2CCO、1/2O2）：剥离后再校验 SMILES 与
+            # 统计原子数；守恒比对（_check_reaction_step）自带系数解析
+            raw_smi = child.args[0].strip() if child.args and child.args[0] else ""
+            parsed_c = _parse_coeff(raw_smi)
+            if parsed_c is None:
+                return False, f"组件 {cid}: 系数格式错误「{raw_smi}」"
+            bare_smi = parsed_c[1]
+            # 双轨制：非 SMILES 但为纯化学式（KMnO4、H2SO4、CaCO3 等）
+            # 放行——渲染端走文本节点轨道；化学式组件无原子可索引
+            is_formula = bool(bare_smi) and not _smiles_ok(bare_smi) \
+                and bool(_parse_plain_formula(bare_smi))
             comps[cid] = {
-                "smiles": child.args[0].strip() if child.args and child.args[0] else "",
+                "smiles": bare_smi,
                 "at": child.attrs.get("at"),
                 # 大一统架构：arrow 令牌组件 = 箭头上附件（副反应物/副产物），
                 # 不参与主序列，由 ARROW 的 sup= 参数引用
                 "arrow": bool(child.attrs.get("arrow")),
+                "mode": child.attrs.get("mode", "skeleton"),
+                "formula": is_formula,
             }
-            # STRUCT 子标记本身递归校验（mode 分派）；容器内仅支持 skeleton/lewis
-            # （stereo/chair/newman 为独立画法的整图语义，顶层使用）
+            # STRUCT 子标记本身递归校验（mode 分派）。容器内 mode 按布局
+            # 放开（20260821 扩充）：reaction/reaction_mech 禁 newman（投影
+            # 是整图语义，与反应序列不兼容）；row/energy 不限制。
+            # stereo/chair/newman 组件预渲染为不透明单元，仅展示。
             mode = child.attrs.get("mode", "skeleton")
-            if mode not in ("skeleton", "lewis"):
-                return False, (f"组件 {cid}: 容器内仅支持 mode=skeleton/lewis"
-                               f"（mode={mode} 请用顶层 [STRUCT:...] 标记）")
-            ok, reason = _validate_struct_args(child.args, child.attrs)
-            if not ok:
-                return False, f"组件 {cid}: {reason}"
+            if mode == "newman" and layout_name in ("reaction", "reaction_mech"):
+                return False, (f"组件 {cid}: reaction 布局不支持 mode=newman"
+                               f"（纽曼投影请用顶层 [STRUCT:...] 或 row 布局）")
+            if mode in ("stereo", "chair", "newman") and \
+                    child.attrs.get("arrow"):
+                return False, (f"组件 {cid}: 箭头附件（arrow 令牌）仅支持 "
+                               f"mode=skeleton/lewis（立体画法组件不能挂箭头上）")
+            if is_formula:
+                # 化学式组件：无结构可画——mode 必须 skeleton，bond=/charge=
+                # 等原子级标注不适用（渲染端无分子可挂）
+                if mode != "skeleton":
+                    return False, (f"组件 {cid}: 化学式组件（文本轨道）不支持 "
+                                   f"mode={mode}")
+                if child.attrs.get("bond") or child.attrs.get("charge"):
+                    return False, (f"组件 {cid}: 化学式组件不支持 "
+                                   f"bond=/charge= 标注")
+                ok, reason = _label_ok(
+                    child.args[1] if len(child.args) > 1 else None)
+                if not ok:
+                    return False, f"组件 {cid}: {reason}"
+            else:
+                ok, reason = _validate_struct_args(
+                    [bare_smi] + list(child.args[1:]), child.attrs)
+                if not ok:
+                    return False, f"组件 {cid}: {reason}"
         elif child.type == "BLOCK":
             for bc in (child.args[0] if child.args else []):
                 if bc.type != "STRUCT":
@@ -1208,6 +1253,12 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
             ref = child.args[0].strip()
             if ref not in comps:
                 return False, f"{ctype} 引用未知组件「{ref}」"
+            if _opaque_comp(comps, ref):
+                return False, (f"{ctype} 引用立体画法组件「{ref}」"
+                               f"（stereo/chair/newman 仅展示，不支持标注）")
+            if _formula_comp(comps, ref):
+                return False, (f"{ctype} 引用化学式组件「{ref}」"
+                               f"（文本轨道无原子可索引，不支持标注）")
             pairs = (child.args[1] or "").strip()
             if ctype == "CHARGE":
                 idxs = [int(x) for x in re.findall(r"(\d+):", pairs)]
@@ -1234,6 +1285,12 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
                     a, idb, b = int(m.group(1)), m.group(2), int(m.group(3))
                     if idb not in comps:
                         return False, f"HBOND 引用未知组件「{idb}」"
+                    if _opaque_comp(comps, idb):
+                        return False, (f"HBOND 引用立体画法组件「{idb}」"
+                                       f"（stereo/chair/newman 仅展示，不支持标注）")
+                    if _formula_comp(comps, idb):
+                        return False, (f"HBOND 引用化学式组件「{idb}」"
+                                       f"（文本轨道无原子可索引，不支持标注）")
                     found += 1
                     if _RDKIT_OK:
                         # 给体端点 a 必须落在给体组件范围内且为 H 原子
@@ -1260,6 +1317,12 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
             ref = child.args[0].strip()
             if ref not in comps:
                 return False, f"XH 引用未知组件「{ref}」"
+            if _opaque_comp(comps, ref):
+                return False, (f"XH 引用立体画法组件「{ref}」"
+                               f"（stereo/chair/newman 仅展示，不支持标注）")
+            if _formula_comp(comps, ref):
+                return False, (f"XH 引用化学式组件「{ref}」"
+                               f"（文本轨道无原子可索引，不支持标注）")
             if _RDKIT_OK:
                 try:
                     i = int(child.args[1])
@@ -1273,6 +1336,12 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
             ref = child.args[0].strip()
             if ref not in comps:
                 return False, f"BOND 引用未知组件「{ref}」"
+            if _opaque_comp(comps, ref):
+                return False, (f"BOND 引用立体画法组件「{ref}」"
+                               f"（stereo/chair/newman 仅展示，不支持标注）")
+            if _formula_comp(comps, ref):
+                return False, (f"BOND 引用化学式组件「{ref}」"
+                               f"（文本轨道无原子可索引，不支持标注）")
             if _RDKIT_OK:
                 m = re.fullmatch(r"(\d+)-(\d+)", child.args[1].strip())
                 if not m:
@@ -1299,9 +1368,17 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
             src_id, src_pt, _, dst_id, dst_pt, dst2_id, dst2_pt = m.groups()
             if src_id not in comps or dst_id not in comps:
                 return False, f"MECHARROW 引用未知组件「{src_id}→{dst_id}」"
+            if dst2_id is not None and dst2_id not in comps:
+                return False, f"MECHARROW 引用未知组件「{dst2_id}」"
+            if _opaque_comp(comps, src_id) or _opaque_comp(comps, dst_id) or \
+                    (dst2_id is not None and _opaque_comp(comps, dst2_id)):
+                return False, (f"MECHARROW 引用立体画法组件「{spec}」"
+                               f"（stereo/chair/newman 仅展示，不支持端点引用）")
+            if _formula_comp(comps, src_id) or _formula_comp(comps, dst_id) or \
+                    (dst2_id is not None and _formula_comp(comps, dst2_id)):
+                return False, (f"MECHARROW 引用化学式组件「{spec}」"
+                               f"（文本轨道无原子可索引，不支持端点引用）")
             if dst2_id is not None:
-                if dst2_id not in comps:
-                    return False, f"MECHARROW 引用未知组件「{dst2_id}」"
                 if "-" in dst_pt:
                     return False, f"MECHARROW 成键空白位端点格式错误「{spec}」"
             if _RDKIT_OK:
