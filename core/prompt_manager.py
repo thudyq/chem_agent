@@ -16,33 +16,9 @@ def _load_instruction(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def load_arrow_instructions() -> str:
-    """箭头规范已并入主提示（20260821 重构：Instruction-for-Arrows.md 删除）。
-
-    保留函数签名供外部兼容；返回空串。
-    """
-    return ""
-
-
-def load_structure_instructions() -> str:
-    """结构式规范已并入主提示（20260821 重构：Instruction-for-Structure.md 删除）。
-
-    保留函数签名供外部兼容；返回空串。
-    """
-    return ""
-
-
 def load_smiles_instructions() -> str:
     """加载 SMILES 书写规范。"""
     return _load_instruction(_SMILES_INSTRUCTION_PATH)
-
-
-def load_hbond_instructions() -> str:
-    """氢键规范已并入主提示（20260821 重写：Instruction-for-Hbonds.md 删除）。
-
-    保留函数签名供外部兼容；返回空串。
-    """
-    return ""
 
 
 def load_system_prompt() -> str:
