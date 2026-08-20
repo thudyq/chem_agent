@@ -277,7 +277,8 @@ def molecule_scope_lines(mol, shift: Tuple[float, float], *,
                          show_lone_pairs: bool = True,
                          explicit_hs: dict | None = None,
                          aromatic_rings: list | None = None,
-                         occupancy=None) -> List[str]:
+                         occupancy=None,
+                         bond_margin_scale: float = 1.0) -> List[str]:
     r"""分子组件的 scope 绘制行（内部全部局部坐标，位置由 shift 决定）。
 
     普通方程式（show_lone_pairs=False）不画孤对电子点；
@@ -287,6 +288,10 @@ def molecule_scope_lines(mol, shift: Tuple[float, float], *,
     标签风格统一规则（heavy_atom_count）：重原子数 ≤ 2 的小分子
     （CH₃Cl/CH₂=CH₂/CH₄…）用结构简式（非环碳写 CHn，教科书式 H₃C—Cl）；
     其余用键线式（碳原子不标 CHn，仅杂原子带 H 标签）。
+    bond_margin_scale: 键线留白缩放系数——容器内分子坐标按 _MOL_SCALE
+    缩放后，标签字号不变、键线修剪量（label_bond_margin）若仍按原标签
+    宽度计算，键线两端会深入标签背景被 fill=white 盖住（如 CH₃Cl 只剩
+    "—Cl"）；调用方应传分子坐标缩放系数使修剪量同步缩放（20260821 修复）。
     aromatic_rings: aromatic_ring_info() 的输出——全芳香单环跳过环内键、
         在质心画圆（芳香小写 c1ccccc1 风格）；为 None 时不画圈（凯库勒交替键）。
     occupancy: 可选的 collide.Occupancy（局部坐标）——键/环/标签/电子点
@@ -301,6 +306,8 @@ def molecule_scope_lines(mol, shift: Tuple[float, float], *,
     else:
         labeler = (lambda a, flip=False:
                    atom_label(a, hs.get(a.GetIdx(), 0), flip))
+    # 键线留白随分子缩放补偿（见 bond_margin_scale 说明）
+    margin_fn = (lambda lab: label_bond_margin(lab) * bond_margin_scale)
     # 芳香画圈：调用方显式传入（structure.py）或从 mol property 自动读取
     # （prepare_mol 已存 _aromatic_lowercase，ARROW/REACTION/COMPOSITE 共用）
     if aromatic_rings is None:
@@ -317,7 +324,7 @@ def molecule_scope_lines(mol, shift: Tuple[float, float], *,
     # 电荷圈等注解元素据此选零冲突候选位（不撞键/标签/彼此）
     occ = occupancy if occupancy is not None else Occupancy()
     skip_rings = [aromatic_rings[k][0] for k in range(len(aromatic_rings or []))]
-    for segs in bond_segments(mol, labeler=labeler, margin_fn=label_bond_margin,
+    for segs in bond_segments(mol, labeler=labeler, margin_fn=margin_fn,
                               skip_aromatic_rings=skip_rings):
         for x1, y1, x2, y2 in segs:
             lines.append(f"    \\draw ({x1:.2f},{y1:.2f}) -- ({x2:.2f},{y2:.2f});")

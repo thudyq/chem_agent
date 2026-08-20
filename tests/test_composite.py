@@ -856,13 +856,17 @@ ENERGY_DEMO = (
 
 
 def test_energy_layout_annotations_rendered():
-    """B3：energy 布局驻点结构支持 XH/BOND/CHARGE 注解（不再静默丢弃）。"""
+    """B3：energy 布局驻点结构支持 XH/BOND/CHARGE 注解（不再静默丢弃）。
+
+    20260821：多组分驻点（CCl.[OH-]）拆片段后注解原子序号语义不明确，
+    注解仅对单组分驻点生效——本测试用单组分验证注解渲染。
+    """
     out = _render(
         "[COMPOSITE:energy]"
         "[ENERGY:0,108,-20]"
-        "[STRUCT:CCl.[OH-],label=反应物,at=0,id=r0][CHARGE:r0|0:δ+]"
-        "[STRUCT:CCl.[OH-],label=过渡态,at=1,id=ts]"
-        "[STRUCT:CO.[Cl-],label=产物,at=2,id=p0][XH:p0|1][BOND:p0|0-1]"
+        "[STRUCT:CCl,label=反应物,at=0,id=r0][CHARGE:r0|0:δ+]"
+        "[STRUCT:CCl,label=过渡态,at=1,id=ts]"
+        "[STRUCT:CO,label=产物,at=2,id=p0][XH:p0|1][BOND:p0|0-1]"
         "[/COMPOSITE]"
     )
     assert "\\begin{tikzpicture}" in out
@@ -879,22 +883,61 @@ def test_energy_layout_full():
     assert "\\draw[gray, dashed]" in out                 # 反应物基线
     assert "Ea $\\approx$ 108" in out                    # Ea 标注框
     assert "anchor=north" in out                         # 标注框 anchor 定位
-    # 3 个驻点 scope + 3 个分子 scope（标注框为带 anchor 的直接节点）
-    assert out.count("\\begin{scope}[shift=") == 6
+    # 3 个驻点 scope + 3×2 片段 scope（多组分驻点拆 2 片段，20260821）
+    assert out.count("\\begin{scope}[shift=") == 12
     assert "反应物 (+0)" in out and "过渡态 (+108)" in out and "产物 (-20)" in out
 
 
+def test_energy_layout_multifrag_vertical():
+    """20260821：energy 驻点多组分（CCl.[OH-] = CH3Cl + OH-）竖直排列拆分。
+
+    row 布局不拆分（保持单分子）；energy 布局按 GetMolFrags 拆片段、
+    竖直堆叠渲染——CH3Cl 与 OH- 各自独立、电荷圈保留。
+    """
+    text = ("[COMPOSITE:energy][ENERGY:0,108,-20]"
+            "[STRUCT:CCl.[OH-],label=反应物,at=0]"
+            "[STRUCT:CO.[Cl-],label=产物,at=2]"
+            "[/COMPOSITE]")
+    out = _render(text)
+    # 多组分拆分：CH3 标签存在（此前与 OH- 混成一个结构时丢失）
+    assert "CH$_{3}$" in out
+    # OH- 电荷圈（圆节点）存在
+    assert "circle" in out
+    # 竖直排列：同一驻点的两个片段 scope 的 shift y 不同（上下堆叠）
+    frag_shifts = re.findall(
+        r"\\begin\{scope\}\[shift=\{\(([-\d.]+),([-\d.]+)\)\}\]", out)
+    # 驻点 3 个 + 反应物 2 片段 + 产物 2 片段 = 7 个 scope（外层各 1）
+    assert len(frag_shifts) >= 6
+    # 取反应物驻点的两个片段 y：外层 scope 相同，内层片段 shift 不同
+    inner = [float(y) for x, y in frag_shifts
+             if float(x) == 0.00 or float(x) == -0.04 or float(x) == -0.09]
+    assert len(inner) >= 2 and max(inner) - min(inner) > 0.5
+
+
+def test_row_layout_multifrag_not_split():
+    """row 布局多组分不拆分（保持单分子渲染，20260821 仅 energy 支持）。"""
+    out = _render("[COMPOSITE:row][STRUCT:CCl.[OH-],label=反应物][/COMPOSITE]")
+    # 无片段竖直堆叠的内层 scope（shift 含 0.16 竖排特征）
+    assert "shift={(0.00,0.16)}" not in out
+
+
 def test_energy_layout_struct_positions():
-    """R-3 布局：分子在驻点正上方（above）或下方（below），水平居中。"""
+    """R-3 布局：分子在驻点正上方（above）或下方（below），水平居中。
+
+    多组分驻点（20260821）：每个驻点外层 scope + 内层 2 片段 scope；
+    外层 scope 的 shift 即分子组整体位置（驻点上方）。
+    """
     out = _render(ENERGY_DEMO)
     scopes = re.findall(
         r"\\begin\{scope\}\[shift=\{\(([-\d.]+),([-\d.]+)\)\}\]", out)
-    assert len(scopes) == 6
-    # 前 3 个是驻点 scope（y 单调：低-高-低），后 3 个是分子 scope
+    assert len(scopes) == 12
+    # 前 3 个是驻点 scope（y 单调：低-高-低）
     point_ys = [float(y) for _, y in scopes[:3]]
-    mol_ys = [float(y) for _, y in scopes[3:6]]
     assert point_ys[1] > point_ys[0] and point_ys[1] > point_ys[2]   # 过渡态最高
-    for my, py in zip(mol_ys, point_ys):
+    # 分子外层 scope：索引 3、6、9（每驻点外层 + 2 内层片段）
+    for k in (3, 6, 9):
+        my = float(scopes[k][1])
+        py = point_ys[{3: 0, 6: 1, 9: 2}[k]]
         assert my > py - 0.5                                        # 分子在驻点上方
 
 
@@ -1450,7 +1493,11 @@ def test_radical_single_electron_always_shown():
 
 def test_energy_layout_wide_structs_stay_on_points():
     """energy 布局：宽驻点结构（叔丁基系列）横向间距不足时上下错开，
-    挂在各自驻点附近（x 对准驻点），不得整体右移脱点（20260819 基线反馈）。"""
+    挂在各自驻点附近（x 对准驻点），不得整体右移脱点（20260819 基线反馈）。
+
+    多组分驻点（CC(C)(C)Br.[OH2]，20260821）：外层 scope 即分子组整体
+    位置，取各驻点外层 scope 的 x 核对。
+    """
     text = ("[COMPOSITE:energy]"
             "[ENERGY:0,85,60,95,30]"
             "[STRUCT:CC(C)(C)Br.[OH2],label=反应物,at=0]"
@@ -1462,10 +1509,11 @@ def test_energy_layout_wide_structs_stay_on_points():
     from renderers.layout import energy_point_coords
     pts = energy_point_coords([0, 85, 60, 95, 30])["points"]
     px = {i: x for i, _v, x, _y in pts}
-    # 三个结构 scope 的 shift.x 应对准各自驻点（容差 ±1.2，宽结构居中偏移）
+    # 前 5 个是驻点 scope；其后：多组分驻点 = 外层 + 2 内层片段，
+    # 单组分 = 1 个。外层分子 scope 索引：5（驻点0）、8（驻点2）、9（驻点4）
     shifts = re.findall(
         r"\\begin\{scope\}\[shift=\{\(([-\d.]+),[-\d.]+\)\}\]", out)
-    xs = sorted(float(s) for s in shifts[5:])   # 前 5 个是驻点标记
+    xs = [float(shifts[5]), float(shifts[8]), float(shifts[9])]
     assert len(xs) == 3
     assert abs(xs[0] - px[0]) < 1.2, f"反应物脱点: {xs[0]} vs {px[0]}"
     assert abs(xs[1] - px[2]) < 1.2, f"中间体脱点: {xs[1]} vs {px[2]}"

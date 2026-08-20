@@ -544,7 +544,8 @@ def _molecule_with_annotations_lines(info: dict, *, show_numbers: bool,
                                       show_numbers=show_numbers,
                                       show_lone_pairs=show_lone_pairs,
                                       explicit_hs=hs,
-                                      occupancy=occ))
+                                      occupancy=occ,
+                                      bond_margin_scale=_MOL_SCALE))
     for idx, raw_label in info["charges"].items():
         if idx >= mol.GetNumAtoms():
             continue
@@ -621,6 +622,89 @@ def _molecule_with_annotations_lines(info: dict, *, show_numbers: bool,
     return lines
 
 
+def _split_mol_frags(mol):
+    """多组分 SMILES（含 `.` 的点分隔组分）→ [片段 mol, ...]。
+
+    单组分返回 [mol]；多组分用 RDKit GetMolFrags 拆分，各片段独立
+    2D 坐标。energy 布局驻点结构用（SN2 势能面：反应物 CCl.[OH-] =
+    CH₃Cl + OH⁻ 竖直排列）。片段坐标与主分子同尺度（调用方已 scale）。
+    """
+    try:
+        from rdkit import Chem
+        frags = Chem.GetMolFrags(mol, asMols=True, sanitizeFrags=False)
+    except Exception:
+        return [mol]
+    if len(frags) <= 1:
+        return [mol]
+    out = []
+    for f in frags:
+        try:
+            # 片段无 2D 坐标——重新用 prepare_mol 生成（与主分子同管线）
+            fmol = prepare_mol(Chem.MolToSmiles(f), allow_aromatic=False)
+        except Exception:
+            fmol = None
+        if fmol is not None:
+            out.append(fmol)
+    return out or [mol]
+
+
+def _frag_lines_and_bbox(frags, *, show_numbers=False, show_lone_pairs=False):
+    """多组分片段的竖直堆叠渲染行 + 组合包围盒（energy 驻点用）。
+
+    片段从上到下按 0.5 间距竖直排列（视觉上像反应物叠加书写）；
+    组合 bbox 覆盖全部片段（含间距）。返回 (lines, bbox)：
+    lines 为逐片段的 molecule_scope_lines（局部坐标，调用方平移）；
+    bbox 为 (min_x, min_y, max_x, max_y)（片段并集 + 间距）。
+    """
+    _FRAG_GAP = 0.5   # 竖直排列片段间距
+    placed = []       # (lines, bbox)
+    for fmol in frags:
+        bb = mol_visual_bbox(fmol, include_lone_pairs=False)
+        lines = molecule_scope_lines(
+            fmol, (0.0, 0.0), show_numbers=show_numbers,
+            show_lone_pairs=show_lone_pairs, bond_margin_scale=_MOL_SCALE)
+        placed.append((lines, bb))
+    if len(placed) == 1:
+        return placed[0][0], placed[0][1]
+    # 竖直堆叠：从最上面片段开始向下排，各片段水平居中
+    min_x = min(bb[0] for _, bb in placed)
+    max_x = max(bb[2] for _, bb in placed)
+    total_h = sum(bb[3] - bb[1] for _, bb in placed) \
+        + _FRAG_GAP * (len(placed) - 1)
+    top = max(bb[3] for _, bb in placed)
+    min_y = top - total_h
+    out_lines = []
+    cur_top = top
+    for lines, bb in placed:
+        cx = (min_x + max_x) / 2.0 - (bb[0] + bb[2]) / 2.0   # 水平居中
+        dy = cur_top - bb[3]
+        out_lines.extend(_shift_scope_lines(lines, cx, dy))
+        cur_top = cur_top - (bb[3] - bb[1]) - _FRAG_GAP
+    return out_lines, (min_x, min_y, max_x, top)
+
+
+def _shift_scope_lines(scope_lines, dx, dy):
+    """scope lines 整体平移 (dx, dy)（解析 shift 行 + 坐标行）。"""
+    out = []
+    shift_re = None
+    for ln in scope_lines:
+        if "\\begin{scope}" in ln:
+            # 平移 scope shift
+            import re as _re
+            m = _re.search(r"shift=\{\(([-\d.]+),([-\d.]+)\)\}", ln)
+            if m:
+                nx = float(m.group(1)) + dx
+                ny = float(m.group(2)) + dy
+                out.append(_re.sub(
+                    r"shift=\{\([-\d.]+,[-\d.]+\)\}",
+                    f"shift={{({nx:.2f},{ny:.2f})}}", ln))
+            else:
+                out.append(ln)
+        else:
+            out.append(ln)
+    return out
+
+
 def _render_energy_layout(points_str: str, structs: list, mols: dict,
                           show_numbers: bool, modecomps: dict = None,
                           textcomps: dict = None) -> str:
@@ -679,7 +763,16 @@ def _render_energy_layout(points_str: str, structs: list, mols: dict,
             bbox = (-w_t / 2.0, -h_t / 2.0, w_t / 2.0, h_t / 2.0)
         else:
             cinfo = mols[comp["id"]]
-            bbox = mol_visual_bbox(cinfo["mol"], include_lone_pairs=False)
+            # 多组分（`CCl.[OH-]` 等点分隔驻点结构）：预渲染片段竖直
+            # 堆叠，组合 bbox 参与放置（20260821：energy 驻点支持多组分）
+            frags = _split_mol_frags(cinfo["mol"])
+            if len(frags) > 1:
+                frag_lines, frag_bbox = _frag_lines_and_bbox(
+                    frags, show_numbers=show_numbers)
+                cinfo["frag_lines"] = frag_lines
+                bbox = frag_bbox
+            else:
+                bbox = mol_visual_bbox(cinfo["mol"], include_lone_pairs=False)
         # 驻点结构防重叠：按"小边距→大边距、声明 pos→另一侧"优先级尝试
         # （宽结构横向间距不足时上下错开或加高，避免整体右移脱点）；
         # 全部碰撞才右移（兜底）
@@ -759,8 +852,16 @@ def _render_energy_layout(points_str: str, structs: list, mols: dict,
                 f"  \\node[fill=white, inner sep=1pt] at ({sx:.2f},{cy:.2f}) "
                 f"{{{wrap_format_text(cinfo['text'])}}};")
         else:
-            lines.extend(_molecule_with_annotations_lines(
-                cinfo, show_numbers=show_numbers, show_lone_pairs=False))
+            if cinfo.get("frag_lines"):
+                # 多组分驻点：片段已竖直堆叠（局部坐标），整体按 shift 平移
+                lines.append(
+                    f"  \\begin{{scope}}[shift={{"
+                    f"({cinfo['shift'][0]:.2f},{cinfo['shift'][1]:.2f})}}]")
+                lines.extend(cinfo["frag_lines"])
+                lines.append("  \\end{scope}")
+            else:
+                lines.extend(_molecule_with_annotations_lines(
+                    cinfo, show_numbers=show_numbers, show_lone_pairs=False))
 
     ea = max(values) - values[0]
     dh = values[-1] - values[0]
@@ -999,7 +1100,8 @@ def render_composite(layout: str, children: list) -> str:
         b_lines = []
         for placed in blayout.mols:
             b_lines.extend(molecule_scope_lines(placed.mol, placed.shift,
-                                                show_lone_pairs=b_lp))
+                                                show_lone_pairs=b_lp,
+                                                bond_margin_scale=_MOL_SCALE))
             # 块内组件 label（中文/角色标注显示在分子下方；纯化学式
             # label 分子本身已展示，不重复——与主行组件同一判定）
             blabel = b_labels.get(placed.key)
@@ -1312,7 +1414,8 @@ def render_composite(layout: str, children: list) -> str:
             mols[sid]["shift"] = (px, sy)
             lines.extend(molecule_scope_lines(
                 amol, (px, sy),
-                show_lone_pairs=sid in main_mech_ids))
+                show_lone_pairs=sid in main_mech_ids,
+                bond_margin_scale=_MOL_SCALE))
         else:
             lines.append(
                 f"  \\node[fill=white, inner sep=1pt] at "

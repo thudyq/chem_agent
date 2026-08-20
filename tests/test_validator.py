@@ -1094,3 +1094,26 @@ def test_arrow_token_unique_reference():
         "[ARROW:type=single,sup=+w,H+]"
         "[STRUCT:CC(=O)O,id=a][PLUS][STRUCT:CO,id=m][/COMPOSITE]")
     assert len(invalid3) == 0
+
+
+def test_radical_charge_conflict_rejected():
+    """同一原子电荷+自由基拦截（20260820 基线图 32：Br⊖ 还带单电子点）；
+    合法情形放行——自由基（[CH3]）、离子（[OH-]）、自由基离子分写
+    不同原子（超氧根 [O-][O]）、配合物电荷（FeBr4- 的 [Fe-] 无单电子）。"""
+    pytest.importorskip("rdkit")
+    _, bad = _validate("[STRUCT:[O-]]")
+    assert len(bad) == 1
+    assert "自由基单电子" in bad[0].reason
+    _, bad2 = _validate("[STRUCT:[NH3+]]")
+    assert len(bad2) == 1
+    for ok_text in ("[STRUCT:[CH3]]", "[STRUCT:[OH-]]", "[STRUCT:[O-][O]]",
+                    "[STRUCT:Br[Fe-](Br)(Br)Br]",
+                    "[COMPOSITE:reaction][STRUCT:[CH3],id=a][PLUS][STRUCT:[Cl],id=c]"
+                    "[ARROW:type=single][STRUCT:CCl,id=b][/COMPOSITE]"):
+        _, invalid = _validate(ok_text)
+        assert len(invalid) == 0, f"{ok_text} → {[r.reason for r in invalid]}"
+    # 容器内同样拦截
+    _, bad3 = _validate(
+        "[COMPOSITE:reaction][STRUCT:CCl,id=a][PLUS][STRUCT:[O-],id=b]"
+        "[ARROW:type=single][STRUCT:CO,id=c][/COMPOSITE]")
+    assert any("自由基单电子" in r.reason for r in bad3)
