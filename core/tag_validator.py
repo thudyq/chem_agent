@@ -120,16 +120,12 @@ _TAG_NAMES = {
     "ARROW": "反应箭头",
     "REACTION": "反应方程式",
     "COMPOSITE": "复合图",
-    "NEWMAN": "纽曼投影",
-    "LEWIS": "Lewis 结构式",
     "ENERGY": "势能面",
-    "STEREO": "楔形式",
     "CHARGE": "电荷标注",
     "HBOND": "氢键标注",
     "RETRO": "逆合成箭头",
     "XH": "显式氢标注",
     "BOND": "键突出标注",
-    "CHAIR": "椅式构象",
 }
 
 # SMILES 字段提取器：输入 RenderTag，返回需要校验的 SMILES 字符串列表。
@@ -140,9 +136,6 @@ _SMILES_FIELDS = {
     "REACTION": lambda a: [s for _, s in _split_multi_coeff(a[0])]
                           + [s for _, s in _split_multi_coeff(a[1])]
                           if len(a) >= 2 else [],
-    "NEWMAN": lambda a: [a[0]] if a and a[0] else [],
-    "LEWIS": lambda a: [a[0]] if a and a[0] else [],
-    "STEREO": lambda a: [a[0]] if a and a[0] else [],
     "CHARGE": lambda a: [a[0]] if a and a[0] else [],
     "HBOND": lambda a: [a[0]] if a and a[0] else [],
     "RETRO": lambda a: [a[i] for i in (0, 1) if i < len(a) and a[i]],

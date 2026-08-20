@@ -7,7 +7,6 @@
     [STRUCT:SMILES] 或 [STRUCT:SMILES,label=名称] （复合容器内可再加 ,id=引用名）
     [ARROW:反应物,产物,类型]
     [REACTION:反应物1;反应物2;...|产物1;产物2;...|反应条件]
-    [NEWMAN:SMILES,角度]
     [ENERGY:点序列]
     [RETRO:目标,前体,转化名]   （逆合成空心箭头 ⇒）
     [REASONING]...[/REASONING]   （配对标记）
@@ -35,7 +34,7 @@ from typing import List
 @dataclass
 class RenderTag:
     """单个渲染标记的解析结果。"""
-    type: str        # STRUCT / ARROW / NEWMAN / ENERGY / REASONING
+    type: str        # STRUCT / ARROW / ENERGY / REASONING 等标记类型
     args: list       # 捕获组（按标记格式排列；可选组未命中为 None）
     raw: str         # 原始匹配文本，如 "[STRUCT:c1ccccc1]"
     start_pos: int   # 在原文中的起始下标
@@ -50,16 +49,12 @@ _OPENERS = {
     "STRUCT": "[STRUCT:",
     "ARROW": "[ARROW:",
     "REACTION": "[REACTION:",
-    "NEWMAN": "[NEWMAN:",
     "ENERGY": "[ENERGY:",
-    "LEWIS": "[LEWIS:",
-    "STEREO": "[STEREO:",
     "CHARGE": "[CHARGE:",
     "HBOND": "[HBOND:",
     "RETRO": "[RETRO:",
     "XH": "[XH:",
     "BOND": "[BOND:",
-    "CHAIR": "[CHAIR:",
 }
 
 # REASONING 配对正则（内容不与括号冲突，可用正则）
@@ -101,17 +96,10 @@ def _only_child_tags_between(text: str, lo: int, hi: int) -> bool:
     return True
 
 # COMPOSITE 容器内允许的带子标记 opener（冒号形式）
-# LEWIS/STEREO/CHAIR/NEWMAN 为分子旧标记：归一化为 STRUCT+mode 后
-# 由容器统一渲染（mode=lewis 显示孤对；stereo/chair/newman 预渲染为
-# 不透明展示组件，reaction 布局禁 newman，见 tag_validator）
 # ARROW 为大一统架构的新箭头标记（[ARROW:type=...,sup=...,条件]）；
 # RXNARROW/RESARROW/CONDITION 为旧箭头标记（兼容保留，新架构不用）
 _INNER_OPENERS = {
     "STRUCT": "[STRUCT:",
-    "LEWIS": "[LEWIS:",
-    "STEREO": "[STEREO:",
-    "CHAIR": "[CHAIR:",
-    "NEWMAN": "[NEWMAN:",
     "ARROW": "[ARROW:",
     "MECHARROW": "[MECHARROW:",
     "CONDITION": "[CONDITION:",
@@ -137,62 +125,14 @@ _BLOCK_OPEN = "[BLOCK]"
 _BLOCK_CLOSE = "[/BLOCK]"
 
 
-# 分子家族：旧标记 → STRUCT + mode 的归一化映射（20260818 重构）
-# LEWIS/STEREO/CHAIR/NEWMAN 与 STRUCT 是"同一分子 + 不同绘制模式"的变种，
-# 统一为 [STRUCT:SMILES, mode=...]；旧标记保留识别，解析时归一化为 STRUCT。
-_MOL_MODE_MAP = {
-    "LEWIS": "lewis",
-    "STEREO": "stereo",
-    "CHAIR": "chair",
-    "NEWMAN": "newman",
-}
-
-# NEWMAN 投影键参数格式：a-b（原子序号对）
-_BOND_SPEC_RE = re.compile(r"^\d+-\d+$")
-
 # STRUCT 支持的绘制模式（skeleton=默认键线式/结构简式）
 _STRUCT_MODES = ("skeleton", "lewis", "stereo", "chair", "newman")
 
 
-def _normalize_mol_tag(tag_type: str, content: str) -> tuple:
-    """旧分子标记（LEWIS/STEREO/CHAIR/NEWMAN）→ (args, attrs)。
-
-    args 统一为 [smi, label]（与 STRUCT 同构）；mode/subs/bond/angle 与
-    原标记名（orig_type，降级提示用）放入 attrs。
-    """
-    mode = _MOL_MODE_MAP[tag_type]
-    if tag_type in ("LEWIS", "STEREO"):
-        args = _parse_content(tag_type, content)   # [smi, label]
-        args = [args[0] if args else content, args[1] if len(args) > 1 else None]
-        return args, {"mode": mode, "orig_type": tag_type}
-    if tag_type == "CHAIR":
-        # [CHAIR:SMILES,1:ax,2:eq] → [smi, None] + subs（原 spec 原样传渲染器）
-        args = _parse_content(tag_type, content)   # [smi, spec]
-        spec = (args[1] if len(args) > 1 else "") or ""
-        return [args[0], None], {"mode": mode, "subs": spec, "orig_type": tag_type}
-    # NEWMAN：[SMILES, bond, angle]（兼容旧 [SMILES, 角度]——第二参数为
-    # 角度时归入 angle、键自动选择，由渲染器处理）
-    args = _parse_content(tag_type, content)       # [smi, bond, angle]
-    bond = (args[1] if len(args) > 1 else "") or ""
-    angle = (args[2] if len(args) > 2 else "") or ""
-    if angle == "" and bond and not _BOND_SPEC_RE.match(bond):
-        # 旧格式 [SMILES, 角度]：第二参数不是 a-b 键 → 是角度
-        angle, bond = bond, ""
-    return [args[0], None], {"mode": mode, "bond": bond, "angle": angle,
-                             "orig_type": tag_type}
-
-
 def _normalize_render_tag(tag_type: str, content: str, raw: str,
                           start_pos: int, end_pos: int) -> RenderTag:
-    """构建 RenderTag：分子旧标记归一化为 STRUCT（type/mode 统一）。
-
-    归一化后校验与渲染只处理 STRUCT + attrs.mode，LLM 写旧标记或新写法
-    走同一条管线。
-    """
-    if tag_type in _MOL_MODE_MAP:
-        args, attrs = _normalize_mol_tag(tag_type, content)
-        return RenderTag(type="STRUCT", args=args, raw=raw,
-                         start_pos=start_pos, end_pos=end_pos, attrs=attrs)
+    """构建 RenderTag；STRUCT 提取结构化属性（id/at/pos/mode/subs/
+    bond/angle/charge/arrow），其余标记只有 args。"""
     attrs = _parse_struct_attrs(content) if tag_type == "STRUCT" else {}
     return RenderTag(type=tag_type, args=_parse_content(tag_type, content),
                      raw=raw, start_pos=start_pos, end_pos=end_pos, attrs=attrs)
@@ -269,15 +209,6 @@ def _parse_content(tag_type: str, content: str) -> list:
             label = content[li_end:min(after)] if after else content[li_end:]
         # LLM 偶发写出尾逗号（如 [STRUCT:CC[OH2+],]），归一化去掉
         return [smi.strip().rstrip(","), label]
-    if tag_type in ("STEREO", "LEWIS"):
-        # 支持可选 ,label=名称（与 STRUCT 同构；LLM 高频误加的写法，契约化。
-        # LEWIS 为同款扩展——Drawbacks B 节第 2 条记录的原契约缺口）
-        smi, label = content, None
-        li = content.find(",label=")
-        if li != -1:
-            smi = content[:li]
-            label = content[li + len(",label="):]
-        return [smi.strip().rstrip(","), label]
     if tag_type == "CHARGE":
         if "|" in content:
             smi, _, charges = content.partition("|")
@@ -335,19 +266,6 @@ def _parse_content(tag_type: str, content: str) -> list:
         while len(parts) < 3:
             parts.append("")
         return parts
-    if tag_type == "NEWMAN":
-        # [NEWMAN:SMILES,a-b,角度]：a-b 为投影观察键（原子序号），角度为二面角；
-        # 兼容旧格式 [NEWMAN:SMILES,角度]（键缺省，渲染器自动选键）
-        parts = content.split(",", 2)
-        while len(parts) < 3:
-            parts.append("")
-        return parts
-    if tag_type == "CHAIR":
-        # [CHAIR:SMILES,1:ax,2:eq] → [SMILES, 取代基规格串]
-        parts = content.split(",", 1)
-        smi = parts[0].strip().rstrip(",")
-        spec = parts[1].strip() if len(parts) > 1 else ""
-        return [smi, spec]
     if tag_type in ("MECHARROW", "CONDITION", "RXNARROW"):
         return [content.strip()]
     if tag_type in ("XH", "BOND"):
@@ -476,7 +394,6 @@ def _parse_inner_tags(inner: str, base: int) -> List[RenderTag]:
                 continue
             raw = inner[idx:end + 1]
             content = raw[len(opener):-1]
-            # 分子旧标记（LEWIS/STEREO/CHAIR/NEWMAN）归一化为 STRUCT+mode
             children.append(_normalize_render_tag(
                 tag_type, content, raw, base + idx, base + end + 1))
             search_from = end + 1
@@ -563,7 +480,6 @@ def parse_tags(text: str) -> List[RenderTag]:
                 continue
             raw = text[idx:end + 1]
             content = raw[len(opener):-1]  # 去掉 "[TAG:" 与 "]"
-            # 分子旧标记（LEWIS/STEREO/CHAIR/NEWMAN）归一化为 STRUCT+mode
             tags.append(_normalize_render_tag(
                 tag_type, content, raw, idx, end + 1))
             search_from = end + 1

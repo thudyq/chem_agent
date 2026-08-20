@@ -133,7 +133,7 @@ def test_smoke_energy():
 
 
 def test_smoke_newman():
-    outs, bad = _render("[NEWMAN:CC,60]")
+    outs, bad = _render("[STRUCT:CC,mode=newman,angle=60]")
     assert len(outs) == 1 and bad == 0
     # NEWMAN 不用 scope 封装（直接绝对坐标），关键元素是中心圆与取代基键
     _assert_ok(outs[0], "circle")
@@ -141,19 +141,19 @@ def test_smoke_newman():
 
 def test_smoke_newman_with_bond():
     """NEWMAN 三参数（指定投影键 a-b）：渲染成功。"""
-    outs, bad = _render("[NEWMAN:CC,0-1,60]")
+    outs, bad = _render("[STRUCT:CC,mode=newman,bond=0-1,angle=60]")
     assert len(outs) == 1 and bad == 0
     _assert_ok(outs[0], "circle")
 
 
 def test_smoke_stereo():
-    outs, bad = _render("[STEREO:C[C@H](O)C(=O)O]")
+    outs, bad = _render("[STRUCT:C[C@H](O)C(=O)O,mode=stereo]")
     assert len(outs) == 1 and bad == 0
     _assert_ok(outs[0])
 
 
 def test_smoke_stereo_with_label():
-    outs, bad = _render("[STEREO:C[C@H](O)C(=O)O,label=(R)-乳酸]")
+    outs, bad = _render("[STRUCT:C[C@H](O)C(=O)O,mode=stereo,label=(R)-乳酸]")
     assert len(outs) == 1 and bad == 0
     _assert_ok(outs[0], "\\node[below]")
 
@@ -171,27 +171,23 @@ def test_smoke_bond_toplevel():
 
 
 def test_smoke_lewis():
-    outs, bad = _render("[LEWIS:O]")
+    outs, bad = _render("[STRUCT:O,mode=lewis]")
     assert len(outs) == 1 and bad == 0
     _assert_ok(outs[0], "\\fill")
 
 
-def test_smoke_struct_mode_lewis_equals_old_tag():
-    """分子家族统一：STRUCT mode=lewis 与旧 [LEWIS:] 输出一致。"""
-    outs_new, _ = _render("[STRUCT:O, mode=lewis, label=水]")
-    outs_old, _ = _render("[LEWIS:O,label=水]")
-    assert len(outs_new) == 1 and len(outs_old) == 1
-    assert outs_new[0] == outs_old[0]
-    _assert_ok(outs_new[0], "\\fill", "\\node[below]")
+def test_smoke_struct_mode_lewis():
+    """STRUCT mode=lewis：孤对电子点 + label。"""
+    outs, bad = _render("[STRUCT:O, mode=lewis, label=水]")
+    assert len(outs) == 1 and bad == 0
+    _assert_ok(outs[0], "\\fill", "\\node[below]")
 
 
-def test_smoke_struct_mode_newman_equals_old_tag():
-    """STRUCT mode=newman（bond/angle 参数）与旧 [NEWMAN:...] 输出一致。"""
-    outs_new, _ = _render("[STRUCT:CC, mode=newman, bond=0-1, angle=60]")
-    outs_old, _ = _render("[NEWMAN:CC,0-1,60]")
-    assert len(outs_new) == 1 and len(outs_old) == 1
-    assert outs_new[0] == outs_old[0]
-    _assert_ok(outs_new[0], "circle")
+def test_smoke_struct_mode_newman():
+    """STRUCT mode=newman（bond/angle 参数）：渲染成功。"""
+    outs, bad = _render("[STRUCT:CC, mode=newman, bond=0-1, angle=60]")
+    assert len(outs) == 1 and bad == 0
+    _assert_ok(outs[0], "circle")
 
 
 def test_smoke_composite_mode_lewis():
@@ -277,7 +273,7 @@ def test_smoke_reaction_block_labels():
 
 
 def test_smoke_lewis_with_label():
-    outs, bad = _render("[LEWIS:O,label=水]")
+    outs, bad = _render("[STRUCT:O,mode=lewis,label=水]")
     assert len(outs) == 1 and bad == 0
     _assert_ok(outs[0], "\\node[below]")
 

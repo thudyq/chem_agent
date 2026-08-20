@@ -113,39 +113,39 @@ def test_long_label_rejected():
 
 
 def test_newman_bad_angle_rejected():
-    _, invalid = _validate("[NEWMAN:CC,xyz]")
+    _, invalid = _validate("[STRUCT:CC,mode=newman,angle=xyz]")
     assert len(invalid) == 1
     assert "角度" in invalid[0].reason
 
 
 def test_newman_angle_out_of_range():
-    _, invalid = _validate("[NEWMAN:CC,450]")
+    _, invalid = _validate("[STRUCT:CC,mode=newman,angle=450]")
     assert len(invalid) == 1
 
 
 def test_newman_with_bond_valid():
-    """新格式 [NEWMAN:SMILES,a-b,角度]：合法键放行。"""
-    _, invalid = _validate("[NEWMAN:CC,0-1,60]")
+    """mode=newman + bond=a-b：合法键放行。"""
+    _, invalid = _validate("[STRUCT:CC,mode=newman,bond=0-1,angle=60]")
     assert len(invalid) == 0
 
 
 def test_newman_bond_not_exist_rejected():
     """键 a-b 不存在（索引在范围内但不成键）→ 拦截。"""
-    _, invalid = _validate("[NEWMAN:CCC,0-2,60]")
+    _, invalid = _validate("[STRUCT:CCC,mode=newman,bond=0-2,angle=60]")
     assert len(invalid) == 1
     assert "键" in invalid[0].reason
 
 
 def test_newman_bond_atom_out_of_range():
     """原子序号越界（5 超过原子数 2）→ 拦截。"""
-    _, invalid = _validate("[NEWMAN:CC,5-1,60]")
+    _, invalid = _validate("[STRUCT:CC,mode=newman,bond=5-1,angle=60]")
     assert len(invalid) == 1
     assert "越界" in invalid[0].reason
 
 
 def test_newman_bond_missing_angle():
     """新格式缺角度 → 拦截。"""
-    _, invalid = _validate("[NEWMAN:CC,0-1]")
+    _, invalid = _validate("[STRUCT:CC,mode=newman,bond=0-1]")
     assert len(invalid) == 1
     assert "角度" in invalid[0].reason
 

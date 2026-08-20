@@ -58,9 +58,9 @@
   {
     "id": "stereo-with-label",
     "source": "真实端到端 20260808 metrics 基线（(R)-乳酸楔形式题，LLM 给 STEREO 误加 label 参数，整串进 RDKit 报错）",
-    "llm_output": "(R)-乳酸的楔形式结构如下：\n[STEREO:C[C@@H](O)C(=O)O,label=(R)-乳酸]",
+    "llm_output": "(R)-乳酸的楔形式结构如下：\n[STRUCT:C[C@@H](O)C(=O)O,mode=stereo,label=(R)-乳酸]",
     "expect": {"valid": 1, "invalid": 0},
-    "note": "STEREO 契约扩展支持 ,label=名称（20260808 起），拆分后放行"
+    "note": "STRUCT mode=stereo + label（旧 STEREO 标记扩展的归一写法），拆分后放行"
   },
   {
     "id": "baseline-20260810-ether-catalyst-misplaced",

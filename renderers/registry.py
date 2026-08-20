@@ -2,37 +2,29 @@
 """renderers/registry.py — 渲染器注册表。
 
 每种 [TAG] 标记对应一个渲染函数，在此注册供主流程分派。
-分子家族重构（20260818）：LEWIS/STEREO/CHAIR/NEWMAN 由解析层归一化为
-STRUCT+mode，统一走 render_structure 分派；旧注册保留兼容直接调用。
+分子家族（lewis/stereo/chair/newman）统一为 STRUCT+mode 由
+render_structure 分派（旧标记解析入口已于 B3 清理移除）。
 """
 
 from .structure import render_structure
 from .arrow import render_arrow
 from .reaction import render_reaction
 from .composite import render_composite
-from .newman import render_newman
-from .lewis import render_lewis
 from .energy import render_energy
-from .stereo import render_stereo
 from .charge import render_charge
 from .retro import render_retro
 from .xh_bond import render_bond, render_xh
-from .chair import render_chair
 
 RENDERER_REGISTRY = {
     "STRUCT": render_structure,
     "ARROW": render_arrow,
     "REACTION": render_reaction,
     "COMPOSITE": render_composite,
-    "NEWMAN": render_newman,
-    "LEWIS": render_lewis,
     "ENERGY": render_energy,
-    "STEREO": render_stereo,
     "CHARGE": render_charge,
     "RETRO": render_retro,
     "XH": render_xh,
     "BOND": render_bond,
-    "CHAIR": render_chair,
 }
 
 

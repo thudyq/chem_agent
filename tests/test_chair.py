@@ -37,15 +37,13 @@ def _bond_angles(tikz: str) -> list:
 
 class TestParse:
     def test_parse_plain(self):
-        tags = parse_tags("[CHAIR:C1CCCCC1]")
-        # 分子家族重构：旧标记归一化为 STRUCT + attrs.mode
+        tags = parse_tags("[STRUCT:C1CCCCC1,mode=chair]")
         assert tags[0].type == "STRUCT"
         assert tags[0].args == ["C1CCCCC1", None]
         assert tags[0].attrs["mode"] == "chair"
-        assert tags[0].attrs["orig_type"] == "CHAIR"
 
     def test_parse_with_subs(self):
-        tags = parse_tags("[CHAIR:BrC1CCCCC1,1:ax]")
+        tags = parse_tags("[STRUCT:BrC1CCCCC1,mode=chair,subs=1:ax]")
         assert tags[0].type == "STRUCT"
         assert tags[0].args == ["BrC1CCCCC1", None]
         assert tags[0].attrs["subs"] == "1:ax"
@@ -53,26 +51,26 @@ class TestParse:
 
 class TestValidate:
     def test_valid(self, fake_rdkit):
-        _, invalid = _validate("[CHAIR:BrC1CCCCC1,1:ax]")
+        _, invalid = _validate("[STRUCT:BrC1CCCCC1,mode=chair,subs=1:ax]")
         assert len(invalid) == 0
 
     def test_no_ring_rejected(self):
-        _, invalid = _validate("[CHAIR:CCO,1:ax]")
+        _, invalid = _validate("[STRUCT:CCO,mode=chair,subs=1:ax]")
         assert len(invalid) == 1
         assert "六元环" in invalid[0].reason
 
     def test_bad_kind_rejected(self):
-        _, invalid = _validate("[CHAIR:BrC1CCCCC1,1:xx]")
+        _, invalid = _validate("[STRUCT:BrC1CCCCC1,mode=chair,subs=1:xx]")
         assert len(invalid) == 1
         assert "格式错误" in invalid[0].reason
 
     def test_pos_out_of_range_rejected(self):
-        _, invalid = _validate("[CHAIR:BrC1CCCCC1,7:ax]")
+        _, invalid = _validate("[STRUCT:BrC1CCCCC1,mode=chair,subs=7:ax]")
         assert len(invalid) == 1
         assert "超出范围" in invalid[0].reason
 
     def test_pos_without_substituent_rejected(self):
-        _, invalid = _validate("[CHAIR:C1CCCCC1,3:ax]")
+        _, invalid = _validate("[STRUCT:C1CCCCC1,mode=chair,subs=3:ax]")
         assert len(invalid) == 1
         assert "无取代基" in invalid[0].reason
 
@@ -179,21 +177,21 @@ class TestGeometry:
 
 class TestFlip:
     def test_parse_flip(self):
-        tags = parse_tags("[CHAIR:C1CCCCC1,flip]")
+        tags = parse_tags("[STRUCT:C1CCCCC1,mode=chair,subs=flip]")
         assert tags[0].type == "STRUCT"
         assert tags[0].attrs["subs"] == "flip"
 
     def test_flip_token_position_free(self):
-        tags = parse_tags("[CHAIR:CC1CCCCC1,1:eq,flip]")
+        tags = parse_tags("[STRUCT:CC1CCCCC1,mode=chair,subs=1:eq,flip]")
         assert tags[0].type == "STRUCT"
         assert tags[0].attrs["subs"] == "1:eq,flip"
 
     def test_flip_valid(self, fake_rdkit):
-        _, invalid = _validate("[CHAIR:BrC1CCCCC1,flip,1:ax]")
+        _, invalid = _validate("[STRUCT:BrC1CCCCC1,mode=chair,subs=flip,1:ax]")
         assert len(invalid) == 0
 
     def test_flip_still_rejects_bad_kind(self):
-        _, invalid = _validate("[CHAIR:BrC1CCCCC1,flip,1:xx]")
+        _, invalid = _validate("[STRUCT:BrC1CCCCC1,mode=chair,subs=flip,1:xx]")
         assert len(invalid) == 1
         assert "格式错误" in invalid[0].reason
 

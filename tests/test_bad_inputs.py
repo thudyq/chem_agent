@@ -72,7 +72,7 @@ def test_arrow_missing_fields_rejected(fake_rdkit):
 
 
 def test_newman_missing_angle_rejected():
-    _, invalid = validate_tags(parse_tags("[NEWMAN:CC]"))
+    _, invalid = validate_tags(parse_tags("[STRUCT:CC,mode=newman]"))
     assert len(invalid) == 1
 
 
