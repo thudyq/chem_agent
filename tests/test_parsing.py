@@ -120,12 +120,6 @@ def test_composite_arrow_new_syntax():
     assert a2.args == ["single", [], ""]
 
 
-def test_composite_arrow_toplevel_old_syntax_kept():
-    """顶层 [ARROW:反应物,产物,类型] 旧语法不受容器内新语法影响。"""
-    tags = parse_tags("[ARROW:CCO,CC=O,Cu, Δ]")
-    assert tags[0].type == "ARROW"
-    assert tags[0].args == ["CCO", "CC=O", "Cu, Δ"]
-
 
 def test_composite_block_parsing():
     """[BLOCK]...[/BLOCK] 共振块配对解析（块内子标记递归）。"""
@@ -168,37 +162,7 @@ def test_composite_prose_mention_not_swallowed():
     assert len(t.args[1]) == 3  # 2 个 STRUCT + 1 个 RXNARROW
 
 
-def test_xh_toplevel_parse():
-    """顶层 [XH:SMILES|序号]（单分子位点标注，无需 COMPOSITE）。"""
-    tags = parse_tags("[XH:CC(=O)O|3]")
-    assert len(tags) == 1
-    assert tags[0].type == "XH"
-    assert tags[0].args == ["CC(=O)O", "3"]
 
-
-def test_bond_toplevel_parse():
-    """顶层 [BOND:SMILES|a-b]。"""
-    tags = parse_tags("[BOND:CCC=O|1-2]")
-    assert len(tags) == 1
-    assert tags[0].type == "BOND"
-    assert tags[0].args == ["CCC=O", "1-2"]
-
-
-def test_xh_bond_label_miswrite_stripped():
-    """Drawbacks 九 C-2：非 STRUCT 标记（XH/BOND/CHARGE/HBOND）误写
-    ,label=（LLM 以为所有标记都支持 label）时，SMILES/ref 字段必须剥离
-    label 尾随，否则整串 'O,label=苯酚' 进 RDKit 报 SMILES Parse Error。"""
-    for raw, expect in [
-        ("[XH:O,label=苯酚|0]", ["O", "0"]),
-        ("[BOND:O,label=苯酚|0-1]", ["O", "0-1"]),
-        ("[HBOND:O,label=苯酚|0-1]", ["O", "0-1"]),
-        ("[CHARGE:O,label=苯酚|0:δ-]", ["O", "0:δ-"]),
-        ("[XH:CC(=O)O|3]", ["CC(=O)O", "3"]),   # 无 label 正常不受影响
-        ("[BOND:CCC=O|1-2]", ["CCC=O", "1-2"]),
-    ]:
-        tags = parse_tags(raw)
-        assert len(tags) == 1, raw
-        assert tags[0].args == expect, f"{raw} → {tags[0].args}"
 
 
 def test_reasoning_paired():
@@ -216,14 +180,6 @@ def test_no_tags_plain_text():
     tags = parse_tags("你好")
     assert tags == []
 
-
-def test_arrow():
-    """补充：ARROW 三参数。"""
-    tags = parse_tags("[ARROW:c1ccccc1,c1ccccc1N,amination]")
-    assert len(tags) == 1
-    t = tags[0]
-    assert t.type == "ARROW"
-    assert t.args == ["c1ccccc1", "c1ccccc1N", "amination"]
 
 
 def test_newman():
@@ -257,10 +213,10 @@ def test_energy():
 
 def test_mixed_types_sorted():
     """补充：不同类型混合，按位置排序。"""
-    text = "[STRUCT:c1ccccc1] 和 [ARROW:c1ccccc1,c1ccccc1N,amination] 然后 [ENERGY:0,80,-20]"
+    text = "[STRUCT:c1ccccc1] 和 [STRUCT:CCO,label=乙醇] 然后 [ENERGY:0,80,-20]"
     tags = parse_tags(text)
     assert len(tags) == 3
-    assert [t.type for t in tags] == ["STRUCT", "ARROW", "ENERGY"]
+    assert [t.type for t in tags] == ["STRUCT", "STRUCT", "ENERGY"]
     # 严格升序
     positions = [t.start_pos for t in tags]
     assert positions == sorted(positions)
@@ -291,42 +247,8 @@ def test_struct_chiral_brackets():
     assert tags[0].args[0] == "[C@@H](N)(C)O"
 
 
-def test_arrow_bracket_smiles():
-    """补充：ARROW 反应物/产物含括号原子。"""
-    tags = parse_tags("[ARROW:O=[N+]([O-])c1ccccc1,c1ccccc1N,a]")
-    assert tags[0].args[0] == "O=[N+]([O-])c1ccccc1"
-    assert tags[0].args[1] == "c1ccccc1N"
 
 
-def test_reaction_basic():
-    """[REACTION] 基础解析：反应物 | 产物 | 条件。"""
-    tags = parse_tags("[REACTION:c1ccccc1;[O-][N+](=O)[O-]|O=[N+]([O-])c1ccccc1;O|H2SO4]")
-    assert len(tags) == 1
-    t = tags[0]
-    assert t.type == "REACTION"
-    assert t.args[0] == "c1ccccc1;[O-][N+](=O)[O-]"
-    assert t.args[1] == "O=[N+]([O-])c1ccccc1;O"
-    assert t.args[2] == "H2SO4"
-
-
-def test_reaction_no_conditions():
-    """[REACTION] 省略条件时，args[2] 为空串。"""
-    tags = parse_tags("[REACTION:C;O2|CO2]")
-    assert len(tags) == 1
-    t = tags[0]
-    assert t.args[0] == "C;O2"
-    assert t.args[1] == "CO2"
-    assert t.args[2] == ""
-
-
-def test_reaction_bracket_atoms():
-    """[REACTION] 反应物/产物含 [N+]/[O-] 括号原子，验证括号平衡扫描器。"""
-    tags = parse_tags("[REACTION:[O-][N+](=O)[O-]|O=[N+]([O-])c1ccccc1|]")
-    assert len(tags) == 1
-    t = tags[0]
-    assert t.args[0] == "[O-][N+](=O)[O-]"
-    assert t.args[1] == "O=[N+]([O-])c1ccccc1"
-    assert t.args[2] == ""
 
 
 def test_composite_basic():

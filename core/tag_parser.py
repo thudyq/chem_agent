@@ -5,10 +5,7 @@
 
 支持的标记（TRANSITION Section 2）：
     [STRUCT:SMILES] 或 [STRUCT:SMILES,label=名称] （复合容器内可再加 ,id=引用名）
-    [ARROW:反应物,产物,类型]
-    [REACTION:反应物1;反应物2;...|产物1;产物2;...|反应条件]
     [ENERGY:点序列]
-    [RETRO:目标,前体,转化名]   （逆合成空心箭头 ⇒）
     [REASONING]...[/REASONING]   （配对标记）
     [COMPOSITE:布局]...[/COMPOSITE]   （容器式复合标记，见下方说明）
 
@@ -47,14 +44,8 @@ class RenderTag:
 # 单标记类型的开启串
 _OPENERS = {
     "STRUCT": "[STRUCT:",
-    "ARROW": "[ARROW:",
-    "REACTION": "[REACTION:",
     "ENERGY": "[ENERGY:",
-    "CHARGE": "[CHARGE:",
     "HBOND": "[HBOND:",
-    "RETRO": "[RETRO:",
-    "XH": "[XH:",
-    "BOND": "[BOND:",
 }
 
 # REASONING 配对正则（内容不与括号冲突，可用正则）
@@ -251,17 +242,8 @@ def _parse_content(tag_type: str, content: str) -> list:
                 in_sup = False
                 rest2.append(t)
             return [type_, sup_items, ", ".join(rest2)]
-        # 顶层旧语法：[ARROW:反应物,产物,类型]
-        parts = content.split(",", 2)
-        while len(parts) < 3:
-            parts.append("")
-        return parts
-    if tag_type == "REACTION":
-        parts = content.split("|", 2)
-        while len(parts) < 3:
-            parts.append("")
-        return [p.strip() for p in parts]
-    if tag_type == "RETRO":
+        # 顶层旧语法（[ARROW:反应物,产物,类型]，B1 清理后不再解析顶层
+        # ARROW，此处仅为容器内缺 type= 的容错兜底）
         parts = content.split(",", 2)
         while len(parts) < 3:
             parts.append("")

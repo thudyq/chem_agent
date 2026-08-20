@@ -44,10 +44,9 @@ _SRC_DIRS = ["renderers", "core", "utils"]
 
 # 含 __main__ 离线演示的模块（子进程运行检查；联网/编译型入口不在此列）
 _DEMO_MODULES = [
-    "renderers.structure", "renderers.arrow", "renderers.reaction",
-    "renderers.composite", "renderers.energy", "renderers.newman",
-    "renderers.lewis", "renderers.stereo", "renderers.charge",
-    "renderers.retro", "renderers.layout",
+    "renderers.structure", "renderers.composite", "renderers.energy",
+    "renderers.newman", "renderers.lewis", "renderers.stereo",
+    "renderers.chair", "renderers.layout",
     "core.tag_parser", "core.tag_validator",
 ]
 

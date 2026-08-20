@@ -2,7 +2,7 @@
   {
     "id": "ethanol-ether-free-hydrogen",
     "source": "真实端到端 2026-08-03 乙醇→乙醚（LLM 从旧 prompt 示例学到 [H]O[H] 写法，RDKit 报孤立氢警告）",
-    "llm_output": "乙醇在浓硫酸下加热生成乙醚：\n[REACTION:C=C;[H]O[H]|CCO|H2SO4]\n水的显式氢写法应改为 O。",
+    "llm_output": "乙醇在浓硫酸下加热生成乙醚：\n[COMPOSITE:reaction][STRUCT:C=C,id=a][PLUS][STRUCT:[H]O[H],id=w][ARROW:type=single,H2SO4][STRUCT:CCO,id=b][/COMPOSITE]\n水的显式氢写法应改为 O。",
     "expect": {"valid": 1, "invalid": 0},
     "note": "游离氢写法不拦截（[H]O[H] 可解析），但应在 prompt 层避免；此样本验证不崩溃"
   },
@@ -51,7 +51,7 @@
   {
     "id": "reaction-trailing-comma",
     "source": "真实端到端 20260808 metrics 基线（乙醇→乙醚机理题，REACTION 产物带尾逗号：SMILES 'CC[OH2+],' 直达 RDKit 报错）",
-    "llm_output": "乙醇在浓硫酸催化下 140°C 脱水生成乙醚：\n[REACTION:CCO;CCO|CCOCC;CC[OH2+],|H2SO4, 140°C]",
+    "llm_output": "乙醇在浓硫酸催化下 140°C 脱水生成乙醚：\n[COMPOSITE:reaction][STRUCT:CCO,id=a][PLUS][STRUCT:CCO,id=b][ARROW:type=single,H2SO4, 140°C][STRUCT:CCOCC,id=c][PLUS][STRUCT:O,id=w,][/COMPOSITE]",
     "expect": {"valid": 1, "invalid": 0},
     "note": "尾逗号属良性笔误：SMILES 不含逗号，组分按 [;,] 拆分归一化后放行（20260808 起）"
   },
@@ -65,7 +65,7 @@
   {
     "id": "baseline-20260810-ether-catalyst-misplaced",
     "source": "真实 metrics 基线 20260810 乙醇→乙醚机理题（Q4）：LLM 把催化剂 H2SO4 误写进反应物 O=S(=O)(O)O 且只写 1 分子乙醇，方程式 C2H8O5S vs C4H12O2 不守恒",
-    "llm_output": "乙醇在浓硫酸催化下 140°C 脱水生成乙醚：\n[REACTION:CCO;O=S(=O)(O)O|CCOCC;O|H2SO4, 140°C]",
+    "llm_output": "乙醇在浓硫酸催化下 140°C 脱水生成乙醚：\n[COMPOSITE:reaction][STRUCT:CCO,id=a][PLUS][STRUCT:O=S(=O)(O)O,id=h][ARROW:type=single][STRUCT:CCOCC,id=c][PLUS][STRUCT:O,id=w][/COMPOSITE]",
     "expect": {"valid": 0, "invalid": 1},
     "note": "催化剂/辅助试剂应写箭头条件而非反应物列表；校验以两侧原子不守恒拦截（20260811 prompt 决策表已强化该规则）"
   },

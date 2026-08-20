@@ -182,34 +182,6 @@ def _fetch_pubchem_references(failures: list, user_question: str = "",
     return ("\nPubChem 参考（权威 SMILES，可对照修正你的标记）：\n"
             + "\n".join(f"- {r}" for r in refs))
 
-
-def _fetch_synrbl_balance(failures: list) -> str:
-    """化学校验失败的 REACTION 标记 → SynRBL 补全配平参考（失败静默返回空串）。
-
-    failures: [(RenderTag, 原因字符串), ...]。仅处理原因带「化学校验：」
-    的 REACTION 标记（两侧原子不守恒），且两侧物种全为合法 SMILES 才尝试。
-    """
-    try:
-        from utils.rxn_balancer import balance_reaction
-    except Exception:
-        return ""
-    hints = []
-    for tag, err in failures:
-        if tag.type != "REACTION" or not err:
-            continue
-        if "化学校验：" not in err:
-            continue
-        if len(tag.args) < 2:
-            continue
-        hint = balance_reaction(tag.args[0], tag.args[1])
-        if hint:
-            hints.append(f"- `{tag.raw[:80]}` → {hint}")
-    if not hints:
-        return ""
-    return "配平参考（SynRBL 自动补全，已通过守恒校验，可对照修正）：\n" \
-        + "\n".join(hints)
-
-
 def _context_around(text: str, tag) -> str:
     """标记在原文中的上下文（前后各 ~40 字符），帮助部分修正时理解语境。"""
     start = getattr(tag, "start_pos", None)
@@ -252,14 +224,6 @@ def _build_correction_prompt(user_question: str, original: str,
     if pubchem_ref:
         lines.append("")
         lines.append(pubchem_ref)
-
-    # SynRBL 配平兜底：化学校验失败（原子不守恒）的 REACTION 标记，尝试用
-    # SynRBL 自动补全缺失物种，把配平后的方程式作为修正参考（LLM 直接照抄）。
-    # 失败/超时/不可用一律静默，不影响原修正提示。
-    synrbl_ref = _fetch_synrbl_balance(failures)
-    if synrbl_ref:
-        lines.append("")
-        lines.append(synrbl_ref)
 
     lines += [
         "",

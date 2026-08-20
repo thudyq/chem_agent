@@ -7,24 +7,13 @@ render_structure 分派（旧标记解析入口已于 B3 清理移除）。
 """
 
 from .structure import render_structure
-from .arrow import render_arrow
-from .reaction import render_reaction
 from .composite import render_composite
 from .energy import render_energy
-from .charge import render_charge
-from .retro import render_retro
-from .xh_bond import render_bond, render_xh
 
 RENDERER_REGISTRY = {
     "STRUCT": render_structure,
-    "ARROW": render_arrow,
-    "REACTION": render_reaction,
     "COMPOSITE": render_composite,
     "ENERGY": render_energy,
-    "CHARGE": render_charge,
-    "RETRO": render_retro,
-    "XH": render_xh,
-    "BOND": render_bond,
 }
 
 

@@ -14,16 +14,6 @@ from app import _build_correction_prompt, process_question
 from renderers import registry
 
 
-@pytest.fixture(autouse=True)
-def no_synrbl(monkeypatch):
-    """本文件测试聚焦 P2 修正闭环，不涉 SynRBL——屏蔽真实导入（~23s）。
-
-    SynRBL 配平兜底的行为由 tests/test_rxn_balancer.py 单独覆盖。
-    """
-    monkeypatch.setattr(
-        "utils.rxn_balancer._load_synrbl", lambda: False)
-
-
 @pytest.fixture
 def flawed_renderers(monkeypatch):
     """STRUCT 渲染器：c1ccccc1 成功，其余（合法但模拟内部失败）返回失败串。"""
@@ -153,7 +143,7 @@ def test_correction_prompt_chem_guidance():
     """化学校验失败时修正 prompt 给出守恒修正提示（氧化/脱氢补物种）。"""
     from core.tag_parser import parse_tags
     from core.tag_validator import validate_tag
-    text = "乙醇氧化：[REACTION:CCO|CC=O|Cu, Δ]"
+    text = ("乙醇氧化：[COMPOSITE:reaction][STRUCT:CCO,id=a][PLUS]"            "[STRUCT:O,id=w][ARROW:type=single,Cu, Δ]"            "[STRUCT:CC=O,id=b][/COMPOSITE]")
     tag = parse_tags(text)[0]
     vr = validate_tag(tag)
     assert vr.reason.startswith("化学校验：")
@@ -170,7 +160,7 @@ def test_correction_prompt_invalid_smiles_guidance():
     （Drawbacks 十：银镜反应 [Ag(NH3)2]OH / NH3 裸写）。"""
     from core.tag_parser import parse_tags
     from core.tag_validator import validate_tag
-    text = "[REACTION:CC=O;2[Ag(NH3)2]OH|CC(=O)[O-];2Ag;3NH3;H2O|Δ]"
+    text = ("[COMPOSITE:reaction][STRUCT:CC=O,id=a][PLUS]"            "[STRUCT:2[Ag(NH3)2]OH,id=b][ARROW:type=single,Δ]"            "[STRUCT:CC(=O)[O-],id=c][/COMPOSITE]")
     tag = parse_tags(text)[0]
     vr = validate_tag(tag)
     prompt = _build_correction_prompt("银镜反应", text, [(tag, vr.reason)])
@@ -185,7 +175,7 @@ def test_correction_prompt_inorganic_salt_guidance():
     （KMnO4 写成 K[Mn](=O)(=O)=O / KMn(=O)=O——金属与中心原子无直接键）。"""
     from core.tag_parser import parse_tags
     from core.tag_validator import validate_tag
-    text = "[REACTION:CCO;K[Mn](=O)(=O)=O|CC=O|]"
+    text = ("[COMPOSITE:reaction][STRUCT:CCO,id=a][PLUS]"            "[STRUCT:K[Mn](=O)(=O)=O,id=k][ARROW:type=single]"            "[STRUCT:CC=O,id=b][/COMPOSITE]")
     tag = parse_tags(text)[0]
     vr = validate_tag(tag)
     assert "无效 SMILES" in vr.reason or "化学校验" in vr.reason

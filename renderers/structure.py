@@ -6,41 +6,7 @@ REACTION/COMPOSITE/XH/BOND 一致），弃用 mol2chemfigPy3：
   - 芳香小写（c1ccccc1）→ 全芳香环画圈
   - 凯库勒大写（C1=CC=CC=C1）→ 交替单双键
   - label 置于结构下方
-smiles_to_chemfig 保留为兼容函数（测试/外部引用），不再用于 STRUCT。
 """
-
-import contextlib
-
-
-def smiles_to_chemfig(smiles: str, aromatic: bool = True):
-    """SMILES → \\chemfig{...} 代码字符串；任何失败返回 None。
-
-    RDKit 预验证（不可用时跳过）+ mol2chemfigPy3 渲染。兼容函数——
-    STRUCT 已迁移到 TikZ 新逻辑，此函数仅供测试/外部引用保留。
-    aromatic=True 渲染芳香环为圆圈；False 渲染 Kekulé 交替单双键。
-    """
-    if not smiles or not isinstance(smiles, str):
-        return None
-    try:
-        from utils.rdkit_utils import validate_smiles
-        if not validate_smiles(smiles):
-            return None
-    except ImportError:
-        pass
-    try:
-        from mol2chemfigPy3 import mol2chemfig
-        from utils.rdkit_utils import FREE_H_COMPONENT_RE, mute_rdkit_warnings
-        # 孤立氢组分（[H+]/[H]/[H-]，合法组分）触发 RDKit RemoveHs 警告
-        # （无害），局部屏蔽
-        cm = (mute_rdkit_warnings() if FREE_H_COMPONENT_RE.search(smiles)
-              else contextlib.nullcontext())
-        with cm:
-            result = mol2chemfig(smiles, aromatic=aromatic, inline=True)
-    except Exception:
-        return None
-    if not isinstance(result, str) or not result.startswith("\\chemfig"):
-        return None
-    return result
 
 
 def render_structure(smiles: str, label: str = None, mode: str = "skeleton",

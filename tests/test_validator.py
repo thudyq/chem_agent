@@ -88,17 +88,6 @@ def test_group_abbrev_smiles_allowed():
         assert len(invalid) == 0, f"{text} → {[r.reason for r in invalid]}"
 
 
-def test_reaction_with_group_abbrev_balances():
-    """REACTION 含 R 的物种：dummy 占位不计入元素守恒（未知组成），
-    骨架元素与净电荷照常比对（20260815）。"""
-    pytest.importorskip("rdkit")
-    _, invalid = _validate("[REACTION:R-Br;[OH-]|R-OH;[Br-]|]")
-    assert len(invalid) == 0
-    # 骨架不守恒仍拦截（Br 消失、O 凭空出现）
-    _, invalid = _validate("[REACTION:R-Br|[OH-]|R-O|]")
-    assert len(invalid) == 1
-    assert "不守恒" in invalid[0].reason
-
 
 def test_empty_smiles_rejected():
     _, invalid = _validate("[STRUCT:]")
@@ -555,55 +544,24 @@ class TestChemicalChecks:
         _, invalid = _validate("[STRUCT:[O-]S(=O)(=O)[O-],label=SO42-]")
         assert len(invalid) == 0
 
-    def test_reaction_balanced_passes(self):
-        pytest.importorskip("rdkit")
-        _, invalid = _validate("[REACTION:C=C;O|CCO|H2SO4]")
-        assert len(invalid) == 0
 
-    def test_reaction_unbalanced_rejected(self):
-        pytest.importorskip("rdkit")
-        _, invalid = _validate("[REACTION:C=C|CCO|H2SO4]")
-        assert len(invalid) == 1
-        assert "化学校验" in invalid[0].reason
-        assert "不守恒" in invalid[0].reason
 
-    def test_ethanol_oxidation_unbalanced_rejected(self):
-        """用户报告（20260811）：乙醇氧化成乙醛只写骨架变化（CCO|CC=O）
-        漏氧化剂/脱氢产物——校验拦截。"""
-        pytest.importorskip("rdkit")
-        _, invalid = _validate("[REACTION:CCO|CC=O|Cu, Δ]")
-        assert len(invalid) == 1
-        assert "化学校验" in invalid[0].reason
-        assert "C2H6O" in invalid[0].reason and "C2H4O" in invalid[0].reason
 
-    def test_ethanol_oxidation_balanced_passes(self):
-        """配平的乙醇氧化（催化氧化 + 脱氢两写法）均放行。"""
-        pytest.importorskip("rdkit")
-        for text in (
-            "[REACTION:CCO;CCO;O=O|CC=O;CC=O;O;O|Cu, Δ]",  # 2EtOH+O2→2CH3CHO+2H2O
-            "[REACTION:CCO|CC=O;[H][H]|Cu, Δ]",            # EtOH→CH3CHO+H2
-        ):
-            _, invalid = _validate(text)
-            assert len(invalid) == 0, f"配平写法被误拦: {text}"
 
-    def test_reaction_second_attempt_still_unbalanced_rejected(self):
-        """用户报告二次修正：CCO;O|CC=O;O 两侧都加水仍不守恒——继续拦截。"""
-        pytest.importorskip("rdkit")
-        _, invalid = _validate("[REACTION:CCO;O|CC=O;O|Cu, Δ]")
-        assert len(invalid) == 1
-        assert "C2H8O2" in invalid[0].reason and "C2H6O2" in invalid[0].reason
 
     def test_degrade_text_chem_clean_for_user(self):
         """用户可见降级消息：去「化学校验：」前缀与括号详情/修正指导，
         只留主因；完整原因仍保留在 reason 中供 P2 修正与 metrics 使用。"""
         pytest.importorskip("rdkit")
-        _, invalid = _validate("[REACTION:CCO|CC=O|Cu, Δ]")
+        _, invalid = _validate(
+            "[COMPOSITE:reaction][STRUCT:CCO,id=a][PLUS][STRUCT:O,id=w]"
+            "[ARROW:type=single,Cu, Δ][STRUCT:CC=O,id=b][/COMPOSITE]")
         tag, reason = invalid[0].tag, invalid[0].reason
         shown = tv.degrade_text(tag, reason)
-        assert shown == "（反应方程式图示无法渲染：方程式两侧原子不守恒，已省略）"
+        assert shown == "（复合图图示无法渲染：第 1 步两侧原子不守恒，已省略）"
         assert "化学校验：" not in shown
         assert "辅助试剂" not in shown          # 修正指导不再面向用户
-        assert "C2H6O" in reason                # 完整原因仍保留
+        assert "C2H8O2" in reason               # 完整原因仍保留
 
     def test_degrade_text_non_chem_unchanged(self):
         """非化学校验原因（无效 SMILES）降级文本保持原样。"""
@@ -623,16 +581,14 @@ class TestChemicalChecks:
         shown = tv.degrade_text_friendly(invalid[0].tag)
         assert shown == "（结构式图示无法渲染，已省略）"
         assert "无效 SMILES" not in shown
-        _, invalid2 = _validate("[REACTION:CCO|CC=O|Cu, Δ]")
+        _, invalid2 = _validate(
+            "[COMPOSITE:reaction][STRUCT:CCO,id=a][PLUS][STRUCT:O,id=w]"
+            "[ARROW:type=single][STRUCT:CC=O,id=b][/COMPOSITE]")
         shown2 = tv.degrade_text_friendly(invalid2[0].tag)
-        assert shown2 == "（反应方程式图示无法渲染，已省略）"
+        assert shown2 == "（复合图图示无法渲染，已省略）"
         assert "不守恒" not in shown2
         assert "化学校验" not in shown2
 
-    def test_reaction_protonation_balanced_passes(self):
-        pytest.importorskip("rdkit")
-        _, invalid = _validate("[REACTION:CCO;[H+]|CC[OH2+]]")
-        assert len(invalid) == 0
 
     def test_composite_mech_balanced_passes(self):
         pytest.importorskip("rdkit")
@@ -665,12 +621,6 @@ class TestChemicalChecks:
             "[STRUCT:CCO][RXNARROW:CuO, Δ][STRUCT:CC=O][/COMPOSITE]")
         assert len(invalid) == 0
 
-    def test_bond_nonexistent_toplevel_rejected(self):
-        """A1：BOND 的 a-b 必须真实成键——非相邻原子拦截（顶层形式）。"""
-        pytest.importorskip("rdkit")
-        _, invalid = _validate("[BOND:CCC=O|0-2]")
-        assert len(invalid) == 1
-        assert "没有化学键" in invalid[0].reason
 
     def test_bond_nonexistent_composite_child_rejected(self):
         """A1：容器内子标记形式同样拦截非相邻键。"""
@@ -680,19 +630,7 @@ class TestChemicalChecks:
         assert len(invalid) == 1
         assert "没有化学键" in invalid[0].reason
 
-    def test_xh_no_available_h_rejected(self):
-        """A2：无隐含 H 的原子（[Cl-]）写 XH 拦截——幽灵 H。"""
-        pytest.importorskip("rdkit")
-        _, invalid = _validate("[XH:[Cl-]|0]")
-        assert len(invalid) == 1
-        assert "可用隐含 H 为 0" in invalid[0].reason
 
-    def test_xh_overstack_rejected(self):
-        """A2：叠加次数超过可用 H 数拦截（醛基碳仅 1 H 叠 2 次）。"""
-        pytest.importorskip("rdkit")
-        _, invalid = _validate("[XH:CCC=O|2,2]")
-        assert len(invalid) == 1
-        assert "可用隐含 H 为 1" in invalid[0].reason
 
     def test_xh_stacking_within_available_passes(self):
         """A2：CH2 叠 2 次（恰可用 2 个 H）放行。"""
@@ -736,69 +674,19 @@ class TestCoeffAndBalanceRules:
     def test_balance_reason_gives_element_diff(self):
         """守恒失败原因含两侧元素差——可操作化（H -2 提示脱氢漏 H2）。"""
         pytest.importorskip("rdkit")
-        _, invalid = _validate("[REACTION:CCO|CC=O|Cu, Δ]")
+        _, invalid = _validate(
+            "[COMPOSITE:reaction][STRUCT:CCO,id=a][PLUS][STRUCT:O,id=w]"
+            "[ARROW:type=single][STRUCT:CC=O,id=b][/COMPOSITE]")
         assert len(invalid) == 1
         assert "右侧相对左侧" in invalid[0].reason
-        assert "H -2" in invalid[0].reason
+        assert "H -4" in invalid[0].reason
 
-    def test_arrow_c_conservation(self):
-        """ARROW 当量检验：C 守恒通过（O/H 增减允许），C 不守恒拦截。"""
-        pytest.importorskip("rdkit")
-        _, invalid = _validate("[ARROW:CCO,CC=O,Cu, Δ]")       # C2=C2 氧化
-        assert len(invalid) == 0
-        _, invalid = _validate("[ARROW:2CCO,CCOCC,浓H2SO4,140℃]")  # C4=C4 系数
-        assert len(invalid) == 0
-        _, invalid = _validate("[ARROW:CCO,CCC,Cu]")            # C2≠C3
-        assert len(invalid) == 1
-        assert "碳原子数不守恒" in invalid[0].reason
 
-    def test_arrow_fractional_coeff_oh_allowed(self):
-        """ARROW 分数系数：O/H 分数原子放行（只比 C，1/2CCOCC 的 0.5O 忽略）。"""
-        pytest.importorskip("rdkit")
-        _, invalid = _validate("[ARROW:CCO,1/2CCOCC,浓H2SO4,140℃]")  # C2=C2
-        assert len(invalid) == 0
 
-    def test_arrow_fractional_c_rejected(self):
-        """ARROW 分数系数：C 为分数（1/2×奇数 C）拦截。"""
-        pytest.importorskip("rdkit")
-        _, invalid = _validate("[ARROW:1/2CCC,CCO,Cu]")         # 1.5C≠2C 分数 C
-        assert len(invalid) == 1
-        assert "物种无法计数" in invalid[0].reason
 
-    def test_arrow_formula_species(self):
-        """ARROW 物种可为化学式（O2/H2O）而非 SMILES（公式回退计数）。"""
-        pytest.importorskip("rdkit")
-        _, invalid = _validate("[ARROW:1/2O2,H2O,燃烧]")        # C0=C0
-        assert len(invalid) == 0
 
-    def test_arrow_illegal_coeff_rejected(self):
-        """ARROW 非法系数（1/3）拦截。"""
-        pytest.importorskip("rdkit")
-        _, invalid = _validate("[ARROW:1/3O2,H2O,x]")
-        assert len(invalid) == 1
 
-    def test_reaction_2b_esterification(self):
-        """2b 酯化：-H2O 补产物侧，差额抵消。"""
-        pytest.importorskip("rdkit")
-        _, invalid = _validate(
-            "[REACTION:CC(=O)O;CCO|CC(=O)OCC|浓H2SO4, Δ, -H2O]")
-        assert len(invalid) == 0
 
-    def test_reaction_2b_reversible_token_ignored(self):
-        """可逆令牌 ⇌ 不影响 2b 补足：与无 ⇌ 的配平结果一致（⇌ 无法解析
-        为化学式，被补足逻辑自然忽略）。"""
-        pytest.importorskip("rdkit")
-        _, invalid = _validate(
-            "[REACTION:CC(=O)O;CCO|CC(=O)OCC|浓H2SO4, Δ, ⇌, -H2O]")
-        assert len(invalid) == 0
-        _, invalid2 = _validate(
-            "[REACTION:CC(=O)O;CCO|CC(=O)OCC|浓H2SO4, Δ, -H2O]")
-        assert len(invalid2) == 0
-        # 未配平 + ⇌ 仍拦截（⇌ 不是配平物质）
-        _, invalid3 = _validate(
-            "[REACTION:CC(=O)O;CCO|CC(=O)OCC|⇌]")
-        assert len(invalid3) == 1
-        assert "化学校验" in invalid3[0].reason
 
     def test_reaction_2b_hydrolysis(self):
         """2b 水解：无符号 H2O 补反应物侧（催化剂 NaOH 不误判）。"""
@@ -831,35 +719,9 @@ class TestCoeffAndBalanceRules:
         _, invalid = _validate("[REACTION:C1CCCCC1|c1ccccc1|-3H2, Δ]")
         assert len(invalid) == 0
 
-    def test_reaction_2b_placeholder_forbidden(self):
-        """[O]/[H] 占位符禁止作为配平物质。"""
-        pytest.importorskip("rdkit")
-        _, invalid = _validate("[REACTION:CCO|CC=O|[O], Cu]")
-        assert len(invalid) == 1
-        assert "不守恒" in invalid[0].reason
 
-    def test_reaction_2b_no_declaration_rejected(self):
-        """无箭头声明的不守恒方程式拦截（乙醇→乙醛骨架缺 O2/H2）。"""
-        pytest.importorskip("rdkit")
-        _, invalid = _validate("[REACTION:CCO|CC=O|Cu, Δ]")
-        assert len(invalid) == 1
 
-    def test_reaction_2b_catalyst_not_mistaken(self):
-        """催化剂（NaOH）出现在条件但不匹配差额 → 不误判为补足。"""
-        pytest.importorskip("rdkit")
-        _, invalid = _validate(
-            "[REACTION:CC(=O)O;CCO|CC(=O)OCC|NaOH, Δ]")
-        assert len(invalid) == 1
 
-    def test_reaction_charge_conservation(self):
-        """2a 净电荷守恒：H+ 参与的质子化放行；电荷不平衡拦截。"""
-        pytest.importorskip("rdkit")
-        _, invalid = _validate("[REACTION:CCO;[H+]|CC[OH2+]]")
-        assert len(invalid) == 0
-        # 原子相同但电荷不等（[H] 中性 vs [H+] 带 +1）→ 纯电荷不守恒
-        _, invalid = _validate("[REACTION:[H]|[H+]]")
-        assert len(invalid) == 1
-        assert "电荷不守恒" in invalid[0].reason
 
     def test_reaction_2b_charge_supplement(self):
         """2b 补足物质可含电荷（[H+] 补反应物侧平衡电荷差）。"""
@@ -988,38 +850,10 @@ class TestMechArrowExplicitH:
         assert "格式错误" in invalid[0].reason
 
 
-def test_xh_toplevel_valid(fake_rdkit):
-    _, invalid = _validate("[XH:CC=O|1]")
-    assert len(invalid) == 0
 
 
-def test_xh_toplevel_out_of_range(fake_rdkit):
-    _, invalid = _validate("[XH:CC=O|9]")
-    assert len(invalid) == 1
-    assert "超出范围" in invalid[0].reason
 
 
-def test_xh_toplevel_missing_spec(fake_rdkit):
-    _, invalid = _validate("[XH:CC=O]")
-    assert len(invalid) == 1
-    assert "缺少标注参数" in invalid[0].reason
-
-
-def test_bond_toplevel_valid(fake_rdkit):
-    _, invalid = _validate("[BOND:CC=O|1-2]")
-    assert len(invalid) == 0
-
-
-def test_bond_toplevel_bad_format(fake_rdkit):
-    _, invalid = _validate("[BOND:CC=O|1x2]")
-    assert len(invalid) == 1
-    assert "格式错误" in invalid[0].reason
-
-
-def test_bond_toplevel_out_of_range(fake_rdkit):
-    _, invalid = _validate("[BOND:CC=O|1-9]")
-    assert len(invalid) == 1
-    assert "超出范围" in invalid[0].reason
 
 
 def test_composite_xh_child_unknown_id(fake_rdkit):
@@ -1165,15 +999,6 @@ def test_reaction_formula_species_only():
     assert len(invalid) == 0, f"纯化学式轨应通过: {invalid}"
 
 
-def test_reaction_mixed_tracks():
-    """混合轨：同一方程式中 SMILES 与化学式物种共存（乙醇氧化成乙醛）。"""
-    pytest.importorskip("rdkit")
-    text = ("[REACTION:CCO;[O-][Mn](=O)(=O)=O|CC=O|]")
-    _, invalid = _validate(text)
-    # 物种均可解析（SMILES + 化学式），但反应式不守恒（KMnO4 还原产物缺失）
-    assert len(invalid) == 1
-    assert "化学校验" in invalid[0].reason
-
 
 def test_reaction_formula_inorganic_salt():
     """化学式轨无机盐可解析（非 SMILES 但化学式合法）：高锰酸钾单物种。"""
@@ -1186,13 +1011,6 @@ def test_reaction_formula_inorganic_salt():
     cands3 = _parse_plain_formula("CH3COOH")
     assert cands3 and cands3[0][0] == {"C": 2, "H": 4, "O": 2}
 
-
-def test_reaction_unresolvable_species_rejected():
-    """既非 SMILES 也非化学式（占位符/乱码）仍被拦截，且保留「无效 SMILES」关键词。"""
-    pytest.importorskip("rdkit")
-    _, invalid = _validate("[REACTION:CCO;XYZABC|CC=O|]")
-    assert len(invalid) == 1
-    assert "无效 SMILES" in invalid[0].reason
 
 
 def test_formula_tail_digit_disambiguation():
@@ -1216,15 +1034,6 @@ def test_formula_tail_digit_disambiguation():
     assert f("Al3+") == ({"Al": 1}, 3)
     assert f("Fe3+") == ({"Fe": 1}, 3)
     assert f("OH-") == ({"O": 1, "H": 1}, -1)
-
-
-def test_reaction_formula_unbalanced_rejected():
-    """化学式轨同样受守恒约束：乙醇+氧气不守恒（缺产物水）被拦截。"""
-    pytest.importorskip("rdkit")
-    text = "[REACTION:CCO;O2|CH3COOH|]"
-    _, invalid = _validate(text)
-    assert len(invalid) == 1
-    assert "化学校验" in invalid[0].reason
 
 
 

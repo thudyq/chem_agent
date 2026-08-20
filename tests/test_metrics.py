@@ -18,7 +18,7 @@ def _mock_llm(monkeypatch):
     故 monkeypatch 目标为 llm_client 而非 metrics 模块。
     """
     answers = [
-        "苯：[STRUCT:c1ccccc1] 硝化：[REACTION:c1ccccc1|CC|H2SO4]",
+        "苯：[STRUCT:c1ccccc1] 硝化：[COMPOSITE:reaction][STRUCT:CCO,id=a][PLUS][STRUCT:O,id=w][ARROW:type=single][STRUCT:CC=O,id=b][/COMPOSITE]",
         "乙醇：[STRUCT:CCO]",
     ]
 
@@ -40,11 +40,11 @@ def test_by_type_accumulates(monkeypatch):
     assert bt["STRUCT"]["renderable"] == 2
     assert bt["STRUCT"]["render_ok"] == 2
     # REACTION×1 不守恒 → 非法 + 化学失败
-    assert bt["REACTION"]["tags"] == 1
-    assert bt["REACTION"]["valid"] == 0
-    assert bt["REACTION"]["invalid"] == 1
-    assert bt["REACTION"]["chem_invalid"] == 1
-    assert bt["REACTION"]["renderable"] == 0
+    assert bt["COMPOSITE"]["tags"] == 1
+    assert bt["COMPOSITE"]["valid"] == 0
+    assert bt["COMPOSITE"]["invalid"] == 1
+    assert bt["COMPOSITE"]["chem_invalid"] == 1
+    assert bt["COMPOSITE"]["renderable"] == 0
     # 合计与顶层统计一致
     assert stats["tags"] == 3
     assert stats["valid"] == 2
@@ -57,14 +57,14 @@ def test_format_by_type_table():
     by_type = {
         "STRUCT": {"tags": 2, "valid": 2, "invalid": 0, "chem_invalid": 0,
                    "renderable": 2, "render_ok": 2, "render_fail": 0},
-        "REACTION": {"tags": 1, "valid": 0, "invalid": 1, "chem_invalid": 1,
+        "COMPOSITE": {"tags": 1, "valid": 0, "invalid": 1, "chem_invalid": 1,
                      "renderable": 0, "render_ok": 0, "render_fail": 0},
     }
     out = metrics.format_by_type(by_type)
     assert "按标记类型统计" in out
     assert "类型" in out and "遵循率" in out
     assert "结构式" in out and "100.0%" in out      # STRUCT 中文名 + 100%
-    assert "反应方程式" in out and "0.0%" in out    # REACTION 中文名 + 0%
+    assert "复合图" in out and "0.0%" in out        # COMPOSITE 中文名 + 0%
     # 对齐：表头在首行、数据行随后
     lines = out.splitlines()
     assert lines[1] == "=============="
@@ -114,9 +114,9 @@ def test_evaluate_route_counts(monkeypatch):
         d = diagnostics
         if "机理" in q:   # 命中关键词 → 直 pro → 失败降级
             if responses is not None:
-                responses.append(f"机理标记文本：[REACTION:x]")
+                responses.append("机理标记文本：[COMPOSITE:reaction][STRUCT:CCO,id=a][ARROW][STRUCT:CC=O,id=b][/COMPOSITE]")
             d.append({"round": 0, "stage": "upgrade", "type": "REACTION",
-                      "raw": "[REACTION:x]", "reason": "化学校验：不守恒",
+                      "raw": "[COMPOSITE:reaction][STRUCT:CCO,id=a][ARROW][STRUCT:CC=O,id=b][/COMPOSITE]", "reason": "化学校验：不守恒",
                       "friendly": "（反应方程式图示无法渲染，已省略）",
                       "resolved": False})
             return "机理回答（反应方程式图示无法渲染，已省略）"
@@ -165,7 +165,7 @@ def test_format_route_report_and_detail():
              "upgrade_triggered": True, "degraded": True,
              "corrections_failed_after": False, "unresolved": 1,
              "text": "机理回答（反应方程式图示无法渲染，已省略）",
-             "llm_outputs": ["机理标记文本：[REACTION:x]"],
+             "llm_outputs": ["机理标记文本：[COMPOSITE:reaction][STRUCT:CCO,id=a][ARROW][STRUCT:CC=O,id=b][/COMPOSITE]"],
              "diag": [{"round": 0, "stage": "upgrade", "resolved": False,
                        "reason": "化学校验：不守恒"}]},
         ],

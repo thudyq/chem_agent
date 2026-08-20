@@ -62,11 +62,6 @@ def test_smoke_struct_no_lone_pairs():
     assert "\\fill" not in outs[0], "顶层 STRUCT 不应有孤对电子点"
 
 
-def test_smoke_reaction():
-    outs, bad = _render("[REACTION:CCO;CCO|CCOCC;O|H2SO4]")
-    assert len(outs) == 1 and bad == 0
-    _assert_ok(outs[0], "very thick")
-
 
 def test_smoke_composite_reaction_mech():
     text = ("[COMPOSITE:reaction_mech]"
@@ -158,16 +153,6 @@ def test_smoke_stereo_with_label():
     _assert_ok(outs[0], "\\node[below]")
 
 
-def test_smoke_xh_toplevel():
-    outs, bad = _render("[XH:CC(=O)O|3]")
-    assert len(outs) == 1 and bad == 0
-    _assert_ok(outs[0], "{H}")
-
-
-def test_smoke_bond_toplevel():
-    outs, bad = _render("[BOND:CCC=O|1-2]")
-    assert len(outs) == 1 and bad == 0
-    _assert_ok(outs[0], "very thick, red")
 
 
 def test_smoke_lewis():
@@ -278,11 +263,6 @@ def test_smoke_lewis_with_label():
     _assert_ok(outs[0], "\\node[below]")
 
 
-def test_smoke_charge():
-    outs, bad = _render("[CHARGE:OCC|0:δ-,1:δ+]")
-    assert len(outs) == 1 and bad == 0
-    _assert_ok(outs[0], "delta")
-
 
 def test_smoke_struct_bond_charge_params():
     """20260821：STRUCT 参数化标注（bond=/charge=）——单分子键突出 + δ± 节点。"""
@@ -307,16 +287,13 @@ def test_smoke_hbond_toplevel_rejected():
     assert bad == 1
 
 
-def test_smoke_retro():
-    outs, bad = _render(
-        "[RETRO:CC(=O)c1ccccc1,c1ccccc1,Friedel-Crafts acylation]")
-    assert len(outs) == 1 and bad == 0
-    _assert_ok(outs[0])
-
 
 def test_smoke_pipeline_inject():
     """完整管线冒烟：解析 → 校验 → 渲染 → 注入（无 LLM）。"""
-    text = "苯的结构：[STRUCT:c1ccccc1,label=苯] 和 [REACTION:CCO;CCO|CCOCC;O|H2SO4]。"
+    text = ("苯的结构：[STRUCT:c1ccccc1,label=苯] 和 "
+            "[COMPOSITE:reaction][STRUCT:CCO,id=a][PLUS][STRUCT:CCO,id=b]"
+            "[ARROW:type=single,H2SO4][STRUCT:CCOCC,id=c][PLUS][STRUCT:O,id=w]"
+            "[/COMPOSITE]。")
     tags = parse_tags(text)
     valid, invalid = validate_tags(tags)
     assert len(invalid) == 0, [r.reason for r in invalid]
@@ -326,6 +303,6 @@ def test_smoke_pipeline_inject():
         if out is not None:
             rendered[t.raw] = out
     result = inject_tags_into_text(text, tags, rendered)
-    assert "[STRUCT:" not in result and "[REACTION:" not in result, "标记应被替换"
+    assert "[STRUCT:" not in result and "[COMPOSITE:" not in result, "标记应被替换"
     assert "\\begin{tikzpicture}" in result
     assert "苯的结构" in result and "和" in result

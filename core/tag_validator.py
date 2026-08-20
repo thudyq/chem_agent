@@ -117,28 +117,16 @@ _MECH_ARROW_RE = re.compile(
 # 标记类型 → 中文名（降级提示用）
 _TAG_NAMES = {
     "STRUCT": "结构式",
-    "ARROW": "反应箭头",
-    "REACTION": "反应方程式",
     "COMPOSITE": "复合图",
     "ENERGY": "势能面",
-    "CHARGE": "电荷标注",
     "HBOND": "氢键标注",
-    "RETRO": "逆合成箭头",
-    "XH": "显式氢标注",
-    "BOND": "键突出标注",
 }
 
 # SMILES 字段提取器：输入 RenderTag，返回需要校验的 SMILES 字符串列表。
 # 返回 None 表示该标记类型不携带 SMILES（如 ENERGY / PLUS）。
 _SMILES_FIELDS = {
     "STRUCT": lambda a: [a[0]] if a and a[0] else [],
-    "ARROW": lambda a: [a[i] for i in (0, 1) if i < len(a) and a[i]],
-    "REACTION": lambda a: [s for _, s in _split_multi_coeff(a[0])]
-                          + [s for _, s in _split_multi_coeff(a[1])]
-                          if len(a) >= 2 else [],
-    "CHARGE": lambda a: [a[0]] if a and a[0] else [],
     "HBOND": lambda a: [a[0]] if a and a[0] else [],
-    "RETRO": lambda a: [a[i] for i in (0, 1) if i < len(a) and a[i]],
 }
 
 
@@ -146,7 +134,7 @@ def _split_multi(seg: str) -> list:
     """把多组分段拆为 SMILES 列表（过滤空串）。
 
     契约分隔符为分号；LLM 偶发用逗号分隔或写出尾逗号（SMILES 不含逗号），
-    按 [;,] 拆分归一化（与 renderers/reaction.py 保持一致）。
+    按 [;,] 拆分归一化。
     """
     return [s.strip() for s in re.split(r"[;,]", seg or "") if s.strip()]
 
@@ -524,29 +512,6 @@ def _arrow_supplement_matches(left, right, condition: str,
                 return True
     return False
 
-
-def _check_reaction_balance(args: list) -> str:
-    """T2-3：REACTION 配平（2a 全元素+电荷）或箭头补足（2b）。
-
-    2a：两侧全元素（含 H）与净电荷严格守恒（REACTION 为完整方程式契约）。
-    2b：不守恒时，条件字段中的具体物质 token 若恰好补足差额（元素+电荷）
-        视为已配平——无符号 token 补反应物侧、-X 补产物侧（如酯化 -H2O、
-        乙醇→乙酸 O2,-H2O）；禁止 [O]/[H] 占位符配平。催化剂不匹配差额自然忽略。
-    """
-    if len(args) < 2:
-        return ""
-    left = _sum_species(_split_multi_coeff(args[0]))
-    right = _sum_species(_split_multi_coeff(args[1]))
-    if left is None or right is None:
-        return ""  # 具体解析错误由 SMILES/系数校验层另行报告
-    reason = _balance_reason(left, right, strict_h=True, step="方程式")
-    if not reason:
-        return ""
-    cond = args[2] if len(args) > 2 else ""
-    if _arrow_supplement_matches(left, right, cond,
-                                 strict_h=True, check_charge=True):
-        return ""
-    return reason
 
 
 def _check_composite_balance(children: list, layout_name: str) -> str:
@@ -989,44 +954,6 @@ def _validate_newman(args: list) -> Tuple[bool, str]:
     return True, ""
 
 
-def _validate_arrow(args: list) -> Tuple[bool, str]:
-    """ARROW 校验：SMILES（支持系数前缀）+ 当量检验（C 原子数守恒）。
-
-    系数：整数或 n/2（n 奇数），如 2CCO、1/2O2。当量检验只比 C 原子数
-    （Σcoeff×C 两侧相等）——ARROW 为单→单骨架展示，O/H 增减是氧化/脱氢
-    的常态，不做全元素守恒（与 REACTION 2a 的区别）。
-    """
-    if len(args) < 2 or not args[0] or not args[1]:
-        return False, "ARROW 需要反应物与产物 SMILES"
-    sides = []
-    for smi in (args[0], args[1]):
-        if not isinstance(smi, str):
-            # 大一统架构的 [ARROW:type=...,sup=...] 仅容器内使用；
-            # 顶层 [ARROW] 仍是旧语法（反应物,产物,类型）
-            return False, "ARROW 参数格式错误（顶层 [ARROW] 仅支持 反应物,产物,类型）"
-        parsed = _parse_coeff(smi)
-        if parsed is None:
-            return False, f"非法系数「{smi}」"
-        coeff, bare = parsed
-        if not bare:
-            return False, "SMILES 为空"
-        sides.append((coeff, bare))
-    if not _RDKIT_OK:
-        return True, ""
-    # 物种须可计数（SMILES 或纯化学式 O2/H2/H2O 均可）
-    for _, bare in sides:
-        if _formula_or_smiles_counts(bare) is None:
-            return False, f"无效 SMILES「{bare}」"
-    # ARROW 当量检验只比 C 原子数（O/H 增减是氧化/脱氢常态，分数 O/H 允许）
-    left = _sum_c_counts(sides[:1])
-    right = _sum_c_counts(sides[1:])
-    if left is None or right is None:
-        return False, "ARROW 当量检验失败（物种无法计数）"
-    if left != right:
-        return False, (f"化学校验：反应箭头两侧碳原子数不守恒"
-                       f"（左 {left} vs 右 {right}，系数参与计算）")
-    return True, ""
-
 
 def _validate_energy(args: list) -> Tuple[bool, str]:
     if not args or not args[0]:
@@ -1452,83 +1379,9 @@ def validate_tag(tag: RenderTag) -> ValidationResult:
         ok, reason = _validate_energy(args)
         return ValidationResult(tag, ok, reason)
     if ttype == "STRUCT":
-        # 分子家族统一入口：LEWIS/STEREO/CHAIR/NEWMAN 已由解析层归一化为
-        # STRUCT + attrs.mode，mode 分派各画法的专项校验
+        # 分子家族统一入口：mode 分派各画法的专项校验
         ok, reason = _validate_struct_args(args, tag.attrs)
         return ValidationResult(tag, ok, reason)
-    if ttype == "REACTION":
-        # 通用 SMILES 字段检查 + 原子守恒（化学校验 T2-3）
-        smi_list = _SMILES_FIELDS["REACTION"](args)
-        if not smi_list:
-            return ValidationResult(tag, False, "缺少 SMILES 字段")
-        for smi in smi_list:
-            if not smi:
-                return ValidationResult(tag, False, "SMILES 为空")
-            # 双轨制：物种可以是合法 SMILES，也可以是教科书化学式
-            # （KMnO4 / H2SO4 / MnSO4 / K2SO4 / H2O / O2 / CH3COOH 等）。
-            # 失败原因保留「无效 SMILES」前缀——修正流程（app.py
-            # _SMILES_FAILURE_KEYWORDS / 修正 prompt 测试）按该关键词路由。
-            if not _smiles_ok(smi) and not _parse_plain_formula(smi):
-                return ValidationResult(
-                    tag, False, f"无效 SMILES 且非化学式「{smi}」")
-        if _RDKIT_OK:
-            reason = _check_reaction_balance(args)
-            if reason:
-                return ValidationResult(tag, False, reason)
-        return ValidationResult(tag, True)
-    if ttype == "ARROW":
-        # 通用 SMILES 字段检查 + 当量检验（C 原子数守恒，系数参与；O/H 随意）
-        ok, reason = _validate_arrow(args)
-        return ValidationResult(tag, ok, reason)
-    if ttype in ("XH", "BOND"):
-        # 顶层形式（[XH:SMILES|序号,...] / [BOND:SMILES|a-b,...]）；
-        # 容器内子标记形式（id 引用）由 _validate_composite 处理
-        if not args or not args[0] or not args[0].strip():
-            return ValidationResult(tag, False, "SMILES 为空")
-        smi = args[0].strip()
-        if not _smiles_ok(smi):
-            return ValidationResult(tag, False, f"无效 SMILES「{smi}」")
-        spec = (args[1] if len(args) > 1 else "").strip()
-        if not spec:
-            return ValidationResult(tag, False, f"{ttype} 缺少标注参数")
-        if _RDKIT_OK:
-            mol = _parse_mol(smi)
-            n = mol.GetNumAtoms() if mol else 0
-            xh_idxs = []
-            for tok in spec.split(","):
-                tok = tok.strip()
-                if not tok:
-                    continue
-                if ttype == "XH":
-                    try:
-                        i = int(tok)
-                    except ValueError:
-                        return ValidationResult(
-                            tag, False, f"XH 原子编号「{tok}」不是数字")
-                    if not 0 <= i < n:
-                        return ValidationResult(
-                            tag, False, f"XH 原子编号 {i} 超出范围 0~{n - 1}")
-                    xh_idxs.append(i)
-                else:
-                    m = re.fullmatch(r"(\d+)-(\d+)", tok)
-                    if not m:
-                        return ValidationResult(
-                            tag, False, f"BOND 键引用格式错误「{tok}」")
-                    a, b = int(m.group(1)), int(m.group(2))
-                    if not (0 <= a < n and 0 <= b < n):
-                        return ValidationResult(
-                            tag, False, f"BOND 键 {a}-{b} 超出范围 0~{n - 1}")
-                    # A1：a-b 必须真实成键（渲染端对不存在的键静默跳过）
-                    gba = getattr(mol, "GetBondBetweenAtoms", None)
-                    if gba is not None and gba(a, b) is None:
-                        return ValidationResult(
-                            tag, False,
-                            f"BOND 键 {a}-{b} 不存在（原子 {a} 与 {b} 之间没有化学键）")
-            # A2：XH 叠加不超过原子可用隐含 H 数
-            reason = _check_xh_h_usage(mol, xh_idxs, "XH ")
-            if reason:
-                return ValidationResult(tag, False, reason)
-        return ValidationResult(tag, True)
 
     # 通用带 SMILES 字段的标记：字段非空 + SMILES 合法
     fields = _SMILES_FIELDS.get(ttype)

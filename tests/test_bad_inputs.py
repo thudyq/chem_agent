@@ -50,13 +50,6 @@ def test_reasoning_unclosed_not_paired():
     assert len(parse_tags(text)) == 0
 
 
-def test_reaction_empty_segments():
-    text = "[REACTION:;|;|]"
-    tags = parse_tags(text)
-    assert len(tags) == 1 and tags[0].type == "REACTION"
-
-
-# ---------- 校验层（fake_rdkit 使 SMILES 语义校验生效） ----------
 
 def test_free_hydrogen_smiles_allowed(fake_rdkit):
     # 游离氢 [H] 是合法 SMILES（RDKit 可解析，渲染时仅警告不崩溃），
@@ -64,11 +57,6 @@ def test_free_hydrogen_smiles_allowed(fake_rdkit):
     _, invalid = validate_tags(parse_tags("[STRUCT:[H]]"))
     assert len(invalid) == 0
 
-
-def test_arrow_missing_fields_rejected(fake_rdkit):
-    _, invalid = validate_tags(parse_tags("[ARROW:,,]"))
-    assert len(invalid) == 1
-    assert "SMILES" in invalid[0].reason
 
 
 def test_newman_missing_angle_rejected():

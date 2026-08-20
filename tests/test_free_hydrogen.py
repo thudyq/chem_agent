@@ -11,7 +11,6 @@ import pytest
 
 from renderers.mol_primitives import prepare_mol, scale_mol_coords
 from renderers.layout import molecule_scope_lines
-from renderers.structure import smiles_to_chemfig
 
 rdkit = pytest.importorskip("rdkit", reason="rdkit 未安装，跳过渲染测试")
 
@@ -56,9 +55,3 @@ def test_hydride_renders_charge_circle_and_lone_pair():
     assert "\\node[draw, circle" in out          # ⊖ 电荷圈
     assert out.count("\\fill") == 2              # 1 对孤对电子
 
-
-def test_smiles_to_chemfig_keeps_free_hydrogen():
-    """mol2chemfig 路径（STRUCT/ARROW）保留并渲染孤立氢组分。"""
-    for smi in ("[H+]", "[H]", "[H-]", "CCO.[H+]"):
-        result = smiles_to_chemfig(smi)
-        assert result is not None and result.startswith("\\chemfig"), smi

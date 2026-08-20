@@ -3,8 +3,6 @@
 
 # === 核心化学处理 ===
 rdkit                          # SMILES 校验、分子式（utils/rdkit_utils.py）
-mol2chemfigPy3                 # SMILES -> chemfig/TikZ 代码（renderers/structure.py）
-synrbl                         # 方程式配平兜底（utils/rxn_balancer.py，可选；未装则自动跳过）
 
 # === LLM 客户端（Day 6-7）===
 requests                       # 调用 OpenAI 兼容 API
