@@ -180,3 +180,55 @@ def test_format_route_report_and_detail():
     assert "最终回答" in det and "苯是 [STRUCT:c1ccccc1]" in det
     assert "原始输出（主模型，渲染前）" in det
     assert "苯标记文本：[STRUCT:c1ccccc1]" in det
+
+
+def test_route_unresolved_dedup_and_corrections_semantics(monkeypatch):
+    """统计口径修复（20260820）：
+    - 未解决标记按最终回答中未正常渲染的标记数计（降级/错误串出现次数），
+      与 diag 轮次记录数无关（同一标记多轮失败不虚增、修正改写法不虚增）；
+    - 首轮失败但修正成功 → 不算"升级后修正仍失败"；
+    - 修正轮次（round>=1）仍失败 → 算"升级后修正仍失败"。"""
+
+    def fake_process(q, max_corrections=2, diagnostics=None, responses=None):
+        if q == "q_三轮失败":
+            # 同一标记失败 3 轮（diag 3 条），最终回答只降级 1 个标记
+            diagnostics.extend([
+                {"round": 0, "stage": "upgrade", "type": "COMPOSITE",
+                 "raw": "[COMPOSITE:x]", "reason": "e", "resolved": False},
+                {"round": 1, "stage": "upgrade", "type": "COMPOSITE",
+                 "raw": "[COMPOSITE:x]", "reason": "e", "resolved": False},
+                {"round": 2, "stage": "upgrade", "type": "COMPOSITE",
+                 "raw": "[COMPOSITE:x]", "reason": "e", "resolved": False},
+            ])
+            return "（复合图图示无法渲染，已省略）"
+        if q == "q_修正成功":
+            diagnostics.extend([
+                {"round": 0, "stage": "upgrade", "type": "STRUCT",
+                 "raw": "[STRUCT:XYZ]", "reason": "e", "resolved": True},
+            ])
+            return "正常回答"
+        # 两轮失败（diag 2 条 raw 不同），最终回答降级 2 个标记
+        diagnostics.extend([
+            {"round": 0, "stage": "upgrade", "type": "COMPOSITE",
+             "raw": "[COMPOSITE:y]", "reason": "e", "resolved": False},
+            {"round": 1, "stage": "upgrade", "type": "COMPOSITE",
+             "raw": "[COMPOSITE:y2]", "reason": "e", "resolved": False},
+        ])
+        return ("（复合图图示无法渲染，已省略）\n\n"
+                "（COMPOSITE 渲染失败：能量点序列格式错误）")
+
+    monkeypatch.setattr("app.process_question", fake_process)
+    stats = metrics.evaluate_route(["q_三轮失败", "q_修正成功", "q_两轮失败"])
+    by_q = {r["question"]: r for r in stats["responses"]}
+    # diag 3 条但最终回答只降级 1 个 → 未解决 = 1（不是 3）
+    assert by_q["q_三轮失败"]["unresolved"] == 1
+    assert by_q["q_三轮失败"]["corrections_failed_after"] is True
+    # 首轮失败但修正成功 → 既非未解决，也非"修正仍失败"
+    assert by_q["q_修正成功"]["unresolved"] == 0
+    assert by_q["q_修正成功"]["corrections_failed_after"] is False
+    # 降级块 + 渲染器错误串各算一个 → 未解决 = 2
+    assert by_q["q_两轮失败"]["unresolved"] == 2
+    assert by_q["q_两轮失败"]["corrections_failed_after"] is True
+    # 汇总：1 + 0 + 2 = 3
+    assert stats["unresolved_tags"] == 3
+    assert stats["corrections_after_upgrade"] == 2

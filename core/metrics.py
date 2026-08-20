@@ -130,9 +130,13 @@ def evaluate_route(questions: list, max_corrections: int = 2) -> dict:
     - main_pass: flash 一遍过（无失败，未升级）
     - upgrade_triggered: 命中难题关键词直 pro，或 flash 首跑失败升级
     - keyword_direct: 其中命中关键词直接走 pro 的题数
-    - unresolved_tags: 最终未解决（resolved=False）标记总数
+    - unresolved_tags: 最终回答中未正常渲染的标记数——按最终文本中的降级
+      标记计数（「图示无法渲染」/「反应箭头无法渲染」/渲染器错误串
+      「渲染失败：」，每个未正常渲染的标记恰好出现一次）；不用 diag 轮次
+      记录数（同一标记多轮失败/修正改写法都会虚增）
     - degraded_answers: 输出文本含"图示无法渲染"（降级）的回答数
-    - corrections_after_upgrade: 升级后修正仍失败的题数（diag 有 round>=1）
+    - corrections_after_upgrade: 升级后修正仍失败的题数——存在 round>=1 且
+      未解决的标记（修正尝试后仍失败；仅首轮失败但修正成功的题不计入）
     """
     from .config import settings
     import app as _app
@@ -163,9 +167,18 @@ def evaluate_route(questions: list, max_corrections: int = 2) -> dict:
         upgrade_triggered = (keyword_hit
                              or any(d["stage"] == "main" for d in diag)
                              or any(d["stage"] == "upgrade" for d in diag))
-        unresolved = [d for d in diag if d.get("resolved") is False]
+        # 未解决标记 = 最终回答中未正常渲染的标记数（以最终文本为准，
+        # 不用 diag 轮次记录）：
+        # 「图示无法渲染」= 校验降级/部分降级（去机理箭头）；「渲染失败：」=
+        # 渲染器错误串注入——每种未正常渲染的标记恰好各出现一次
+        unresolved_count = (
+            text.count("无法渲染") + text.count("渲染失败：")) if text else 0
         degraded = bool(text) and "图示无法渲染" in text
-        corrections_failed_after = any(d.get("round", 0) >= 1 for d in diag)
+        # 修正仍失败 = 存在"修正轮次（round>=1）仍未解决"的记录；
+        # 仅首轮失败但修正后解决的题不算（避免把修正成功误报为修正失败）
+        corrections_failed_after = any(
+            d.get("round", 0) >= 1 and d.get("resolved") is False
+            for d in diag)
 
         if keyword_hit:
             stats["keyword_direct"] += 1
@@ -173,7 +186,7 @@ def evaluate_route(questions: list, max_corrections: int = 2) -> dict:
             stats["upgrade_triggered"] += 1
         else:
             stats["main_pass"] += 1
-        stats["unresolved_tags"] += len(unresolved)
+        stats["unresolved_tags"] += unresolved_count
         if degraded:
             stats["degraded_answers"] += 1
         if corrections_failed_after:
@@ -184,7 +197,7 @@ def evaluate_route(questions: list, max_corrections: int = 2) -> dict:
             "upgrade_triggered": upgrade_triggered,
             "degraded": degraded,
             "corrections_failed_after": corrections_failed_after,
-            "unresolved": len(unresolved),
+            "unresolved": unresolved_count,
             "text": text or "",          # 最终回答全文（含渲染后 TikZ/降级提示）
             "llm_outputs": resp_out,     # 各阶段原始 LLM 输出（标记文本，渲染前）
             "diag": [
