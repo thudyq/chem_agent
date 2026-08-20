@@ -70,7 +70,7 @@ def test_energy_single_point_rejected():
 
 
 def test_mech_bad_arrow_syntax(fake_rdkit):
-    text = "[COMPOSITE:reaction_mech][STRUCT:CCl,id=a][RXNARROW]" \
+    text = "[COMPOSITE:reaction][STRUCT:CCl,id=a][ARROW:type=single]" \
            "[STRUCT:CO,id=b][MECHARROW:a:0>b][/COMPOSITE]"
     _, invalid = validate_tags(parse_tags(text))
     assert len(invalid) == 1

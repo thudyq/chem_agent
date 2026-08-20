@@ -19,17 +19,16 @@ rdkit = pytest.importorskip("rdkit", reason="rdkit 未安装，跳过渲染测�
 
 
 SN2_DEMO = (
-    "[COMPOSITE:reaction_mech]"
+    "[COMPOSITE:reaction]"
     "[STRUCT:CCl,label=CH3Cl]"
     "[PLUS]"
     "[STRUCT:[OH-],id=nu,label=OH-]"
-    "[RXNARROW]"
+    "[ARROW:type=single,SN2]"
     "[STRUCT:CO,label=CH3OH]"
     "[PLUS]"
     "[STRUCT:[Cl-],label=Cl-]"
     "[MECHARROW:nu:0>r0:0]"
     "[MECHARROW:r0:0-1>r0:1]"
-    "[CONDITION:SN2]"
     "[/COMPOSITE]"
 )
 
@@ -63,8 +62,8 @@ def test_sn2_full_scene():
 def test_cjk_label_caption_shown():
     """中文名称/角色标注仍显示在分子下方。"""
     out = _render(
-        "[COMPOSITE:reaction_mech]"
-        "[STRUCT:CCl,label=底物][RXNARROW][STRUCT:CO,label=产物]"
+        "[COMPOSITE:reaction]"
+        "[STRUCT:CCl,label=底物][ARROW:type=single][STRUCT:CO,label=产物]"
         "[/COMPOSITE]"
     )
     assert "底物" in out and "产物" in out
@@ -75,8 +74,8 @@ def test_radical_label_not_duplicated():
     """自由基 label（Cl·、·CH3）不重复显示在分子下方——含 · 的化学式
     不是角色标注（分子本身已画 Cl/CH3 + 单电子点）。"""
     out = _render(
-        "[COMPOSITE:reaction_mech]"
-        "[STRUCT:[Cl],id=cl,label=Cl·][RXNARROW][STRUCT:[CH3],id=me,label=·CH3]"
+        "[COMPOSITE:reaction]"
+        "[STRUCT:[Cl],id=cl,label=Cl·][ARROW:type=single][STRUCT:[CH3],id=me,label=·CH3]"
         "[MECHARROW:cl:0>>me:0]"
         "[/COMPOSITE]"
     )
@@ -87,8 +86,8 @@ def test_radical_label_not_duplicated():
 def test_long_label_wraps_multiline():
     """C2 标签自动换行：长中文标签在渲染输出中分多行 + align=center。"""
     out = _render(
-        "[COMPOSITE:reaction_mech]"
-        "[STRUCT:CCl,label=质子化乙醇的反应中间体][RXNARROW][STRUCT:CO,label=产物]"
+        "[COMPOSITE:reaction]"
+        "[STRUCT:CCl,label=质子化乙醇的反应中间体][ARROW:type=single][STRUCT:CO,label=产物]"
         "[/COMPOSITE]"
     )
     # 长标签拆为多行（含 \\\\ 行分隔）且节点启用 align=center
@@ -101,8 +100,8 @@ def test_long_label_wraps_multiline():
 def test_short_label_no_align_center():
     """短标签（≤ 3.5 宽）不换行，节点不引入 align=center。"""
     out = _render(
-        "[COMPOSITE:reaction_mech]"
-        "[STRUCT:CCl,label=底物][RXNARROW][STRUCT:CO,label=产物]"
+        "[COMPOSITE:reaction]"
+        "[STRUCT:CCl,label=底物][ARROW:type=single][STRUCT:CO,label=产物]"
         "[/COMPOSITE]"
     )
     assert "align=center" not in out
@@ -121,8 +120,8 @@ def test_bond_origin_arrow_bends_down():
 def test_numbering_flag():
     """正例4：numbering 标志打开原子序号标注。"""
     out = _render(
-        "[COMPOSITE:reaction_mech,numbering]"
-        "[STRUCT:CCl][RXNARROW][STRUCT:CO]"
+        "[COMPOSITE:reaction,numbering]"
+        "[STRUCT:CCl][ARROW:type=single][STRUCT:CO]"
         "[/COMPOSITE]"
     )
     assert "\\node[font=\\tiny, gray" in out
@@ -284,8 +283,8 @@ def test_row_layout_multi_step():
     """正例2：row 布局多步序列（多个内联条件 RXNARROW）。"""
     out = _render(
         "[COMPOSITE:row]"
-        "[STRUCT:C=C,label=乙烯][RXNARROW:H2O / H+]"
-        "[STRUCT:CCO,label=乙醇][RXNARROW:CuO, Δ]"
+        "[STRUCT:C=C,label=乙烯][ARROW:type=single,H2O / H+]"
+        "[STRUCT:CCO,label=乙醇][ARROW:type=single,CuO, Δ]"
         "[STRUCT:CC=O,label=乙醛]"
         "[/COMPOSITE]"
     )
@@ -299,11 +298,11 @@ def test_row_layout_four_step_sequence():
     out = _render(
         "[COMPOSITE:row]"
         "[STRUCT:C=C,label=乙烯]"
-        "[RXNARROW:H2O / H+]"
+        "[ARROW:type=single,H2O / H+]"
         "[STRUCT:CCO,label=乙醇]"
-        "[RXNARROW:CuO, Δ]"
+        "[ARROW:type=single,CuO, Δ]"
         "[STRUCT:CC=O,label=乙醛]"
-        "[RXNARROW:O2]"
+        "[ARROW:type=single,O2]"
         "[STRUCT:CC(=O)O,label=乙酸]"
         "[/COMPOSITE]"
     )
@@ -316,11 +315,11 @@ def test_row_layout_four_step_sequence():
 
 
 def test_row_rxnarrow_reversible():
-    """row 布局 [RXNARROW:⇌]：双向箭头四段拼成（两条横线 y=±0.05 + 两个尖），
+    """row 布局 [ARROW:type=single,⇌]：双向箭头四段拼成（两条横线 y=±0.05 + 两个尖），
     ⇌ 剥离、无 -> 箭头样式。"""
     out = _render(
         "[COMPOSITE:row]"
-        "[STRUCT:C=C,label=乙烯][RXNARROW:⇌]"
+        "[STRUCT:C=C,label=乙烯][ARROW:type=reversible]"
         "[STRUCT:CCO,label=乙醇]"
         "[/COMPOSITE]"
     )
@@ -336,25 +335,18 @@ def test_row_rxnarrow_reversible():
     assert "⇌" not in out
 
 
-def test_row_condition_reversible():
-    """row 布局 [CONDITION:⇌] 填充主箭头：同样渲染双向（四段）。"""
+def test_row_reversible_arrow():
+    """row 布局 [ARROW:type=reversible]：渲染双向可逆箭头（四段裸线）。"""
     out = _render(
         "[COMPOSITE:row]"
-        "[STRUCT:C=C,label=乙烯][RXNARROW]"
+        "[STRUCT:C=C,label=乙烯][ARROW:type=reversible]"
         "[STRUCT:CCO,label=乙醇]"
-        "[CONDITION:⇌]"
         "[/COMPOSITE]"
     )
     bars = re.findall(r"(?m)^  \\draw \(([-\d.]+),([-\d.]+)\) -- "
                       r"\(([-\d.]+),([-\d.]+)\)", out)
-    # 横线 = 两端 y 相同且 = ±0.05（尖的起点 y 也是 ±0.05，需排除）
-    y_plus = sum(1 for m in bars if abs(float(m[1]) - 0.05) < 0.001
-                 and abs(float(m[1]) - float(m[3])) < 0.001)
-    y_minus = sum(1 for m in bars if abs(float(m[1]) + 0.05) < 0.001
-                  and abs(float(m[1]) - float(m[3])) < 0.001)
-    assert y_plus == 1 and y_minus == 1     # 上/下横线各一
-    assert "\\draw[->" not in out
-    assert "⇌" not in out
+    assert len(bars) >= 2
+    assert "\\draw[->" not in out           # 双向由裸 \draw 段拼成
 
 
 def test_fishhook_arrows():
@@ -365,9 +357,9 @@ def test_fishhook_arrows():
     成键钩尖汇聚于两原子间空白中点而非原子标签；③ 退到 C1 的 0.26 正方形
     边缘外 0.05（≈0.18~0.23），不压标签。"""
     out = _render(
-        "[COMPOSITE:reaction_mech]"
+        "[COMPOSITE:reaction]"
         "[STRUCT:[Br],id=br][STRUCT:C=C,id=cc]"
-        "[RXNARROW]"
+        "[ARROW:type=single]"
         "[STRUCT:BrC[CH2]]"
         "[MECHARROW:br:0>>br:0+cc:0,cc:0-1>>br:0+cc:0,cc:0-1>>cc:1]"
         "[/COMPOSITE]"
@@ -488,21 +480,17 @@ def test_mech_arrow_origin_label_snap():
 
 def test_error_no_struct():
     """非 row 布局（reaction_mech/energy）无 STRUCT 仍拦截。"""
-    out = _render("[COMPOSITE:reaction_mech][RXNARROW][/COMPOSITE]")
+    out = _render("[COMPOSITE:reaction][ARROW:type=single][/COMPOSITE]")
     assert "缺少 [STRUCT]" in out
 
 
 def test_row_without_struct_renders():
     """row 布局允许无 [STRUCT]（纯箭头/连接符序列也合法），不再要求必须含 STRUCT。"""
-    out = _render("[COMPOSITE:row][PLUS][RXNARROW:条件][/COMPOSITE]")
+    out = _render("[COMPOSITE:row][PLUS][ARROW:type=single,条件][/COMPOSITE]")
     assert out.startswith("\\begin{tikzpicture}")
     assert "缺少 [STRUCT]" not in out
 
 
-def test_error_missing_rxnarrow():
-    """错误处理2：reaction_mech 布局缺少 RXNARROW。"""
-    out = _render("[COMPOSITE:reaction_mech][STRUCT:CCl][STRUCT:CO][/COMPOSITE]")
-    assert "RXNARROW" in out
 
 
 def test_error_unknown_layout():
@@ -514,7 +502,7 @@ def test_error_unknown_layout():
 def test_error_invalid_smiles():
     """错误处理4：无效 SMILES 报出组件 id。"""
     out = _render(
-        "[COMPOSITE:row][STRUCT:XYZ_INVALID,id=bad][RXNARROW][STRUCT:CC][/COMPOSITE]"
+        "[COMPOSITE:row][STRUCT:XYZ_INVALID,id=bad][ARROW:type=single][STRUCT:CC][/COMPOSITE]"
     )
     assert "无效 SMILES" in out and "bad" in out
 
@@ -522,8 +510,8 @@ def test_error_invalid_smiles():
 def test_unknown_mech_ref_skipped():
     """容错1：机理箭头引用未知 id / 越界原子，跳过不崩溃。"""
     out = _render(
-        "[COMPOSITE:reaction_mech]"
-        "[STRUCT:CCl][RXNARROW][STRUCT:CO]"
+        "[COMPOSITE:reaction]"
+        "[STRUCT:CCl][ARROW:type=single][STRUCT:CO]"
         "[MECHARROW:r9:0>r0:0,r0:99>r2:0]"
         "[/COMPOSITE]"
     )
@@ -952,11 +940,11 @@ def test_energy_layout_errors():
 
 
 def test_resonance_arrow_explicit():
-    """共振式（重构后）：row 布局 + 显式 [RESARROW] 手动插 ↔。"""
+    """共振式（重构后）：row 布局 + 显式 [ARROW:type=resonance] 手动插 ↔。"""
     out = _render(
         "[COMPOSITE:row]"
         "[STRUCT:C1=CC=CC=C1,label=式 I]"
-        "[RESARROW]"
+        "[ARROW:type=resonance]"
         "[STRUCT:C1C=CC=CC=1,label=式 II]"
         "[/COMPOSITE]"
     )
@@ -966,11 +954,11 @@ def test_resonance_arrow_explicit():
 
 
 def test_resonance_three_forms_two_arrows():
-    """三个共振极限式两个 ↔（显式 [RESARROW]）。"""
+    """三个共振极限式两个 ↔（显式 [ARROW:type=resonance]）。"""
     out = _render(
         "[COMPOSITE:row]"
-        "[STRUCT:C1=CC=CC=C1][RESARROW]"
-        "[STRUCT:C1C=CC=CC=1][RESARROW]"
+        "[STRUCT:C1=CC=CC=C1][ARROW:type=resonance]"
+        "[STRUCT:C1C=CC=CC=1][ARROW:type=resonance]"
         "[STRUCT:c1ccccc1]"
         "[/COMPOSITE]"
     )
@@ -979,7 +967,7 @@ def test_resonance_three_forms_two_arrows():
 
 
 def test_resonance_layout_deprecated_rejected():
-    """旧 resonance 布局已废弃：校验拦截（未知布局），须用 row + 显式 [RESARROW]。"""
+    """旧 resonance 布局已废弃：校验拦截（未知布局），须用 row + 显式 [ARROW:type=resonance]。"""
     import core.tag_validator as tv
     from core.tag_parser import parse_tags
     tags = parse_tags(
@@ -999,7 +987,7 @@ def test_newline_vertical_stacking():
         "[COMPOSITE:row]"
         "[STRUCT:CC(=O)[O-],label=羧酸根]"
         "[NEWLINE]"
-        "[STRUCT:CC(=O)[O-]][RESARROW][STRUCT:CC([O-])=O]"
+        "[STRUCT:CC(=O)[O-]][ARROW:type=resonance][STRUCT:CC([O-])=O]"
         "[/COMPOSITE]"
     )
     assert out.count("$\\leftrightarrow$") == 1

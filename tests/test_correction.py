@@ -340,8 +340,8 @@ def test_route_upgrade_unresolved(fake_rdkit, fake_renderers, monkeypatch):
 # ---------- 部分降级：COMPOSITE 仅 MECHARROW 报错时剔除箭头保留分子 ----------
 
 _BAD_MECH_COMPOSITE = (
-    "[COMPOSITE:reaction_mech]"
-    "[STRUCT:CCl,id=r0,label=CH3Cl][RXNARROW]"
+    "[COMPOSITE:reaction]"
+    "[STRUCT:CCl,id=r0,label=CH3Cl][ARROW:type=single]"
     "[STRUCT:CO,id=p0,label=CH3OH]"
     "[MECHARROW:r0:9>r0:0]"   # 9 越界（该分子只有 2 个重原子）→ 仅 MECHARROW 报错
     "[/COMPOSITE]"
@@ -373,7 +373,7 @@ def test_partial_render_not_for_non_mecharrow():
     from core.tag_parser import parse_tags
     from core.tag_validator import validate_tags
 
-    text = ("[COMPOSITE:reaction_mech][STRUCT:XYZABC,id=r0][RXNARROW]"
+    text = ("[COMPOSITE:reaction][STRUCT:XYZABC,id=r0][ARROW:type=single]"
             "[STRUCT:CO,id=p0][MECHARROW:r0:0>r0:0][/COMPOSITE]")
     tags = parse_tags(text)
     _, invalid = validate_tags(tags)

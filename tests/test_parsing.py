@@ -149,17 +149,17 @@ def test_composite_struct_arrow_token():
 def test_composite_prose_mention_not_swallowed():
     """正文文字提及 [COMPOSITE:...]（如"用 [COMPOSITE:row] 展示"）时不应
     与后面的真容器贪婪配对——真容器必须正常解析，不被幻影容器吞掉。"""
-    text = ("下面用 [COMPOSITE:reaction_mech,numbering] 展示序号：\n"
-            "[COMPOSITE:reaction_mech]"
-            "[STRUCT:CCl][RXNARROW][STRUCT:CO]"
+    text = ("下面用 [COMPOSITE:reaction,numbering] 展示序号：\n"
+            "[COMPOSITE:reaction]"
+            "[STRUCT:CCl][ARROW:type=single][STRUCT:CO]"
             "[/COMPOSITE]")
     tags = parse_tags(text)
     assert len(tags) == 1
     t = tags[0]
     assert t.type == "COMPOSITE"
-    assert t.args[0] == "reaction_mech"
+    assert t.args[0] == "reaction"
     assert "使用" not in t.raw and "下面" not in t.raw
-    assert len(t.args[1]) == 3  # 2 个 STRUCT + 1 个 RXNARROW
+    assert len(t.args[1]) == 3  # 2 个 STRUCT + 1 个 ARROW
 
 
 
@@ -254,30 +254,28 @@ def test_struct_chiral_brackets():
 def test_composite_basic():
     """[COMPOSITE] 基础解析：布局名 + 子标记列表。"""
     text = (
-        "[COMPOSITE:reaction_mech]"
+        "[COMPOSITE:reaction]"
         "[STRUCT:CCl,label=CH3Cl]"
         "[PLUS]"
         "[STRUCT:[OH-],label=OH-]"
-        "[RXNARROW]"
+        "[ARROW:type=single]"
         "[STRUCT:[Cl-]][PLUS][STRUCT:CO]"
         "[MECHARROW:r1:0>r0:0]"
-        "[CONDITION:SN2]"
         "[/COMPOSITE]"
     )
     tags = parse_tags(text)
     assert len(tags) == 1
     t = tags[0]
     assert t.type == "COMPOSITE"
-    assert t.args[0] == "reaction_mech"
+    assert t.args[0] == "reaction"
     children = t.args[1]
     assert [c.type for c in children] == [
-        "STRUCT", "PLUS", "STRUCT", "RXNARROW",
-        "STRUCT", "PLUS", "STRUCT", "MECHARROW", "CONDITION",
+        "STRUCT", "PLUS", "STRUCT", "ARROW",
+        "STRUCT", "PLUS", "STRUCT", "MECHARROW",
     ]
     assert children[0].args == ["CCl", "CH3Cl"]
     assert children[2].args == ["[OH-]", "OH-"]
     assert children[7].args == ["r1:0>r0:0"]
-    assert children[8].args == ["SN2"]
     assert text[t.start_pos:t.end_pos] == t.raw
 
 
@@ -292,14 +290,15 @@ def test_composite_inner_tags_not_toplevel():
     assert children[0].args[0] == "CC"
 
 
-def test_composite_rxnarrow_inline_condition():
-    """[COMPOSITE] 内 [RXNARROW:条件] 内联条件解析。"""
+def test_composite_arrow_inline_condition():
+    """[COMPOSITE] 内 [ARROW:type=single,条件] 内联条件解析。"""
     tags = parse_tags(
-        "[COMPOSITE:reaction_mech][STRUCT:C=C][RXNARROW:H2SO4][STRUCT:CCO][/COMPOSITE]"
+        "[COMPOSITE:reaction][STRUCT:C=C][ARROW:type=single,H2SO4][STRUCT:CCO][/COMPOSITE]"
     )
     children = tags[0].args[1]
-    assert [c.type for c in children] == ["STRUCT", "RXNARROW", "STRUCT"]
-    assert children[1].args == ["H2SO4"]
+    assert [c.type for c in children] == ["STRUCT", "ARROW", "STRUCT"]
+    assert children[1].args[0] == "single"
+    assert children[1].args[2] == "H2SO4"
 
 
 def test_composite_struct_with_id():

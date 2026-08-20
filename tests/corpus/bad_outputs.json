@@ -37,14 +37,14 @@
   {
     "id": "mecharrow-ghost-ref",
     "source": "LLM 引用不存在的组件 id（真实高频：原子编号/组件命名错误）",
-    "llm_output": "[COMPOSITE:reaction_mech][STRUCT:CCl,id=nu][RXNARROW][STRUCT:CO,id=pe][MECHARROW:ghost:0>pe:1][/COMPOSITE]",
+    "llm_output": "[COMPOSITE:reaction][STRUCT:CCl,id=nu][ARROW:type=single][STRUCT:CO,id=pe][MECHARROW:ghost:0>pe:1][/COMPOSITE]",
     "expect": {"valid": 0, "invalid": 1},
     "note": "MECHARROW 引用未知组件 ghost，校验层拦截"
   },
   {
     "id": "mecharrow-atom-out-of-range",
     "source": "LLM 原子编号越界（真实高频：未数清原子就写编号）",
-    "llm_output": "[COMPOSITE:reaction_mech][STRUCT:CCl,id=nu][RXNARROW][STRUCT:CO,id=pe][MECHARROW:nu:9>pe:0][/COMPOSITE]",
+    "llm_output": "[COMPOSITE:reaction][STRUCT:CCl,id=nu][ARROW:type=single][STRUCT:CO,id=pe][MECHARROW:nu:9>pe:0][/COMPOSITE]",
     "expect": {"valid": 0, "invalid": 1},
     "note": "nu 组件仅 2 原子，9 越界，校验层拦截"
   },
@@ -79,7 +79,7 @@
   {
     "id": "radical-h-abstraction-explicit-h-20260812",
     "source": "B1 修复后（20260812→20260821）：Q14 自由基夺氢步骤——20260821 起显式 H 是真实原子参与编号（a#k 语法废弃），用 C([H])([H])([H])[H] 写甲烷、ch4:1 直接引用 H 原子、断键写 0-1 键中点",
-    "llm_output": "甲烷氯代：\n[COMPOSITE:reaction_mech][STRUCT:ClCl,id=cl2,label=Cl2][RXNARROW:hν][STRUCT:[Cl],id=clA,label=Cl·][PLUS][STRUCT:[Cl],id=clB,label=Cl·][MECHARROW:cl2:0-1>>clA:0][MECHARROW:cl2:0-1>>clB:0][/COMPOSITE]\n[COMPOSITE:reaction_mech][STRUCT:[Cl],id=cl,label=Cl·][PLUS][STRUCT:C([H])([H])([H])[H],id=ch4,label=CH4][RXNARROW][STRUCT:Cl,id=hcl,label=HCl][PLUS][STRUCT:[CH3],id=me,label=·CH3][MECHARROW:cl:0>>cl:0+ch4:0][MECHARROW:ch4:1>>cl:0+ch4:0][MECHARROW:ch4:1>>me:0][/COMPOSITE]",
+    "llm_output": "甲烷氯代：\n[COMPOSITE:reaction][STRUCT:ClCl,id=cl2,label=Cl2][ARROW:type=single,hν][STRUCT:[Cl],id=clA,label=Cl·][PLUS][STRUCT:[Cl],id=clB,label=Cl·][MECHARROW:cl2:0-1>>clA:0][MECHARROW:cl2:0-1>>clB:0][/COMPOSITE]\n[COMPOSITE:reaction][STRUCT:[Cl],id=cl,label=Cl·][PLUS][STRUCT:C([H])([H])([H])[H],id=ch4,label=CH4][ARROW:type=single][STRUCT:Cl,id=hcl,label=HCl][PLUS][STRUCT:[CH3],id=me,label=·CH3][MECHARROW:cl:0>>cl:0+ch4:0][MECHARROW:ch4:1>>cl:0+ch4:0][MECHARROW:ch4:1>>me:0][/COMPOSITE]",
     "expect": {"valid": 2, "invalid": 0},
     "note": "链引发（Cl2 均裂）用键中点 a-b；夺氢用 SMILES 显式 H 原子序号（ch4:1，C—H 断键可写 ch4:0-1）；回归固化 B1 修复（20260821 a#k 废弃）"
   }

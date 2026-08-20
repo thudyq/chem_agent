@@ -5,35 +5,32 @@ LLM 在容器内显式列出结构组件、连接符与机理箭头，渲染器�
 放进统一 TikZ 坐标系组合绘制，实现“LLM 组装组件、渲染器组合绘制”的架构。
 
 容器语法：
-    [COMPOSITE:reaction_mech]
+    [COMPOSITE:reaction]
     [STRUCT:CCl,label=CH3Cl]          （id 省略，自动编号 r0）
     [PLUS]
     [STRUCT:[OH-],id=nu,label=OH-]    （显式 id）
-    [RXNARROW]                         （主反应箭头，兼作反应物/产物分界）
+    [ARROW:type=single,SN2]            （主反应箭头：type= 类型 + 条件）
     [STRUCT:CO,label=CH3OH]
     [PLUS]
     [STRUCT:[Cl-],label=Cl-]
     [MECHARROW:nu:0>r0:0]              （孤对电子进攻箭头，双电子；>> 为鱼钩）
     [MECHARROW:r0:0-1>r0:1]            （σ 键断裂箭头：从 C(0)-Cl(1) 键中点指向 Cl(1)）
-    [CONDITION:SN2]                    （主箭头上方的条件文本）
     [/COMPOSITE]
 
 布局种类：
-    reaction_mech: 反应式 + 机理场景，必须包含至少一个 [RXNARROW]；
-    row: 纯横向组件排列（共振式、多步序列等），[RXNARROW] 可选。
+    reaction: 反应式与多步序列（可叠加机理箭头），每个 ARROW 分隔一步；
+    row: 纯横向组件排列（并列结构、构象对比等），[NEWLINE] 换行。
     energy: 势能面 + 驻点结构（R-3）：容器内需一个 [ENERGY:点序列]，
         每个 STRUCT 用 at=点序号 挂到驻点上（pos=above/below 可选，默认 above）。
-    共振式（R-6）：任意布局内用显式连接符组装——
-        [RESARROW] 共振箭头 ↔（手动插入）；[NEWLINE] 换行（组件在多行中上下排列）。
-        含 [RESARROW] 时自动保留各极限式显式键级（Kekulé 式不统一芳香化）。
-    头部可追加标志：[COMPOSITE:reaction_mech,numbering] 打开原子序号标注
+    共振式（R-6）：用 [BLOCK]...[/BLOCK] 组装——块内 STRUCT 与
+        ARROW:type=resonance，自动画方括号并保留各极限式显式键级
+        （Kekulé 式不统一芳香化）。
+    头部可追加标志：[COMPOSITE:reaction,numbering] 打开原子序号标注
     （默认不显示；仅在碳原子较多、需要指明参与反应的原子时使用）。
 
 连接符规则：
     - 相邻 [STRUCT] 之间默认只留间距；需要“+”必须显式写 [PLUS]；
-    - [RXNARROW:条件] 可内联条件文本；[CONDITION:x] 填充第一个无内联条件的
-      主箭头；
-    - 多个 [RXNARROW] 可形成 A → B → C 多步序列。
+    - 多个 [ARROW] 可形成 A → B → C 多步序列。
 
 机理箭头引用：组件 id（显式 id= 或自动 r0/r1/...）+ 端点引用。
 端点可以是原子序号（SMILES 顺序，0 起），也可以是 "a-b" 形式的键中点
@@ -109,7 +106,7 @@ else:
 
 _MOL_GAP = 0.8    # 无连接符时相邻分子的水平间距
 _PLUS_W = 1.1     # [PLUS] 连接符占宽
-_ARR_W = 2.6      # [RXNARROW] 占宽
+_ARR_W = 2.6      # 主箭头占宽
 _ARR_PAD = 0.65   # 主箭头两端内缩余量（箭头实际长度 1.3）
 _MOL_SCALE = 0.8  # 分子坐标缩放因子（紧凑化，不影响字号）
 
@@ -129,7 +126,7 @@ _MECH_ARROW_RE = re.compile(
     r"(?:\s*\+\s*([A-Za-z0-9_]+)\s*:\s*(\d+))?\s*$"
 )
 
-_SUPPORTED_LAYOUTS = ("reaction_mech", "reaction", "row", "energy")
+_SUPPORTED_LAYOUTS = ("reaction", "row", "energy")
 
 # 氢键 spec：a>idB:b（a 为给体组件中显式 H 原子的真实序号——SMILES 显式
 # H 参与编号，如 [H]OCCO[H] 的 0 号是给体 H；与 MECHARROW 端点同规则）。
@@ -436,7 +433,6 @@ def _collect_components(children):
     structs = []
     sequence = []
     mech_specs = []
-    global_cond = ""
     annotations = {}
     blocks = []   # 大一统架构 [BLOCK] 共振块（内部子标记列表）
     for child in children:
@@ -481,15 +477,8 @@ def _collect_components(children):
                 sequence.append(("mol", len(structs) - 1))
         elif child.type == "PLUS":
             sequence.append(("plus",))
-        elif child.type == "RESARROW":
-            sequence.append(("resarrow",))
         elif child.type == "NEWLINE":
             sequence.append(("newline",))
-        elif child.type == "RXNARROW":
-            # 旧箭头标记（兼容保留）：正向 + 条件；kind=None 让主箭头函数
-            # 按条件中的 ⇌ 令牌自动识别（可逆）
-            cond = child.args[0].strip() if child.args else ""
-            sequence.append(("arrow", cond, None, []))
         elif child.type == "ARROW":
             # 大一统架构箭头：type= 类型、sup= 附件列表、其余为条件
             kind = (child.args[0] if child.args else "") or "single"
@@ -499,9 +488,6 @@ def _collect_components(children):
         elif child.type == "BLOCK":
             blocks.append(child.args[0] if child.args else [])
             sequence.append(("block", len(blocks) - 1))
-        elif child.type == "CONDITION":
-            if child.args and not global_cond:
-                global_cond = child.args[0].strip()
         elif child.type == "MECHARROW":
             if child.args:
                 mech_specs.extend(child.args[0].split(","))
@@ -519,7 +505,7 @@ def _collect_components(children):
             ref = child.args[0].strip()
             annotations.setdefault(ref, {}).setdefault("bonds", []).append(
                 child.args[1].strip())
-    return structs, sequence, mech_specs, global_cond, annotations, blocks
+    return structs, sequence, mech_specs, annotations, blocks
 
 
 def _molecule_with_annotations_lines(info: dict, *, show_numbers: bool,
@@ -818,8 +804,8 @@ def render_composite(layout: str, children: list) -> str:
     r"""[COMPOSITE] 渲染：容器内组件 → 统一坐标系单张 TikZ。
 
     参数:
-        layout: 布局名（reaction_mech / row），可追加逗号分隔的标志
-                （如 "reaction_mech,numbering" 打开原子序号标注）。
+        layout: 布局名（reaction / row / energy），可追加逗号分隔的标志
+                （如 "reaction,numbering" 打开原子序号标注）。
         children: 容器内子标记 RenderTag 列表（core.tag_parser 解析结果）。
 
     返回:
@@ -840,15 +826,13 @@ def render_composite(layout: str, children: list) -> str:
         )
     show_numbers = "numbering" in flags
 
-    structs, sequence, mech_specs, global_cond, annotations, blocks = \
+    structs, sequence, mech_specs, annotations, blocks = \
         _collect_components(children)
 
     # row 布局允许无 [STRUCT]（纯箭头/条件/连接符序列也合法，校验层已同步豁免）；
-    # reaction_mech / reaction / energy 仍要求至少一个组件（reaction 允许仅 BLOCK）
+    # reaction / energy 仍要求至少一个组件（reaction 允许仅 BLOCK）
     if not structs and not blocks and layout_name != "row":
         return "（COMPOSITE 渲染失败：容器内缺少 [STRUCT] 组件）"
-    if layout_name == "reaction_mech" and not any(el[0] == "arrow" for el in sequence):
-        return "（COMPOSITE 渲染失败：reaction_mech 布局需要 [RXNARROW] 标记主反应箭头位置）"
 
     # 含共振箭头时，极限式必须保留显式键级（跳过芳香化），否则不同
     # Kekulé 式会被统一芳香化成同一结构。
@@ -1126,12 +1110,6 @@ def render_composite(layout: str, children: list) -> str:
         main_arrows.extend([a.x1, a.x2, a.condition, yoff, a.kind, a.sup]
                            for a in row_layout.arrows)
 
-    if global_cond:
-        for arr in main_arrows:
-            if not arr[2]:
-                arr[2] = global_cond
-                break
-
     # HBOND 方向回灌：给体 H 朝向受体（X—H···Y 尽量直线）、受体 H 远离给体
     # （避免遮挡虚线）。布局 shift 已定，转各组件局部坐标供 XH 绘制使用。
     # （20260821：a#k 废弃后仅 [XH] 旧标记画 H 时受益；SMILES 显式 H 的
@@ -1401,45 +1379,40 @@ if __name__ == "__main__":
     demos = [
         (
             "SN2 机理（标准范本风格：孤对电子起点 + 键中点断键箭头）",
-            "[COMPOSITE:reaction_mech]"
+            "[COMPOSITE:reaction]"
             "[STRUCT:CCl,label=CH3Cl][PLUS][STRUCT:[OH-],id=nu,label=OH-]"
-            "[RXNARROW]"
+            "[ARROW:type=single,SN2]"
             "[STRUCT:CO,label=CH3OH][PLUS][STRUCT:[Cl-],label=Cl-]"
             "[MECHARROW:nu:0>r0:0][MECHARROW:r0:0-1>r0:1]"
-            "[CONDITION:SN2]"
             "[/COMPOSITE]",
         ),
         (
             "乙醇→乙醚 SN2 机理（质子化物种 + 断键箭头 + 水 H₂O）",
-            "[COMPOSITE:reaction_mech]"
+            "[COMPOSITE:reaction]"
             "[STRUCT:CCO,label=乙醇,id=nu][PLUS]"
             "[STRUCT:CC[OH2+],label=乙基氧鎓离子,id=pe]"
-            "[RXNARROW:H2SO4,140°C]"
+            "[ARROW:type=single,H2SO4,140°C]"
             "[STRUCT:CC[OH+]CC,label=质子化乙醚,id=ps][PLUS]"
             "[STRUCT:O,label=水,id=w]"
             "[MECHARROW:nu:2>pe:1][MECHARROW:pe:1-2>pe:2]"
             "[/COMPOSITE]",
         ),
         (
-            "多步序列（row 布局，多个 RXNARROW，内联条件）",
-            "[COMPOSITE:row]"
-            "[STRUCT:C=C,label=乙烯][RXNARROW:H2O / H+]"
-            "[STRUCT:CCO,label=乙醇][RXNARROW:CuO, Δ]"
+            "多步序列（reaction 布局，多个 ARROW，内联条件）",
+            "[COMPOSITE:reaction]"
+            "[STRUCT:C=C,label=乙烯][ARROW:type=single,H2O / H+]"
+            "[STRUCT:CCO,label=乙醇][ARROW:type=single,CuO, Δ]"
             "[STRUCT:CC=O,label=乙醛]"
             "[/COMPOSITE]",
         ),
         (
             "鱼钩箭头（自由基加成到 π 键：三个鱼钩写全电子去向）",
-            "[COMPOSITE:reaction_mech]"
+            "[COMPOSITE:reaction]"
             "[STRUCT:[Br],id=br][STRUCT:C=C,id=cc]"
-            "[RXNARROW]"
+            "[ARROW:type=single]"
             "[STRUCT:BrC[CH2]]"
             "[MECHARROW:br:0>>br:0+cc:0,cc:0-1>>br:0+cc:0,cc:0-1>>cc:1]"
             "[/COMPOSITE]",
-        ),
-        (
-            "错误：reaction_mech 缺少 RXNARROW",
-            "[COMPOSITE:reaction_mech][STRUCT:CCl][/COMPOSITE]",
         ),
         (
             "错误：未知布局",
@@ -1447,16 +1420,16 @@ if __name__ == "__main__":
         ),
         (
             "容错：机理箭头引用未知 id（应跳过，不崩溃）",
-            "[COMPOSITE:reaction_mech]"
-            "[STRUCT:CCl][RXNARROW][STRUCT:CO]"
+            "[COMPOSITE:reaction]"
+            "[STRUCT:CCl][ARROW:type=single][STRUCT:CO]"
             "[MECHARROW:r9:0>r0:0]"
             "[/COMPOSITE]",
         ),
         (
             "numbering 标志：打开原子序号标注",
-            "[COMPOSITE:reaction_mech,numbering]"
+            "[COMPOSITE:reaction,numbering]"
             "[STRUCT:CCl,label=CH3Cl][PLUS][STRUCT:[OH-],label=OH-]"
-            "[RXNARROW:SN2]"
+            "[ARROW:type=single,SN2]"
             "[STRUCT:CO,label=CH3OH][PLUS][STRUCT:[Cl-],label=Cl-]"
             "[MECHARROW:r1:0>r0:0,r0:0-1>r0:1]"
             "[/COMPOSITE]",
@@ -1471,19 +1444,19 @@ if __name__ == "__main__":
             "[/COMPOSITE]",
         ),
         (
-            "共振式：苯的两个 Kekulé 式（row + 显式 [RESARROW]）",
-            "[COMPOSITE:row]"
+            "共振式：苯的两个 Kekulé 式（BLOCK + ARROW:type=resonance）",
+            "[COMPOSITE:reaction][BLOCK]"
             "[STRUCT:C1=CC=CC=C1,label=Kekulé 式 I]"
-            "[RESARROW]"
+            "[ARROW:type=resonance]"
             "[STRUCT:C1C=CC=CC=1,label=Kekulé 式 II]"
-            "[/COMPOSITE]",
+            "[/BLOCK][/COMPOSITE]",
         ),
         (
             "NEWLINE 多行：主结构在上、共振式在下",
             "[COMPOSITE:row]"
             "[STRUCT:CC(=O)[O-],label=羧酸根]"
             "[NEWLINE]"
-            "[STRUCT:CC(=O)[O-]][RESARROW][STRUCT:CC([O-])=O]"
+            "[STRUCT:CC(=O)[O-]][ARROW:type=resonance][STRUCT:CC([O-])=O]"
             "[/COMPOSITE]",
         ),
     ]

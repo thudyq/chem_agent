@@ -64,9 +64,9 @@ def test_smoke_struct_no_lone_pairs():
 
 
 def test_smoke_composite_reaction_mech():
-    text = ("[COMPOSITE:reaction_mech]"
+    text = ("[COMPOSITE:reaction]"
             "[STRUCT:CCl,label=CH3Cl][PLUS][STRUCT:[OH-],id=nu,label=OH-]"
-            "[RXNARROW:SN2][STRUCT:CO,label=CH3OH][PLUS][STRUCT:[Cl-],label=Cl-]"
+            "[ARROW:type=single,SN2][STRUCT:CO,label=CH3OH][PLUS][STRUCT:[Cl-],label=Cl-]"
             "[MECHARROW:nu:0>r0:0][MECHARROW:r0:0-1>r0:1]"
             "[/COMPOSITE]")
     outs, bad = _render(text)
@@ -86,7 +86,7 @@ def test_smoke_composite_energy():
 
 
 def test_smoke_composite_row():
-    text = ("[COMPOSITE:row][STRUCT:C=C,label=乙烯][RXNARROW:H2O / H+]"
+    text = ("[COMPOSITE:row][STRUCT:C=C,label=乙烯][ARROW:type=single,H2O / H+]"
             "[STRUCT:CCO,label=乙醇][/COMPOSITE]")
     outs, bad = _render(text)
     assert len(outs) == 1 and bad == 0
@@ -95,7 +95,7 @@ def test_smoke_composite_row():
 
 def test_smoke_composite_resonance():
     text = ("[COMPOSITE:row][STRUCT:C1=CC=CC=C1]"
-            "[RESARROW][STRUCT:C1C=CC=CC=1][/COMPOSITE]")
+            "[ARROW:type=resonance][STRUCT:C1C=CC=CC=1][/COMPOSITE]")
     outs, bad = _render(text)
     assert len(outs) == 1 and bad == 0
     _assert_ok(outs[0], "\\leftrightarrow")
@@ -107,10 +107,10 @@ def test_smoke_ethanol_ether_mechanism():
     用正确的质子化物种标记（乙基氧鎓离子 CC[OH2+]、质子化乙醚 CC[OH+]CC），
     覆盖：多组分 + 电荷 + 孤对电子 + 断键箭头。替代端到端（不调用 LLM）。
     """
-    text = ("[COMPOSITE:reaction_mech]"
+    text = ("[COMPOSITE:reaction]"
             "[STRUCT:CCO,label=乙醇,id=nu][PLUS]"
             "[STRUCT:CC[OH2+],label=乙基氧鎓离子,id=pe]"
-            "[RXNARROW:H2SO4,140°C]"
+            "[ARROW:type=single,H2SO4,140°C]"
             "[STRUCT:CC[OH+]CC,label=质子化乙醚,id=ps][PLUS]"
             "[STRUCT:O,label=水,id=w]"
             "[MECHARROW:nu:2>pe:1][MECHARROW:pe:1-2>pe:2]"

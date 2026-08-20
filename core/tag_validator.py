@@ -97,10 +97,9 @@ def _parse_mol(smiles: str):
 # label 长度硬上限（字符数）。prompt 建议 ≤10（中文 ≤6），此处为兜底硬拦截
 LABEL_MAX_LEN = 24
 
-# COMPOSITE 支持的布局（与 renderers/composite.py 保持一致）
-# reaction：大一统架构新名（反应序列/共振/逆合成 + 守恒 + 机理）；
-# reaction_mech：旧名（兼容保留）；row/energy：保留
-COMPOSITE_LAYOUTS = ("reaction_mech", "reaction", "row", "energy")
+# COMPOSITE 支持的布局（与 renderers/composite.py 保持一致）：
+# reaction（反应式/多步序列 + 守恒 + 机理）、row（横向排列）、energy（势能面）
+COMPOSITE_LAYOUTS = ("reaction", "row", "energy")
 
 # 与 renderers/composite.py 相同的引用/端点提取正则
 # 端点支持两种：原子序号（0，含显式 H 原子）、键中点（0-1）。
@@ -391,9 +390,8 @@ def _sum_c_counts(species: list):
 def _balance_reason(left, right, strict_h: bool, step: str,
                     check_charge: bool = True) -> str:
     """两侧元素计数比对：非 H 元素必须相等；strict_h 时 H 也必须相等。
-    （reaction_mech 容忍 H±差——质子转移/去质子副产 H⁺ 常按惯例不画出。）
-    净电荷：check_charge=True（REACTION/2b）时两侧电荷必须相等；
-    reaction_mech 分步保持"旁观离子省略"惯例不比对电荷。"""
+    净电荷：check_charge=True 时两侧电荷必须相等；
+    False 时保持"旁观离子省略"惯例不比对。"""
     if left is None or right is None:
         return ""
     lc, rc = dict(left[0]), dict(right[0])
@@ -514,40 +512,6 @@ def _arrow_supplement_matches(left, right, condition: str,
 
 
 
-def _check_composite_balance(children: list, layout_name: str) -> str:
-    """T2-3：COMPOSITE 的 reaction_mech 布局按 RXNARROW 分步、逐步比对
-    非 H 元素守恒（容忍 H±差，质子转移/去质子副产 H⁺ 惯例不画出）；
-    row（多步合成序列允许省略辅助试剂）、energy 跳过。
-    跨步不求和——每步只查本步差额；每步可用 RXNARROW 条件做 2b 箭头补足
-    （非 H 元素差额被条件中具体物质 token 抵消，同 REACTION 2b 规则）。"""
-    if layout_name != "reaction_mech":
-        return ""
-    segments, conds, cur, has_arrow = [], [], [], False
-    for child in children:
-        if child.type == "STRUCT" and child.args:
-            cur.append(child.args[0].strip())
-        elif child.type == "RXNARROW":
-            has_arrow = True
-            segments.append(cur)
-            conds.append(child.args[0] if child.args else "")
-            cur = []
-    segments.append(cur)
-    conds.append("")
-    if not has_arrow:
-        return ""
-    for i in range(len(segments) - 1):
-        left = _sum_species(_split_multi_coeff(".".join(segments[i])))
-        right = _sum_species(_split_multi_coeff(".".join(segments[i + 1])))
-        # reaction_mech 保持旁观离子省略惯例：电荷不比对
-        reason = _balance_reason(left, right, strict_h=False,
-                                 check_charge=False, step=f"第 {i + 1} 步")
-        if reason:
-            # 本步 2b：条件字段补足非 H 元素差额（电荷/ H 差仍按惯例容忍）
-            if _arrow_supplement_matches(left, right, conds[i],
-                                         strict_h=False, check_charge=False):
-                continue
-            return reason
-    return ""
 
 
 # 箭头类型（大一统架构，20260819）：single=正向 → / reversible=可逆 ⇌ /
@@ -1065,11 +1029,11 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
                 "formula": is_formula,
             }
             # STRUCT 子标记本身递归校验（mode 分派）。容器内 mode 按布局
-            # 放开（20260821 扩充）：reaction/reaction_mech 禁 newman（投影
+            # 放开（20260821 扩充）：reaction 禁 newman（投影
             # 是整图语义，与反应序列不兼容）；row/energy 不限制。
             # stereo/chair/newman 组件预渲染为不透明单元，仅展示。
             mode = child.attrs.get("mode", "skeleton")
-            if mode == "newman" and layout_name in ("reaction", "reaction_mech"):
+            if mode == "newman" and layout_name == "reaction":
                 return False, (f"组件 {cid}: reaction 布局不支持 mode=newman"
                                f"（纽曼投影请用顶层 [STRUCT:...] 或 row 布局）")
             if mode in ("stereo", "chair", "newman") and \
@@ -1107,7 +1071,7 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
                     "arrow": False,
                 }
 
-    # row 布局允许无 [STRUCT]（纯箭头/条件/连接符序列也合法）；reaction_mech /
+    # row 布局允许无 [STRUCT]（纯箭头/条件/连接符序列也合法）；reaction /
     # energy 仍要求至少一个组件（机理引用与驻点挂靠都依赖组件）；reaction 布局
     # 允许仅含 BLOCK 共振块（块内 STRUCT 由 _check_block 校验）
     has_block = any(c.type == "BLOCK" for c in children)
@@ -1347,13 +1311,11 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
             if reason:
                 return False, reason
         if layout_name == "reaction":
-            # 大一统架构守恒：按 [ARROW] 分步 + 箭头类型 + sup 附件补足
+            # reaction 布局守恒：按 [ARROW] 分步 + 箭头类型 + sup 附件补足
+            # （row/energy 跳过守恒）
             reason = _check_reaction_sequence(children, comps)
-        else:
-            # 旧布局守恒（reaction_mech 分步 2b / row/energy 跳过）
-            reason = _check_composite_balance(children, layout_name)
-        if reason:
-            return False, reason
+            if reason:
+                return False, reason
     return True, ""
 
 

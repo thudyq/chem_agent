@@ -158,7 +158,7 @@ def test_composite_unknown_layout_rejected():
 
 def test_composite_no_struct_rejected():
     """非 row 布局无 STRUCT 仍拦截（reaction_mech 需要组件供机理引用）。"""
-    _, invalid = _validate("[COMPOSITE:reaction_mech][RXNARROW][/COMPOSITE]")
+    _, invalid = _validate("[COMPOSITE:reaction][ARROW:type=single][/COMPOSITE]")
     assert len(invalid) == 1
     assert "缺少 [STRUCT]" in invalid[0].reason
 
@@ -420,7 +420,7 @@ def test_block_id_global_unique():
 
 def test_composite_row_without_struct_passes():
     """row 布局允许无 [STRUCT]（纯箭头/条件/连接符序列合法）——要求已删除。"""
-    _, invalid = _validate("[COMPOSITE:row][PLUS][RXNARROW:条件][/COMPOSITE]")
+    _, invalid = _validate("[COMPOSITE:row][PLUS][ARROW:type=single,条件][/COMPOSITE]")
     assert len(invalid) == 0
     # row 无组件时 MECHARROW 引用仍拦截（无组件可引用）
     _, invalid2 = _validate("[COMPOSITE:row][MECHARROW:r0:0>r0:1][/COMPOSITE]")
@@ -437,7 +437,7 @@ def test_composite_energy_at_out_of_range(fake_rdkit):
 
 
 def test_composite_mecharrow_unknown_id(fake_rdkit):
-    text = ("[COMPOSITE:reaction_mech][STRUCT:CCl,id=r0][RXNARROW]"
+    text = ("[COMPOSITE:reaction][STRUCT:CCl,id=r0][ARROW:type=single]"
             "[STRUCT:CO,id=p0][MECHARROW:ghost:0>r0:0][/COMPOSITE]")
     _, invalid = _validate(text)
     assert len(invalid) == 1
@@ -445,7 +445,7 @@ def test_composite_mecharrow_unknown_id(fake_rdkit):
 
 
 def test_composite_mecharrow_atom_out_of_range(fake_rdkit):
-    text = ("[COMPOSITE:reaction_mech][STRUCT:CCl,id=r0][RXNARROW]"
+    text = ("[COMPOSITE:reaction][STRUCT:CCl,id=r0][ARROW:type=single]"
             "[STRUCT:CO,id=p0][MECHARROW:r0:5>p0:0][/COMPOSITE]")
     _, invalid = _validate(text)
     assert len(invalid) == 1
@@ -459,7 +459,7 @@ def test_composite_mecharrow_nonexistent_bond_rejected():
     旧校验只查序号范围不查键存在性，漏洞放行导致渲染到错误位置。
     """
     pytest.importorskip("rdkit")
-    text = ("[COMPOSITE:reaction_mech][STRUCT:CC=O,id=ald][RXNARROW]"
+    text = ("[COMPOSITE:reaction][STRUCT:CC=O,id=ald][ARROW:type=single]"
             "[STRUCT:CCO,id=p0][MECHARROW:ald:0>ald:0-2][/COMPOSITE]")
     _, invalid = _validate(text)
     assert len(invalid) == 1
@@ -469,7 +469,7 @@ def test_composite_mecharrow_nonexistent_bond_rejected():
 def test_bond_ref_gives_neighbor_hint():
     """键端点引用无键时，原因含原子实际连接——可操作化（帮助重数索引）。"""
     pytest.importorskip("rdkit")
-    text = ("[COMPOSITE:reaction_mech]"
+    text = ("[COMPOSITE:reaction]"
             "[STRUCT:O=S([O-])(=O)C1C=CC=C[CH+]1,id=sigma]"
             "[MECHARROW:sigma:3-8>sigma:8][/COMPOSITE]")
     _, invalid = _validate(text)
@@ -481,7 +481,7 @@ def test_bond_ref_gives_neighbor_hint():
 def test_composite_mecharrow_existing_bond_passes():
     """a-b 端点引用真实存在的键（乙醛 0-1）放行。"""
     pytest.importorskip("rdkit")
-    text = ("[COMPOSITE:reaction_mech][STRUCT:CC=O,id=ald][RXNARROW]"
+    text = ("[COMPOSITE:reaction][STRUCT:CC=O,id=ald][ARROW:type=single]"
             "[STRUCT:CCO,id=p0][MECHARROW:ald:0>ald:0-1][/COMPOSITE]")
     _, invalid = _validate(text)
     assert len(invalid) == 0
@@ -593,32 +593,40 @@ class TestChemicalChecks:
     def test_composite_mech_balanced_passes(self):
         pytest.importorskip("rdkit")
         _, invalid = _validate(
-            "[COMPOSITE:reaction_mech][STRUCT:CCl][PLUS][STRUCT:[OH-]]"
-            "[RXNARROW][STRUCT:CO][PLUS][STRUCT:[Cl-]][/COMPOSITE]")
+            "[COMPOSITE:reaction][STRUCT:CCl][PLUS][STRUCT:[OH-]]"
+            "[ARROW:type=single][STRUCT:CO][PLUS][STRUCT:[Cl-]][/COMPOSITE]")
         assert len(invalid) == 0
 
     def test_composite_mech_unbalanced_rejected(self):
         pytest.importorskip("rdkit")
         _, invalid = _validate(
-            "[COMPOSITE:reaction_mech][STRUCT:CCO][PLUS][STRUCT:C[OH2+]]"
-            "[RXNARROW][STRUCT:CCOCC][PLUS][STRUCT:O][/COMPOSITE]")
+            "[COMPOSITE:reaction][STRUCT:CCO][PLUS][STRUCT:C[OH2+]]"
+            "[ARROW:type=single][STRUCT:CCOCC][PLUS][STRUCT:O][/COMPOSITE]")
         assert len(invalid) == 1
         assert "化学校验" in invalid[0].reason
 
-    def test_composite_mech_deprotonation_tolerated(self):
-        """EAS 去质子：产物不画 H+ 副产（H 差容忍，非 H 元素守恒）。"""
+    def test_composite_mech_deprotonation_strict_h(self):
+        """EAS 去质子（reaction 布局 H 严格）：产物写 [H+] 放行；
+        省略 H+ 副产 → H 不守恒拦截（旧 reaction_mech 的 H 容忍已随
+        B2 清理移除）。"""
         pytest.importorskip("rdkit")
         _, invalid = _validate(
-            "[COMPOSITE:reaction_mech][STRUCT:c1ccccc1][PLUS][STRUCT:[N+](=O)=O]"
-            "[RXNARROW][STRUCT:O=[N+]([O-])c1ccccc1][/COMPOSITE]")
+            "[COMPOSITE:reaction][STRUCT:c1ccccc1][PLUS][STRUCT:[N+](=O)=O]"
+            "[ARROW:type=single][STRUCT:O=[N+]([O-])c1ccccc1]"
+            "[PLUS][STRUCT:[H+]][/COMPOSITE]")
         assert len(invalid) == 0
+        _, invalid2 = _validate(
+            "[COMPOSITE:reaction][STRUCT:c1ccccc1][PLUS][STRUCT:[N+](=O)=O]"
+            "[ARROW:type=single][STRUCT:O=[N+]([O-])c1ccccc1][/COMPOSITE]")
+        assert len(invalid2) == 1
+        assert "不守恒" in invalid2[0].reason
 
     def test_composite_row_layout_skipped(self):
         """row 多步合成序列（辅助试剂写箭头条件）不做守恒检查。"""
         pytest.importorskip("rdkit")
         _, invalid = _validate(
-            "[COMPOSITE:row][STRUCT:C=C][RXNARROW:H2O / H+]"
-            "[STRUCT:CCO][RXNARROW:CuO, Δ][STRUCT:CC=O][/COMPOSITE]")
+            "[COMPOSITE:row][STRUCT:C=C][ARROW:type=single,H2O / H+]"
+            "[STRUCT:CCO][ARROW:type=single,CuO, Δ][STRUCT:CC=O][/COMPOSITE]")
         assert len(invalid) == 0
 
 
@@ -735,8 +743,8 @@ class TestCoeffAndBalanceRules:
         pytest.importorskip("rdkit")
         # 第一步：乙醇 → 乙烯（-H2O 补本步产物侧）；第二步跨步不求和
         _, invalid = _validate(
-            "[COMPOSITE:reaction_mech]"
-            "[STRUCT:CCO][RXNARROW:-H2O][STRUCT:C=C]"
+            "[COMPOSITE:reaction]"
+            "[STRUCT:CCO][ARROW:type=single,-H2O][STRUCT:C=C]"
             "[/COMPOSITE]")
         assert len(invalid) == 0
 
@@ -744,26 +752,26 @@ class TestCoeffAndBalanceRules:
         """COMPOSITE 分步保持旁观离子省略惯例：电荷不比对。"""
         pytest.importorskip("rdkit")
         _, invalid = _validate(
-            "[COMPOSITE:reaction_mech]"
+            "[COMPOSITE:reaction]"
             "[STRUCT:CCl][PLUS][STRUCT:[OH-]]"
-            "[RXNARROW][STRUCT:CO][PLUS][STRUCT:[Cl-]]"
+            "[ARROW:type=single][STRUCT:CO][PLUS][STRUCT:[Cl-]]"
             "[/COMPOSITE]")
         assert len(invalid) == 0
 
 
 def test_composite_mecharrow_bond_form_midpoint_passes(fake_rdkit):
-    text = ("[COMPOSITE:reaction_mech][STRUCT:CCl,id=r0][RXNARROW]"
+    text = ("[COMPOSITE:reaction][STRUCT:CCl,id=r0][ARROW:type=single]"
             "[STRUCT:CO,id=p0][MECHARROW:r0:0>>r0:0+p0:0][/COMPOSITE]")
     _, invalid = _validate(text)
     assert len(invalid) == 0
-    text = ("[COMPOSITE:reaction_mech][STRUCT:CCl,id=r0][RXNARROW]"
+    text = ("[COMPOSITE:reaction][STRUCT:CCl,id=r0][ARROW:type=single]"
             "[STRUCT:CO,id=p0][MECHARROW:r0:0>>r0:0+p0:0][/COMPOSITE]")
     _, invalid = _validate(text)
     assert len(invalid) == 0
 
 
 def test_composite_mecharrow_midpoint_unknown_id(fake_rdkit):
-    text = ("[COMPOSITE:reaction_mech][STRUCT:CCl,id=r0][RXNARROW]"
+    text = ("[COMPOSITE:reaction][STRUCT:CCl,id=r0][ARROW:type=single]"
             "[STRUCT:CO,id=p0][MECHARROW:r0:0>r0:0+ghost:0][/COMPOSITE]")
     _, invalid = _validate(text)
     assert len(invalid) == 1
@@ -771,7 +779,7 @@ def test_composite_mecharrow_midpoint_unknown_id(fake_rdkit):
 
 
 def test_composite_mecharrow_midpoint_atom_out_of_range(fake_rdkit):
-    text = ("[COMPOSITE:reaction_mech][STRUCT:CCl,id=r0][RXNARROW]"
+    text = ("[COMPOSITE:reaction][STRUCT:CCl,id=r0][ARROW:type=single]"
             "[STRUCT:CO,id=p0][MECHARROW:r0:0>r0:0+p0:9][/COMPOSITE]")
     _, invalid = _validate(text)
     assert len(invalid) == 1
@@ -779,7 +787,7 @@ def test_composite_mecharrow_midpoint_atom_out_of_range(fake_rdkit):
 
 
 def test_composite_mecharrow_midpoint_bond_mixed_rejected(fake_rdkit):
-    text = ("[COMPOSITE:reaction_mech][STRUCT:CCl,id=r0][RXNARROW]"
+    text = ("[COMPOSITE:reaction][STRUCT:CCl,id=r0][ARROW:type=single]"
             "[STRUCT:CO,id=p0][MECHARROW:r0:0>r0:0-1+p0:0][/COMPOSITE]")
     _, invalid = _validate(text)
     assert len(invalid) == 1
@@ -796,10 +804,10 @@ class TestMechArrowExplicitH:
     def test_explicit_h_endpoint_passes(self):
         """ch4:1（显式 H 原子序号）引用 → 放行。"""
         pytest.importorskip("rdkit")
-        text = ("[COMPOSITE:reaction_mech]"
+        text = ("[COMPOSITE:reaction]"
                 "[STRUCT:[Cl],id=cl,label=Cl·][PLUS]"
                 "[STRUCT:C([H])([H])([H])[H],id=ch4,label=CH4]"
-                "[RXNARROW]"
+                "[ARROW:type=single]"
                 "[STRUCT:Cl,id=hcl,label=HCl][PLUS][STRUCT:[CH3],id=me,label=·CH3]"
                 "[MECHARROW:cl:0>>cl:0+ch4:0]"
                 "[MECHARROW:ch4:1>>cl:0+ch4:0]"
@@ -811,10 +819,10 @@ class TestMechArrowExplicitH:
     def test_explicit_h_bond_break_passes(self):
         """C–H 键断键（ch4:0-1 键中点）→ 放行（键真实存在）。"""
         pytest.importorskip("rdkit")
-        text = ("[COMPOSITE:reaction_mech]"
+        text = ("[COMPOSITE:reaction]"
                 "[STRUCT:[Cl],id=cl,label=Cl·][PLUS]"
                 "[STRUCT:C([H])([H])([H])[H],id=ch4,label=CH4]"
-                "[RXNARROW]"
+                "[ARROW:type=single]"
                 "[STRUCT:Cl,id=hcl,label=HCl][PLUS][STRUCT:[CH3],id=me,label=·CH3]"
                 "[MECHARROW:ch4:0-1>>me:0]"
                 "[/COMPOSITE]")
@@ -824,10 +832,10 @@ class TestMechArrowExplicitH:
     def test_explicit_h_out_of_range_rejected(self):
         """H 原子序号超出范围 → 拦截。"""
         pytest.importorskip("rdkit")
-        text = ("[COMPOSITE:reaction_mech]"
+        text = ("[COMPOSITE:reaction]"
                 "[STRUCT:[Cl],id=cl,label=Cl·][PLUS]"
                 "[STRUCT:C([H])([H])([H])[H],id=ch4,label=CH4]"
-                "[RXNARROW]"
+                "[ARROW:type=single]"
                 "[STRUCT:Cl,id=hcl,label=HCl][PLUS][STRUCT:[CH3],id=me,label=·CH3]"
                 "[MECHARROW:ch4:5>>me:0]"
                 "[/COMPOSITE]")
@@ -838,10 +846,10 @@ class TestMechArrowExplicitH:
     def test_legacy_a_k_syntax_rejected(self):
         """旧写法 ch4:0#1（a#k 语法，20260821 废弃）→ 格式错误拦截。"""
         pytest.importorskip("rdkit")
-        text = ("[COMPOSITE:reaction_mech]"
+        text = ("[COMPOSITE:reaction]"
                 "[STRUCT:[Cl],id=cl,label=Cl·][PLUS]"
                 "[STRUCT:C([H])([H])([H])[H],id=ch4,label=CH4]"
-                "[RXNARROW]"
+                "[ARROW:type=single]"
                 "[STRUCT:Cl,id=hcl,label=HCl][PLUS][STRUCT:[CH3],id=me,label=·CH3]"
                 "[MECHARROW:ch4:0#1>>me:0]"
                 "[/COMPOSITE]")
@@ -899,8 +907,8 @@ def test_composite_bond_child_out_of_range(fake_rdkit):
 
 
 def test_composite_real_mechanism_passes(fake_rdkit):
-    text = ("[COMPOSITE:reaction_mech][STRUCT:CCO,label=乙醇,id=nu][PLUS]"
-            "[STRUCT:CC[OH2+],label=质子化的乙醇,id=pe][RXNARROW]"
+    text = ("[COMPOSITE:reaction][STRUCT:CCO,label=乙醇,id=nu][PLUS]"
+            "[STRUCT:CC[OH2+],label=质子化的乙醇,id=pe][ARROW:type=single]"
             "[STRUCT:CC[OH+]CC,label=质子化的乙醚][PLUS][STRUCT:O,label=水]"
             "[MECHARROW:nu:2>pe:1][MECHARROW:pe:1-2>pe:2][/COMPOSITE]")
     _, invalid = _validate(text)
@@ -940,13 +948,13 @@ def test_benzene_style_consistency_warning():
 
     # 场景1：苯用凯库勒A，硝基苯用凯库勒B → 警告
     text = (
-        "[COMPOSITE:reaction_mech][STRUCT:C1C=CC=CC=1,label=苯,id=ar]"
+        "[COMPOSITE:reaction][STRUCT:C1C=CC=CC=1,label=苯,id=ar]"
         "[PLUS][STRUCT:[N+](=O)=O,label=NO2+,id=nu]"
-        "[RXNARROW][STRUCT:O=[N+]([O-])C([H])1C=CC=C[CH+]1,label=σ 络合物,id=sigma]"
+        "[ARROW:type=single][STRUCT:O=[N+]([O-])C([H])1C=CC=C[CH+]1,label=σ 络合物,id=sigma]"
         "[MECHARROW:ar:0-5>nu:0][/COMPOSITE]"
         "\n"
-        "[COMPOSITE:reaction_mech][STRUCT:O=[N+]([O-])C([H])1C=CC=C[CH+]1,label=σ 络合物,id=sigma]"
-        "[RXNARROW][STRUCT:O=[N+]([O-])C1=CC=CC=C1,label=硝基苯][PLUS][STRUCT:[H+],label=H+]"
+        "[COMPOSITE:reaction][STRUCT:O=[N+]([O-])C([H])1C=CC=C[CH+]1,label=σ 络合物,id=sigma]"
+        "[ARROW:type=single][STRUCT:O=[N+]([O-])C1=CC=CC=C1,label=硝基苯][PLUS][STRUCT:[H+],label=H+]"
         "[MECHARROW:sigma:4>sigma:3-9][/COMPOSITE]"
     )
     _, invalid = _validate(text)

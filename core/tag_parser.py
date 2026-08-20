@@ -12,8 +12,7 @@
 COMPOSITE 容器内允许的子标记：
     [STRUCT:SMILES,label=名称,id=r0]   结构组件；id 省略时按出现顺序自动编号 r0/r1/...
     [PLUS]                             加号连接符
-    [RXNARROW] 或 [RXNARROW:条件]      主反应箭头（兼作反应物/产物分界）
-    [CONDITION:文本]                   主反应箭头上方的条件文本
+    [ARROW:type=类型,sup=附件,条件]     主反应箭头（single/reversible/resonance/retro）
     [MECHARROW:src:atom>dst:atom]      机理弯箭头；>> 为鱼钩箭头
     [CHARGE:ref|idx:δ+,...]            组件 ref 上的部分电荷标注（R-2）
     [HBOND:ref|from-to,...]            组件 ref 内的氢键虚线（R-2）
@@ -87,14 +86,10 @@ def _only_child_tags_between(text: str, lo: int, hi: int) -> bool:
     return True
 
 # COMPOSITE 容器内允许的带子标记 opener（冒号形式）
-# ARROW 为大一统架构的新箭头标记（[ARROW:type=...,sup=...,条件]）；
-# RXNARROW/RESARROW/CONDITION 为旧箭头标记（兼容保留，新架构不用）
 _INNER_OPENERS = {
     "STRUCT": "[STRUCT:",
     "ARROW": "[ARROW:",
     "MECHARROW": "[MECHARROW:",
-    "CONDITION": "[CONDITION:",
-    "RXNARROW": "[RXNARROW:",
     "CHARGE": "[CHARGE:",
     "HBOND": "[HBOND:",
     "XH": "[XH:",
@@ -105,8 +100,6 @@ _INNER_OPENERS = {
 # COMPOSITE 容器内允许的无参子标记（整串匹配）
 _INNER_TOKENS = {
     "PLUS": "[PLUS]",
-    "RXNARROW": "[RXNARROW]",
-    "RESARROW": "[RESARROW]",
     "NEWLINE": "[NEWLINE]",
 }
 
@@ -248,7 +241,7 @@ def _parse_content(tag_type: str, content: str) -> list:
         while len(parts) < 3:
             parts.append("")
         return parts
-    if tag_type in ("MECHARROW", "CONDITION", "RXNARROW"):
+    if tag_type == "MECHARROW":
         return [content.strip()]
     if tag_type in ("XH", "BOND"):
         if "|" in content:
@@ -428,7 +421,7 @@ def parse_tags(text: str) -> List[RenderTag]:
         if inner_open != -1 and not _only_child_tags_between(
                 text, open_end + 1, inner_open):
             # 外层开头与内层开头之间夹有正文文字 → 外层是正文中的文字提及
-            # （如"用 [COMPOSITE:reaction_mech] 展示："），跳过它，让内层
+            # （如"用 [COMPOSITE:reaction] 展示："），跳过它，让内层
             # 真容器与闭合配对；之间只有子标记则是真嵌套（不支持），
             # 维持外层优先配对（兼容既有行为）
             search_from = open_end + 1
@@ -489,17 +482,16 @@ if __name__ == "__main__":
     print()
     composite_demo = (
         "SN2 机理：\n"
-        "[COMPOSITE:reaction_mech]\n"
+        "[COMPOSITE:reaction]\n"
         "[STRUCT:CCl,label=CH3Cl]\n"
         "[PLUS]\n"
         "[STRUCT:[OH-],id=nu,label=OH-]\n"
-        "[RXNARROW]\n"
+        "[ARROW:type=single,SN2]\n"
         "[STRUCT:CO,label=CH3OH]\n"
         "[PLUS]\n"
         "[STRUCT:[Cl-],label=Cl-]\n"
         "[MECHARROW:nu:0>r0:0]\n"
         "[MECHARROW:r0:0-1>r0:1]\n"
-        "[CONDITION:SN2]\n"
         "[/COMPOSITE]\n"
         "后续文字 [STRUCT:C]"
     )
