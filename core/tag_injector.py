@@ -19,15 +19,20 @@ def inject_tags_into_text(original_text: str, tags: List[RenderTag], rendered_ma
         rendered_map: {tag.raw: 渲染输出} 字典。
 
     返回:
-        标记被替换后的文本。REASONING 去标记保留思考内容；未渲染的标记原样保留。
+        标记被替换后的文本。REASONING 整体剥离（思考规划空间，不进入
+        最终回答）；未渲染的标记原样保留。
     """
     result = original_text
     # 从后往前替换：每次替换只影响该位置之后（已处理或无标记），不影响前序标记的偏移
     for tag in sorted(tags, key=lambda t: t.start_pos, reverse=True):
         if tag.type == "REASONING":
-            # REASONING 无渲染器：去掉 [REASONING]/[/REASONING] 包裹，保留思考内容
-            replacement = tag.args[0] if tag.args else ""
+            # REASONING 无渲染器：整体剥离——思考过程仅用于引导模型规划，
+            # 不出现在交付给用户的 content 中（20260820 起）
+            replacement = ""
         else:
             replacement = rendered_map.get(tag.raw, tag.raw)
         result = result[:tag.start_pos] + replacement + result[tag.end_pos:]
+    # 剥离 REASONING 可能留下连续空行，折叠为单个段落分隔
+    import re
+    result = re.sub(r"\n{3,}", "\n\n", result)
     return result
