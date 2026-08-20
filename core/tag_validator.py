@@ -751,6 +751,27 @@ def _check_chair_subs(smi: str, spec: str) -> Tuple[bool, str]:
     return True, ""
 
 
+def _check_radical_charge_conflict(mol) -> str:
+    """同一原子同时带形式电荷与自由基单电子 → 原因串（""=无冲突）。
+
+    同一原子电荷+自由基在教学场景几乎必是书写错误（如图 32 把 FeBr4- 的
+    负电荷画成 Fe⊖ 还带单电子点）；合法自由基离子的电荷与单电子在不同
+    原子上（超氧根 [O-][O]），不受影响。孤立小离子的 RDKit 电子簿记
+    （[O-]→1 单电子、[NH3+]→1 单电子）同属异常写法，一并拦截。
+    """
+    atoms_fn = getattr(mol, "GetAtoms", None)
+    if atoms_fn is None:
+        return ""   # fake mol（测试 fixture）：无原子遍历能力，跳过
+    for atom in atoms_fn():
+        fc = getattr(atom, "GetFormalCharge", lambda: 0)()
+        nre = getattr(atom, "GetNumRadicalElectrons", lambda: 0)()
+        if fc != 0 and nre > 0:
+            return (f"原子 {atom.GetIdx()}（{atom.GetSymbol()}）同时带形式电荷 "
+                    f"{fc:+d} 与 {nre} 个自由基单电子——同一原子不能既是离子又是"
+                    f"自由基（电荷与单电子应分开写在不同原子上，如 [O-][O]）")
+    return ""
+
+
 def _validate_struct_args(args: list, attrs: dict = None) -> Tuple[bool, str]:
     """校验单个 STRUCT 参数（顶层或容器内）：SMILES 非空 + label 长度 + 模式参数。
 
@@ -769,6 +790,12 @@ def _validate_struct_args(args: list, attrs: dict = None) -> Tuple[bool, str]:
     smi = args[0].strip()
     if not _smiles_ok(smi):
         return False, f"无效 SMILES「{smi}」"
+    if _RDKIT_OK:
+        mol = _parse_mol(smi)
+        if mol is not None:
+            conflict = _check_radical_charge_conflict(mol)
+            if conflict:
+                return False, conflict
     mode = attrs.get("mode", "skeleton")
     if mode not in _STRUCT_MODES:
         return False, (f"未知 STRUCT 模式「{mode}」，支持 "
