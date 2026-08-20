@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 """utils/tikz_utils.py — TikZ/chemfig 代码美化与包装工具。"""
 
-# chemfig + mol2chemfig 导言区（mol2chemfigPy3 输出含 \mcfcringle 等宏需后者）
+# chemfig + mol2chemfig 导言区（mol2chemfigPy3 输出含 \mcfcringle 等宏需后者；
+# arrows.meta 提供机理箭头的 Stealth 箭头尖/鱼钩半尖）
 _LATEX_PREAMBLE = r"""% --- 生成自 chem_agent 渲染引擎 ---
 \documentclass[border=10pt]{standalone}
+\usetikzlibrary{arrows.meta}
 \usepackage{chemfig}
 \usepackage{mol2chemfig}
 

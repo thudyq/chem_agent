@@ -1765,8 +1765,10 @@ def main_arrow_lines(x1: float, x2: float, condition: str = "", *,
             f"  \\draw ({x1:.2f},{y - h:.2f}) -- ({x1 + t:.2f},{y - h - t:.2f});",
         ]
     node = _node(above, "above") + _node(below, "below")
+    # 单向主箭头：Stealth 尖（2.5mm，比机理弯箭头的 2.2mm 略大——
+    # 主箭头视觉层级更高；20260820 起与机理箭头统一为 Stealth 风格）
     return [
-        f"  \\draw[->, {style}] ({x1:.2f},{y:.2f}) -- "
+        f"  \\draw[-{{Stealth[length=2.5mm]}}, {style}] ({x1:.2f},{y:.2f}) -- "
         f"({x2:.2f},{y:.2f}){node};",
     ]
 
@@ -2073,19 +2075,20 @@ def mech_arrow_tikz(fx: float, fy: float, tx: float, ty: float,
 
     lines = []
     if kind == "fishhook":
+        # 鱼钩（单电子）：Stealth 半箭头尖（[left] 只画左半边，arrows.meta）
+        # ——替代手拼 barb 短线，与双电子箭头风格一致（20260820 借鉴
+        # Gemini 输出样式；端点留白由上游 inset/aim_end 逻辑精确控制，
+        # 不叠加 shorten）
         lines.append(
-            f"  \\draw[thick, red] ({sx:.2f},{sy:.2f}) "
+            f"  \\draw[-{{Stealth[left, length=1.6mm, width=1.2mm]}}, thick, red] "
+            f"({sx:.2f},{sy:.2f}) "
             f".. controls ({mx:.2f},{my:.2f}) .. ({ex:.2f},{ey:.2f});"
         )
-        incoming = math.atan2(ey - my, ex - mx)
-        barb_ang = incoming + math.pi + math.radians(25)
-        blen = 0.18
-        bx = ex + blen * math.cos(barb_ang)
-        by = ey + blen * math.sin(barb_ang)
-        lines.append(f"  \\draw[thick, red] ({ex:.2f},{ey:.2f}) -- ({bx:.2f},{by:.2f});")
     else:
+        # 双电子：Stealth 标准箭头尖（替代默认 ->，尖端更饱满清晰）
         lines.append(
-            f"  \\draw[->, thick, red] ({sx:.2f},{sy:.2f}) "
+            f"  \\draw[-{{Stealth[length=2.2mm, width=1.5mm]}}, thick, red] "
+            f"({sx:.2f},{sy:.2f}) "
             f".. controls ({mx:.2f},{my:.2f}) .. ({ex:.2f},{ey:.2f});"
         )
     return lines

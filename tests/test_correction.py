@@ -363,7 +363,7 @@ def test_partial_render_without_mecharrows():
     assert out is not None
     assert out.startswith("\\begin{tikzpicture}")
     assert "\\begin{scope}" in out          # 分子组件保留
-    assert "\\draw[->, very thick]" in out  # 主反应箭头保留
+    assert "Stealth[length=2.5mm]" in out  # 主反应箭头保留
 
 
 def test_partial_render_not_for_non_mecharrow():

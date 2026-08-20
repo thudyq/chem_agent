@@ -216,6 +216,7 @@ def _preamble(cjk: bool) -> str:
         r"\documentclass[border=10pt]{standalone}",
         r"\usepackage{amsmath}",
         r"\usepackage{tikz}",
+        r"\usetikzlibrary{arrows.meta}",
         r"\usepackage{chemfig}",
         r"\usepackage{mol2chemfig}",
     ]

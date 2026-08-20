@@ -47,8 +47,8 @@ def test_sn2_full_scene():
     assert out.endswith("\\end{tikzpicture}")
     assert len(re.findall(r"\\node at \([-\d.]+,[-\d.]+\) \{\$\+\$\}", out)) == 2   # 两个 PLUS
     assert "SN$_2$" in out                # CONDITION 标注到主箭头（数字自动下标）
-    assert out.count("\\draw[->, very thick]") == 1   # 一个主反应箭头
-    assert out.count("\\draw[->, thick, red]") == 2   # 两条双电子弯箭头
+    assert out.count("Stealth[length=2.5mm]") == 1   # 一个主反应箭头（Stealth 尖）
+    assert out.count("Stealth[length=2.2mm") == 2   # 两条双电子弯箭头（Stealth 尖）
     assert "CH$_{3}$" in out              # 非环碳按结构简式写出
     # 电荷为右上角圆圈节点（规范第 3 条），OH- 与 Cl- 各一个
     assert out.count("\\node[draw, circle") == 2
@@ -135,7 +135,7 @@ def test_lone_pair_origin_offset():
     ox, oy = o_pos[0]
     # "OH" 后缀宽 1 字符 -> 符号中心左移 0.13；正上方槽位，点距 0.24 + 0.05
     expected = (ox - 0.13, oy + 0.29)
-    m = re.search(r"\\draw\[->, thick, red\] \(([-\d.]+),([-\d.]+)\)", out)
+    m = re.search(r"\[-\{Stealth\[length=[^\]]*\][^]]*\}, thick, red\] \(([-\d.]+),([-\d.]+)\)", out)
     assert m is not None
     start = (float(m.group(1)), float(m.group(2)))
     assert abs(start[0] - expected[0]) < 0.01
@@ -148,7 +148,7 @@ def test_arrow_aim_end_and_bond_break_inset():
     （向下 0.05），不再沿箭头方向（向右）。"""
     out = _render(SN2_DEMO)
     curves = re.findall(
-        r"\\draw\[->, thick, red\] \(([-\d.]+),([-\d.]+)\) .. controls "
+        r"\[-\{Stealth\[length=[^\]]*\][^]]*\}, thick, red\] \(([-\d.]+),([-\d.]+)\) .. controls "
         r"\(([-\d.]+),([-\d.]+)\) .. \(([-\d.]+),([-\d.]+)\);", out)
     assert len(curves) == 2
     atk, brk = curves[0], curves[1]
@@ -288,7 +288,7 @@ def test_row_layout_multi_step():
         "[STRUCT:CC=O,label=乙醛]"
         "[/COMPOSITE]"
     )
-    assert out.count("\\draw[->, very thick]") == 2
+    assert out.count("Stealth[length=2.5mm]") == 2
     assert "H$_2$O / H$^+$" in out or "H2O / H+" in out or "H$_2$O" in out
     assert "乙烯" in out and "乙醛" in out
 
@@ -307,7 +307,7 @@ def test_row_layout_four_step_sequence():
         "[/COMPOSITE]"
     )
     assert out.count("\\begin{scope}[shift=") == 4
-    assert out.count("\\draw[->, very thick]") == 3
+    assert out.count("Stealth[length=2.5mm]") == 3
     assert "H$_2$O" in out and "CuO, $\\Delta$" in out and "O$_2$" in out
     scopes = re.findall(r"\\begin\{scope\}\[shift=\{\(([-\d.]+),", out)
     xs = [float(x) for x in scopes]
@@ -364,11 +364,11 @@ def test_fishhook_arrows():
         "[MECHARROW:br:0>>br:0+cc:0,cc:0-1>>br:0+cc:0,cc:0-1>>cc:1]"
         "[/COMPOSITE]"
     )
-    assert "\\draw[thick, red]" in out              # 鱼钩曲线（无 -> 全箭头）
-    assert "\\draw[->, thick, red]" not in out
-    assert out.count("\\draw[thick, red]") == 6     # 3 钩 ×（曲线 + 半箭头 barb）
+    assert "Stealth[left," in out                  # 鱼钩曲线（Stealth 半尖）
+    assert "Stealth[length=2.2mm" not in out   # 无双电子全箭头
+    assert out.count("Stealth[left,") == 3           # 3 钩（Stealth 半尖替代手拼 barb）
     curves = re.findall(
-        r"\\draw\[thick, red\] \(([-\d.]+),([-\d.]+)\) .. controls "
+        r"Stealth\[left[^\]]*\][^\(]*\(([-\d.]+),([-\d.]+)\) .. controls "
         r"\(([-\d.]+),([-\d.]+)\) .. \(([-\d.]+),([-\d.]+)\);", out)
     assert len(curves) == 3                         # 三鱼钩写全电子去向
     # 弯向：Br· 单电子钩上弯（控制点 y>0），两个 π 键钩下弯（y<0）
@@ -1427,7 +1427,7 @@ def test_sup_mech_arrow_position():
     out = render_composite(*tags[0].args)
     assert "渲染失败" not in out
     start = re.search(
-        r"\\draw\[->, thick, red\] \(([-\d.]+),([-\d.]+)\)", out)
+        r"\[-\{Stealth\[length=[^\]]*\][^]]*\}, thick, red\] \(([-\d.]+),([-\d.]+)\)", out)
     assert start is not None
     sx, sy = float(start.group(1)), float(start.group(2))
     # nu 附件画在主箭头上方（y>0），机理箭头起点应在上方区域而非 (0,0) 虚空
