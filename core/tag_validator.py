@@ -604,6 +604,87 @@ def _check_proton_transfer_pairing(mech_children: list, comp_mols: dict,
     return ""
 
 
+def _check_sn2_attack_site(mech_children: list, comp_mols: dict) -> str:
+    """SN2 进攻位点校验（20260820 基线驱动，化学复审 4c）。
+
+    亲核进攻终点必须是与离去基团相连的 α-碳（基线病例：质子化乙醇
+    CC[OH2+] 被攻到 β-碳 0 号而非 α-碳 1 号）。
+
+    触发条件（全部满足才检查，保守防误报）：
+    - 双电子箭头（鱼钩豁免），起点为杂原子序号（孤对进攻模式）；
+    - 终点为另一组件的碳原子（同组件成键/环化不查）；
+    - 终点组件全饱和（无多重键——共轭/羰基进攻模式多样，不查）；
+    - 终点组件含离去基团（卤素，或带正电的 O 氧鎓）。
+    检查：终点碳的邻居中必须含离去基团原子；否则给出正确 α-碳序号建议。
+    """
+    def _atom(mol, idx):
+        gai = getattr(mol, "GetAtomWithIdx", None)
+        if gai is None or not (0 <= idx < mol.GetNumAtoms()):
+            return None
+        return gai(idx)
+
+    def _leaving_groups(mol):
+        out = set()
+        for atom in getattr(mol, "GetAtoms", list)():
+            num = getattr(atom, "GetAtomicNum", lambda: 0)()
+            fc = getattr(atom, "GetFormalCharge", lambda: 0)()
+            if num in (9, 17, 35, 53) or (num == 8 and fc > 0):
+                out.add(atom.GetIdx())
+        return out
+
+    def _saturated(mol):
+        for b in getattr(mol, "GetBonds", list)():
+            if b.GetBondTypeAsDouble() >= 1.5:
+                return False
+        return True
+
+    for child in mech_children:
+        if not child.args or not child.args[0]:
+            continue
+        for spec in child.args[0].split(","):
+            spec = spec.strip()
+            if not spec or ">>" in spec:
+                continue
+            m = _MECH_ARROW_RE.match(spec)
+            if not m or m.group(6) is not None:
+                continue
+            src_id, src_pt, dst_id, dst_pt = \
+                m.group(1), m.group(2), m.group(4), m.group(5)
+            if not (src_pt.isdigit() and dst_pt.isdigit()):
+                continue    # 起点非原子（π/σ 键进攻）不查
+            if dst_id == src_id:
+                continue    # 同组件成键不查
+            smol, dmol = comp_mols.get(src_id), comp_mols.get(dst_id)
+            if smol is None or dmol is None:
+                continue
+            s_atom = _atom(smol, int(src_pt))
+            d_atom = _atom(dmol, int(dst_pt))
+            if s_atom is None or d_atom is None:
+                continue
+            s_num = getattr(s_atom, "GetAtomicNum", lambda: 0)()
+            if s_num in (1, 6):      # 起点须为杂原子（孤对供体）
+                continue
+            if getattr(d_atom, "GetAtomicNum", lambda: 0)() != 6:
+                continue    # 终点须为碳
+            if not _saturated(dmol):
+                continue    # 含多重键（羰基/共轭）不查
+            lgs = _leaving_groups(dmol)
+            if not lgs:
+                continue    # 无离去基团（如碳正离子）不查
+            alpha = set()
+            for lg in lgs:
+                for n in _atom(dmol, lg).GetNeighbors():
+                    if getattr(n, "GetAtomicNum", lambda: 0)() == 6:
+                        alpha.add(n.GetIdx())
+            if alpha and int(dst_pt) not in alpha:
+                hint = (f"，应改为 {dst_id}:{sorted(alpha)[0]}"
+                        if len(alpha) == 1 else "")
+                return (f"SN2 进攻位点错误：「{src_id}:{src_pt}>{dst_id}:"
+                        f"{dst_pt}」的终点碳未连离去基团——亲核进攻目标"
+                        f"应是与离去基团相连的 α-碳{hint}")
+    return ""
+
+
 def _opaque_comp(comps: dict, cid: str) -> bool:
     """组件是否为立体画法组件（stereo/chair/newman，仅展示的不透明单元，
     不支持 MECHARROW/HBOND/CHARGE/XH/BOND 等原子级引用）。"""
@@ -1420,6 +1501,10 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
     if _RDKIT_OK:
         # 质子转移配对（4b）：双电子箭头引用显式 H 时必须画全配对
         reason = _check_proton_transfer_pairing(mech_children, comp_mols, comps)
+        if reason:
+            return False, reason
+        # SN2 进攻位点（4c）：终点必须是连离去基团的 α-碳
+        reason = _check_sn2_attack_site(mech_children, comp_mols)
         if reason:
             return False, reason
         for ref, idxs in xh_usage.items():

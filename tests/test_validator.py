@@ -1159,3 +1159,40 @@ def test_proton_transfer_pairing():
         "[MECHARROW:cl:0>>cl:0+ch4:1]"
         "[MECHARROW:ch4:0-1>>cl:0+ch4:1][MECHARROW:ch4:0-1>>ch4:0][/COMPOSITE]")
     assert not ok3, [r.reason for r in ok3]
+
+
+def test_sn2_attack_site():
+    """SN2 进攻位点校验（4c，20260820）：进攻终点须为连离去基团的 α-C。
+    A. 攻 β-C（基线 Q1/Q4 病例：CC[OH2+] 被攻 0 号甲基碳）→ 拦截并建议 α-C；
+    B. 攻 α-C → 放行；C. 含多重键组件不查（豁免）；D. 无离去基团不查。"""
+    pytest.importorskip("rdkit")
+    # A：攻到未连 OH2+ 的 0 号碳 → 拦截，建议 1 号
+    _, bad = _validate(
+        "[COMPOSITE:reaction][STRUCT:CC[OH2+],id=sub][PLUS][STRUCT:[OH-],id=nu]"
+        "[ARROW:type=single][STRUCT:CCO,id=p]"
+        "[MECHARROW:nu:0>sub:0][/COMPOSITE]")
+    assert any("进攻位点" in r.reason and "sub:1" in r.reason for r in bad)
+    # B：攻 α-C（1 号，连 OH2+）→ 放行（质子化乙醇 + 氢氧根 → 乙醇 + 水）
+    _, ok = _validate(
+        "[COMPOSITE:reaction][STRUCT:CC[OH2+],id=sub][PLUS][STRUCT:[OH-],id=nu]"
+        "[ARROW:type=single][STRUCT:CCO,id=p][PLUS][STRUCT:O,id=w]"
+        "[MECHARROW:nu:0>sub:1][/COMPOSITE]")
+    assert not ok, [r.reason for r in ok]
+    # B2：卤素底物攻 α-C（示例 3 SN2）→ 放行
+    _, ok2 = _validate(
+        "[COMPOSITE:reaction][STRUCT:CCl,id=r0][PLUS][STRUCT:[OH-],id=nu]"
+        "[ARROW:type=single][STRUCT:CO][PLUS][STRUCT:[Cl-]]"
+        "[MECHARROW:nu:0>r0:0][MECHARROW:r0:0-1>r0:1][/COMPOSITE]")
+    assert not ok2, [r.reason for r in ok2]
+    # C：终点组件含双键（如 BrC=C）→ 不查（共轭/羰基模式豁免）
+    _, ok3 = _validate(
+        "[COMPOSITE:reaction][STRUCT:BrC=C,id=v][PLUS][STRUCT:[OH-],id=nu]"
+        "[ARROW:type=single][STRUCT:C=CO,id=p][PLUS][STRUCT:[Br-],id=br]"
+        "[MECHARROW:nu:0>v:2][/COMPOSITE]")
+    assert not ok3, [r.reason for r in ok3]
+    # D：终点组件无离去基团（碳正离子被水进攻，SN1 第二步）→ 不查
+    _, ok4 = _validate(
+        "[COMPOSITE:reaction][STRUCT:C[C+](C)C,id=cat][PLUS][STRUCT:O,id=w]"
+        "[ARROW:type=single][STRUCT:CC(C)(C)[OH2+],id=ox]"
+        "[MECHARROW:w:0>cat:1][/COMPOSITE]")
+    assert not ok4, [r.reason for r in ok4]
