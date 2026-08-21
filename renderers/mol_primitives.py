@@ -1193,7 +1193,6 @@ def prepare_mol(smiles: str, *, add_hs: bool = False, kekulize: bool = False,
     try:
         from rdkit import Chem
         from rdkit.Chem import AllChem
-        from rdkit.Chem.Draw import rdMolDraw2D
         from utils.rdkit_utils import mute_rdkit_warnings, \
             normalize_h_prefix_smiles, expand_group_abbrevs
     except ImportError:
@@ -1217,15 +1216,27 @@ def prepare_mol(smiles: str, *, add_hs: bool = False, kekulize: bool = False,
         if allow_aromatic:
             mol = Chem.MolFromSmiles(smiles) if smiles else None
         else:
+            # 凯库勒大写（无芳香小写）：优先"保留输入键级"路径
+            # （sanitize=False + 手动 sanitize，排除 SETAROMATICITY/KEKULIZE，
+            # 避免 RDKit 把交替单双键归一化为芳香环、丢失用户指定的键级）。
+            # 该路径依赖较新的 RDKit flags 组合，旧版 RDKit 可能对部分输入
+            # 抛异常（20260821 服务器实测：C1=CC=CC=C1 等合法凯库勒 SMILES
+            # 被整体判无效）——异常时回退标准解析（Chem.MolFromSmiles 自动
+            # sanitize），保证合法分子至少能渲染（键级可能被归一化）。
             mol = Chem.MolFromSmiles(smiles, sanitize=False) if smiles else None
             if mol is not None:
-                mol.UpdatePropertyCache(strict=False)
-                Chem.SanitizeMol(
-                    mol,
-                    Chem.SanitizeFlags.SANITIZE_ALL
-                    ^ Chem.SanitizeFlags.SANITIZE_SETAROMATICITY
-                    ^ Chem.SanitizeFlags.SANITIZE_KEKULIZE,
-                )
+                try:
+                    mol.UpdatePropertyCache(strict=False)
+                    Chem.SanitizeMol(
+                        mol,
+                        Chem.SanitizeFlags.SANITIZE_ALL
+                        ^ Chem.SanitizeFlags.SANITIZE_SETAROMATICITY
+                        ^ Chem.SanitizeFlags.SANITIZE_KEKULIZE,
+                    )
+                except Exception:
+                    mol = None
+            if mol is None:
+                mol = Chem.MolFromSmiles(smiles) if smiles else None
         if mol is None:
             return None
 
@@ -1239,7 +1250,12 @@ def prepare_mol(smiles: str, *, add_hs: bool = False, kekulize: bool = False,
                 pass
 
         if use_prepare:
+            # rdMolDraw2D 延迟导入：旧版 RDKit 可能缺该模块（或绘图支持裁剪），
+            # 缺失/失败时回退 AllChem.Compute2DCoords——坐标计算不受影响，
+            # 避免"整个 prepare_mol 因绘图模块导入失败而返回 None"（20260821
+            # 服务器实测：合法 SMILES 全被判无效）。
             try:
+                from rdkit.Chem.Draw import rdMolDraw2D
                 prepared = rdMolDraw2D.PrepareMolForDrawing(mol)
                 if prepared is not None:
                     mol = prepared
