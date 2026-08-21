@@ -1039,6 +1039,19 @@ def _validate_struct_args(args: list, attrs: dict = None) -> Tuple[bool, str]:
             conflict = _check_radical_charge_conflict(mol)
             if conflict:
                 return False, conflict
+            # 氧鎓一致性（20260821，Q4 连续基线失败）：label 标「质子化」
+            # 但 SMILES 无带正电杂原子——典型的 CCOCC 配"质子化乙醚"错写
+            label_text = args[1] if len(args) > 1 else ""
+            atoms_fn = getattr(mol, "GetAtoms", None)
+            if label_text and atoms_fn is not None \
+                    and re.search(r"(?<!去)(?<!脱)质子化", label_text) \
+                    and not any(a.GetFormalCharge() > 0
+                                and a.GetAtomicNum() in (7, 8, 16)
+                                for a in atoms_fn()):
+                return False, (f"label 标注「质子化」但 SMILES 中没有带正电的"
+                               f"杂原子——质子化醇/醚/羰基的杂原子带 +1："
+                               f"质子化醇 CC[OH2+]、质子化醚 CC[OH+]CC、"
+                               f"质子化羰基 CC=[OH+]，请按正确写法重写")
     mode = attrs.get("mode", "skeleton")
     if mode not in _STRUCT_MODES:
         return False, (f"未知 STRUCT 模式「{mode}」，支持 "
@@ -1203,6 +1216,17 @@ def _validate_energy(args: list) -> Tuple[bool, str]:
     return True, ""
 
 
+def _atom_map_str(mol) -> str:
+    """原子编号地图（"0=C 1=C 2=O"）——修正时模型照抄，不必自己数编号。
+
+    fake mol（无 GetAtoms）返回 ""。
+    """
+    atoms_fn = getattr(mol, "GetAtoms", None)
+    if atoms_fn is None:
+        return ""
+    return " ".join(f"{a.GetIdx()}={a.GetSymbol()}" for a in atoms_fn())
+
+
 def _validate_mech_arrow_pt(pt: str, n_atoms: int,
                             mol=None) -> str:
     """端点（原子序号 / a-b 键）合法性，返回原因串（""=合法）。
@@ -1211,6 +1235,9 @@ def _validate_mech_arrow_pt(pt: str, n_atoms: int,
     原 a#k 语法废弃——引用 H 直接写原子序号即可，无需 XH 配对检查。
     mol：RDKit Mol（可选）——"a-b" 键端点用它验证两原子间确实存在化学键，
     防止引用不存在的键（如乙醛 CC=O 的 0-2 无键）；mol 缺失时只查序号范围。
+    错误信息"可照抄化"（20260821 P0）：键不存在时给出带元素符号的连接表、
+    唯一显式 H 邻居的直接改写建议、无显式 H 时的写法指引，并附原子编号
+    地图——模型照抄即可，不需自行推理索引。
     """
     if "-" in pt:
         a, b = pt.split("-")
@@ -1219,32 +1246,208 @@ def _validate_mech_arrow_pt(pt: str, n_atoms: int,
         except ValueError:
             return f"键端点格式错误「{pt}」（应为 原子a-原子b）"
         if not (0 <= ia < n_atoms and 0 <= ib < n_atoms):
-            return f"键端点「{pt}」越界（该分子只有 {n_atoms} 个原子，0 起）"
+            amap = _atom_map_str(mol) if mol is not None else ""
+            tail = f"；原子地图：{amap}" if amap else ""
+            return (f"键端点「{pt}」越界（该分子只有 {n_atoms} 个原子，"
+                    f"0 起{tail}）")
         gba = getattr(mol, "GetBondBetweenAtoms", None) if mol is not None else None
         if gba is not None:
             bond = gba(ia, ib)
             if bond is None:
-                # 列出两端的实际连接原子，帮助模型重数索引（可操作化）
                 gai = getattr(mol, "GetAtomWithIdx", None)
-                nbrs_a = [n.GetIdx() for n in gai(ia).GetNeighbors()] \
-                    if gai is not None else []
-                nbrs_b = [n.GetIdx() for n in gai(ib).GetNeighbors()] \
-                    if gai is not None else []
                 hint = ""
-                if nbrs_a:
-                    hint += f"，原子 {ia} 实际连接 {nbrs_a}"
-                if nbrs_b:
-                    hint += f"，原子 {ib} 实际连接 {nbrs_b}"
+                if gai is not None:
+                    parts = []
+                    explicit_h_total = 0
+                    for atom in mol.GetAtoms():
+                        if atom.GetAtomicNum() == 1:
+                            explicit_h_total += 1
+                    for idx in (ia, ib):
+                        atom = gai(idx)
+                        nbrs = [f"{n.GetIdx()}={n.GetSymbol()}"
+                                for n in atom.GetNeighbors()]
+                        parts.append(f"原子 {idx}={atom.GetSymbol()} "
+                                     f"连接 [{', '.join(nbrs)}]")
+                        hs = [n.GetIdx() for n in atom.GetNeighbors()
+                              if n.GetAtomicNum() == 1]
+                        if len(hs) == 1:
+                            parts.append(f"若意图引用 {atom.GetSymbol()}—H "
+                                         f"键，应直接改写为「{idx}-{hs[0]}」")
+                    hint = "；".join(parts)
+                    if explicit_h_total == 0:
+                        hint += ("；该分子没有显式 H 原子——若意图引用 "
+                                 "X—H 键（如脱质子），需先在 SMILES 中把该 "
+                                 "H 写成显式 [H]（如 CC([H])CC），显式 H "
+                                 "参与编号后再引用")
+                amap = _atom_map_str(mol)
+                if amap:
+                    hint += f"；原子地图：{amap}"
                 return (f"键端点「{pt}」引用原子 {ia} 与 {ib} 之间的键，"
-                        f"但该分子中这两原子没有成键（先确认键的真实连接{hint}）")
+                        f"但该分子中这两原子没有成键（{hint}）")
         return ""
     try:
         ia = int(pt)
     except ValueError:
         return f"端点格式错误「{pt}」"
     if not 0 <= ia < n_atoms:
-        return f"原子 {ia} 超出范围（该分子只有 {n_atoms} 个原子，0 起）"
+        amap = _atom_map_str(mol) if mol is not None else ""
+        tail = f"；原子地图：{amap}" if amap else ""
+        return f"原子 {ia} 超出范围（该分子只有 {n_atoms} 个原子，0 起{tail}）"
     return ""
+
+
+def _check_polar_arrow_semantics(src_id: str, src_pt: str,
+                                 dst_id: str, dst_pt: str,
+                                 comp_mols: dict) -> str:
+    """双电子箭头（>）的化学合理性确定性规则（20260821，que_test6 漏网
+    错误）；鱼钩（>>）单电子化学不适用，由调用方排除。返回原因串（""=通过）。
+
+    R1 目标端点是"带正电 + 有孤对电子 + 八隅体已满"的二周期原子（氧鎓/
+    质子化羰基 O 等）——无空轨道，不能接受电子对（典型误写：脱质子把
+    箭头指向 O 而非 H，que_test6 图 26）。豁免：碳正离子/NO2+ 的 N 等
+    缺电子原子（无孤对）、[Br+] 等三周期亲电体（可成键扩八隅）。
+    R2 极性 π 键（C=X，X∈{N,O,S}）作源、电子流向碳端——应流向电负性
+    大的杂原子（que_test6 图 23 羧酸根共振箭头反向）。
+    R3 源为原子（孤对电子）、目标为双/三键——孤对只能汇入单键形成新
+    π 键（图 23 羧酸根 O- 孤对错指 C=O 双键）。
+    fake mol（测试 fixture，无 GetBondBetweenAtoms）跳过。
+    """
+    from renderers.mol_primitives import lone_pair_count
+    src_mol = comp_mols.get(src_id)
+    dst_mol = comp_mols.get(dst_id)
+    # R3：源为原子、目标为多重键
+    if "-" not in src_pt and "-" in dst_pt and dst_mol is not None:
+        try:
+            b1, b2 = (int(x) for x in dst_pt.split("-"))
+        except ValueError:
+            b1 = b2 = -1
+        gba = getattr(dst_mol, "GetBondBetweenAtoms", None)
+        if gba is not None and b1 >= 0:
+            bond = gba(b1, b2)
+            if bond is not None and bond.GetBondTypeAsDouble() > 1.5:
+                return (f"目标键 {dst_id}:{dst_pt} 已是双/三键——原子的孤对"
+                        f"电子只能汇入单键形成新 π 键（共振/共轭请指向相邻"
+                        f"单键，如源原子与相连键端之间的那根）")
+    # R2：极性 π 键作源、电子流向碳端
+    if "-" in src_pt and "-" not in dst_pt and src_mol is not None:
+        try:
+            a1, a2 = (int(x) for x in src_pt.split("-"))
+            t = int(dst_pt)
+        except ValueError:
+            a1 = a2 = t = -1
+        gba = getattr(src_mol, "GetBondBetweenAtoms", None)
+        gai = getattr(src_mol, "GetAtomWithIdx", None)
+        if gba is not None and gai is not None and t in (a1, a2):
+            bond = gba(a1, a2)
+            if bond is not None and \
+                    abs(bond.GetBondTypeAsDouble() - 2.0) < 0.1:
+                z = {a1: gai(a1).GetAtomicNum(), a2: gai(a2).GetAtomicNum()}
+                c_end = [i for i in (a1, a2) if z[i] == 6]
+                x_end = [i for i in (a1, a2) if z[i] in (7, 8, 16)]
+                if c_end and x_end and t == c_end[0]:
+                    sym = gai(x_end[0]).GetSymbol()
+                    return (f"C={sym} 极性 π 键的电子应流向电负性大的杂原子"
+                            f"（{dst_id}:{x_end[0]}），不能流向碳端（{t}）")
+    # R1：目标为"带正电 + 有孤对 + 八隅体满"的二周期原子。
+    # 豁免：源是与目标相连的键（异裂离去——C—O 键电子落回氧鎓 O 是
+    # 合法的离去基团箭头）；只拦"外部孤对/外来键 → 该原子"的进攻。
+    if "-" not in dst_pt and dst_mol is not None:
+        try:
+            t = int(dst_pt)
+        except ValueError:
+            t = -1
+        src_incident = False
+        if src_id == dst_id and "-" in src_pt:
+            try:
+                sa, sb = (int(x) for x in src_pt.split("-"))
+                src_incident = t in (sa, sb)
+            except ValueError:
+                pass
+        gai = getattr(dst_mol, "GetAtomWithIdx", None)
+        if gai is not None and 0 <= t < dst_mol.GetNumAtoms() \
+                and not src_incident:
+            atom = gai(t)
+            if atom.GetAtomicNum() in (7, 8, 9) \
+                    and atom.GetFormalCharge() > 0:
+                pairs, _ = lone_pair_count(atom)
+                bond_orders = sum(int(round(b.GetBondTypeAsDouble()))
+                                  for b in atom.GetBonds()) \
+                    + atom.GetTotalNumHs()
+                if pairs > 0 and bond_orders + pairs >= 4:
+                    return (f"目标原子 {dst_id}:{t}（{atom.GetSymbol()}）带正电"
+                            f"且八隅体已满（{bond_orders} 键 + {pairs} 孤对），"
+                            f"无空轨道接受电子对——若意图是碱夺 H⁺（脱质子），"
+                            f"请把目标 H 写成显式 [H] 并指向该 H；若意图是"
+                            f"亲核进攻，目标应是缺电子原子（碳正离子/羰基碳）")
+    return ""
+
+
+def autofix_mech_bond_endpoint(tag) -> tuple | None:
+    """MECHARROW 键端点高置信自动修复（20260821 P1，不经 LLM）。
+
+    场景：COMPOSITE 内某 MECHARROW 的 a-b 键端点引用了不存在的键，
+    且两端原子之一连着**唯一**显式 H 邻居 h（典型：脱质子步该写 C—H
+    键却写错编号）——端点改写为 a-h/b-h 是唯一候选修复。两端都有唯一
+    H 邻居（歧义）或无显式 H（需改 SMILES，超出端点改写范围）则不修。
+    仅做文本替换，是否采用由调用方重校验决定（全规则把关，含化学
+    配对校验）。返回 (新 raw, 修复说明)；不适用返回 None。
+    """
+    if tag.type != "COMPOSITE" or not tag.args or len(tag.args) < 2:
+        return None
+    children = tag.args[1]
+    if not isinstance(children, list):
+        return None
+    mols = {}
+    for c in children:
+        if c.type != "STRUCT" or not c.args or not c.args[0]:
+            continue
+        cid = c.attrs.get("id")
+        if not cid:
+            continue
+        parsed = _parse_coeff(c.args[0].strip())
+        bare = parsed[1] if parsed else c.args[0].strip()
+        try:
+            m = _parse_mol(bare)
+        except Exception:
+            m = None
+        if m is not None:
+            mols[cid] = m
+    for c in children:
+        if c.type != "MECHARROW" or not c.args or not c.args[0]:
+            continue
+        for spec in c.args[0].split(","):
+            m = _MECH_ARROW_RE.match(spec.strip())
+            if not m:
+                continue
+            src_id, src_pt, _, dst_id, dst_pt, _, _ = m.groups()
+            for cid, pt in ((src_id, src_pt), (dst_id, dst_pt)):
+                mol = mols.get(cid)
+                if mol is None or "-" not in pt:
+                    continue
+                try:
+                    ia, ib = (int(x) for x in pt.split("-"))
+                except ValueError:
+                    continue
+                if not (0 <= ia < mol.GetNumAtoms()
+                        and 0 <= ib < mol.GetNumAtoms()):
+                    continue
+                if mol.GetBondBetweenAtoms(ia, ib) is not None:
+                    continue
+                cands = []
+                for idx in (ia, ib):
+                    hs = [n.GetIdx()
+                          for n in mol.GetAtomWithIdx(idx).GetNeighbors()
+                          if n.GetAtomicNum() == 1]
+                    if len(hs) == 1:
+                        cands.append(f"{idx}-{hs[0]}")
+                if len(cands) != 1:
+                    continue
+                old_tok = f"{cid}:{pt}"
+                new_tok = f"{cid}:{cands[0]}"
+                if old_tok in tag.raw:
+                    return (tag.raw.replace(old_tok, new_tok, 1),
+                            f"{old_tok} → {new_tok}")
+    return None
 
 
 def _check_xh_h_usage(mol, idxs: list, what: str) -> str:
@@ -1521,6 +1724,7 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
 
     # MECHARROW 统一校验（顶层 + BLOCK 内；块内组件已注册进全局 comps，
     # 块内/跨块混合引用自动支持）
+    blank_refs = {}   # 成键空白位（规范化键）→ [(是否鱼钩, spec)]，配对校验用
     for child in mech_children:
         if not child.args or not child.args[0]:
             return False, "MECHARROW 为空"
@@ -1560,6 +1764,48 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
                     if dst2_reason:
                         return False, (f"MECHARROW 目标端点「{dst2_id}:{dst2_pt}」"
                                        f"{dst2_reason}")
+                # 双电子箭头化学合理性（R1 八隅体满带正电目标 / R2 极性 π
+                # 电子流向 / R3 孤对指向多重键）；鱼钩 >> 跳过
+                if m.group(3) == ">":
+                    sem = _check_polar_arrow_semantics(
+                        src_id, src_pt, dst_id, dst_pt, comp_mols)
+                    if sem:
+                        return False, f"MECHARROW「{spec.strip()}」{sem}"
+            if dst2_id is not None:
+                blank_refs.setdefault(
+                    frozenset(((dst_id, dst_pt), (dst2_id, dst2_pt))),
+                    []).append((m.group(3), spec.strip()))
+
+    # R4 成键空白位配对（20260821，que_test6 图 20）：鱼钩成键必须恰好
+    # 两根汇聚同一空白位（各贡献一个单电子）；极性成键一根双电子箭头
+    # 即可。两个空白位各 1 根鱼钩（指向写岔）时给出可照抄的归并建议
+    singles = []   # 配对不合法的空白位：(规范化键, 鱼钩 specs, 双电子 specs)
+    for key, refs in blank_refs.items():
+        hooks = [s for h, s in refs if h == ">>"]
+        polars = [s for h, s in refs if h == ">"]
+        if not polars and len(hooks) == 2:
+            continue   # 标准鱼钩成键
+        if len(polars) == 1 and not hooks:
+            continue   # 极性成键（配位/亲核）
+        singles.append((key, hooks, polars))
+    if singles:
+        sug = ""
+        lone = [s for s in singles if len(s[1]) == 1 and not s[2]]
+        if len(lone) == 2:
+            (ka, kp), (k2a, k2p) = sorted(lone[0][0])
+            mm = _MECH_ARROW_RE.match(lone[1][1][0])
+            if mm:
+                fixed = (f"{mm.group(1)}:{mm.group(2)}{mm.group(3)}"
+                         f"{ka}:{kp}+{k2a}:{k2p}")
+                sug = (f"；若意图是两根鱼钩配对成键，应改写为「{fixed}」"
+                       f"（与另一根汇聚同一空白位）")
+        det = "；".join(
+            f"空白位「{'+'.join(f'{i}:{p}' for i, p in sorted(key))}」"
+            f"有 {len(hs)} 根鱼钩 + {len(ps)} 根双电子箭头"
+            for key, hs, ps in singles)
+        return False, (f"MECHARROW 成键空白位配对错误：{det}——"
+                       f"单电子不能单独成键，形成新键需两根鱼钩汇聚"
+                       f"同一空白位（id:a+id:b）{sug}")
 
     # arrow 令牌组件唯一引用：必须被恰好一个 ARROW 的 sup 引用——
     # 不引用则组件不可见（渲染端只经 sup 通道绘制附件），多引用则

@@ -504,7 +504,8 @@ def test_composite_mecharrow_nonexistent_bond_rejected():
 
 
 def test_bond_ref_gives_neighbor_hint():
-    """键端点引用无键时，原因含原子实际连接——可操作化（帮助重数索引）。"""
+    """键端点引用无键时，原因含带元素符号的连接表 + 原子地图——
+    可照抄化（20260821 P0：模型直接照抄，不必推理索引）。"""
     pytest.importorskip("rdkit")
     text = ("[COMPOSITE:reaction]"
             "[STRUCT:O=S([O-])(=O)C1C=CC=C[CH+]1,id=sigma]"
@@ -512,7 +513,8 @@ def test_bond_ref_gives_neighbor_hint():
     _, invalid = _validate(text)
     assert len(invalid) == 1
     assert "没有成键" in invalid[0].reason
-    assert "实际连接" in invalid[0].reason
+    assert "连接 [" in invalid[0].reason
+    assert "原子地图" in invalid[0].reason
 
 
 def test_composite_mecharrow_existing_bond_passes():
@@ -797,12 +799,22 @@ class TestCoeffAndBalanceRules:
 
 
 def test_composite_mecharrow_bond_form_midpoint_passes(fake_rdkit):
+    # 单根鱼钩指向空白位：单电子不能单独成键 → R4 拦截（20260821 收紧，
+    # que_test6 图 20：两个空白位各 1 根鱼钩是真实漏网错误）
     text = ("[COMPOSITE:reaction][STRUCT:CCl,id=r0][ARROW:type=single]"
             "[STRUCT:CO,id=p0][MECHARROW:r0:0>>r0:0+p0:0][/COMPOSITE]")
     _, invalid = _validate(text)
-    assert len(invalid) == 0
+    assert len(invalid) == 1
+    assert "空白位配对" in invalid[0].reason
+    # 两根鱼钩汇聚同一空白位（各出一个单电子成键）→ 通过
     text = ("[COMPOSITE:reaction][STRUCT:CCl,id=r0][ARROW:type=single]"
-            "[STRUCT:CO,id=p0][MECHARROW:r0:0>>r0:0+p0:0][/COMPOSITE]")
+            "[STRUCT:CO,id=p0][MECHARROW:r0:0>>r0:0+p0:0,"
+            "r0:0-1>>r0:0+p0:0][/COMPOSITE]")
+    _, invalid = _validate(text)
+    assert len(invalid) == 0
+    # 极性成键：一根双电子箭头指向空白位 → 通过
+    text = ("[COMPOSITE:reaction][STRUCT:CCl,id=r0][ARROW:type=single]"
+            "[STRUCT:CO,id=p0][MECHARROW:r0:0>r0:0+p0:0][/COMPOSITE]")
     _, invalid = _validate(text)
     assert len(invalid) == 0
 
@@ -1257,3 +1269,115 @@ def test_halogen_cation_eas_electrophile_allowed():
     # 真矛盾态（电荷+1 单电子）仍拦截
     _, bad = _validate("[STRUCT:[O-]]")
     assert len(bad) == 1 and "自由基单电子" in bad[0].reason
+
+
+def test_autofix_mech_bond_endpoint_unique_h():
+    """P1：a-b 不成键 + 一端唯一显式 H 邻居 → 改写为该 X—H 键，
+    修复后整标记通过全部校验（含 4b 质子转移配对）。"""
+    pytest.importorskip("rdkit")
+    from core.tag_validator import autofix_mech_bond_endpoint
+    text = ("[COMPOSITE:reaction]"
+            "[STRUCT:O=[N+]([O-])C([H])1C=CC=C[CH+]1,id=sg]"
+            "[PLUS][STRUCT:O=[N+]([O-])[O-],id=no3]"
+            "[ARROW:type=single][STRUCT:O=[N+]([O-])C1=CC=CC=C1,id=nb]"
+            "[PLUS][STRUCT:O=[N+]([O-])O,id=hno3]"
+            "[MECHARROW:no3:2>sg:4,sg:3-6>sg:3][/COMPOSITE]")
+    tag = parse_tags(text)[0]
+    _, bad = _validate(text)
+    assert len(bad) == 1 and "没有成键" in bad[0].reason
+    fix = autofix_mech_bond_endpoint(tag)
+    assert fix is not None
+    new_raw, note = fix
+    assert "sg:3-4>sg:3" in new_raw, note
+    _, bad2 = _validate(new_raw)
+    assert not bad2, [r.reason for r in bad2]
+
+
+def test_autofix_mech_bond_endpoint_no_candidate():
+    """P1 边界：无显式 H（需改 SMILES）、合法端点、双候选歧义均不修。"""
+    pytest.importorskip("rdkit")
+    from core.tag_validator import autofix_mech_bond_endpoint
+    # 无显式 H（质子化叔丁醇 3-4）——需改 SMILES，超出端点改写范围
+    t1 = ("[COMPOSITE:reaction][STRUCT:CC(C)(C)[OH2+],id=p]"
+          "[MECHARROW:p:3-4>p:4][/COMPOSITE]")
+    assert autofix_mech_bond_endpoint(parse_tags(t1)[0]) is None
+    # 合法端点不修
+    t2 = ("[COMPOSITE:reaction][STRUCT:CC=O,id=a]"
+          "[MECHARROW:a:0-1>a:2][/COMPOSITE]")
+    assert autofix_mech_bond_endpoint(parse_tags(t2)[0]) is None
+    # 双候选歧义（两端各有唯一显式 H）不修
+    t3 = ("[COMPOSITE:reaction][STRUCT:C([H])=CC([H]),id=d]"
+          "[MECHARROW:d:0-3>d:0][/COMPOSITE]")
+    assert autofix_mech_bond_endpoint(parse_tags(t3)[0]) is None
+
+
+def test_polar_arrow_target_full_octet_cation():
+    """R1（que_test6 图 26）：双电子箭头指向带正电+八隅体满的氧鎓 O
+    → 拦截；异裂离去（源为与目标相连的键）豁免；缺电子靶
+    （碳正离子/NO2+/[Br+]）不误伤。"""
+    pytest.importorskip("rdkit")
+    # 拦截：水孤对 → 氧鎓 O
+    _, bad = _validate(
+        "[COMPOSITE:reaction][STRUCT:CC(C)(C)[OH2+],id=ox][PLUS][STRUCT:O,id=w]"
+        "[ARROW:type=single][STRUCT:CC(C)(C)O,id=a][PLUS][STRUCT:[OH3+],id=h]"
+        "[MECHARROW:w:0>ox:4][/COMPOSITE]")
+    assert len(bad) == 1 and "八隅体已满" in bad[0].reason
+    # 豁免：C—O 键电子落回氧鎓 O（异裂离去，合法）
+    _, bad2 = _validate(
+        "[COMPOSITE:reaction][STRUCT:CC[OH2+],id=pe][PLUS][STRUCT:CCO,id=nu]"
+        "[ARROW:type=single][STRUCT:CC[OH+]CC,id=ps][PLUS][STRUCT:O,id=w]"
+        "[MECHARROW:nu:2>pe:1][MECHARROW:pe:1-2>pe:2][/COMPOSITE]")
+    assert not bad2, [r.reason for r in bad2]
+    # 不误伤：水进攻碳正离子 / 苯 π 进攻 NO2+ / 苯 π 进攻 [Br+]
+    for t in ("[COMPOSITE:reaction][STRUCT:C[C+](C)C,id=c][PLUS][STRUCT:O,id=w]"
+              "[ARROW:type=single][STRUCT:CC(C)(C)[OH2+],id=o]"
+              "[MECHARROW:w:0>c:1][/COMPOSITE]",
+              "[COMPOSITE:reaction][STRUCT:C1=CC=CC=C1,id=bz][PLUS]"
+              "[STRUCT:O=[N+](=O),id=no2][ARROW:type=single]"
+              "[STRUCT:O=[N+]([O-])C([H])1C=CC=C[CH+]1,id=sg]"
+              "[MECHARROW:bz:0-1>no2:1][/COMPOSITE]",
+              "[COMPOSITE:reaction][STRUCT:C1=CC=CC=C1,id=bz][PLUS]"
+              "[STRUCT:[Br+],id=brp][ARROW:type=single]"
+              "[STRUCT:BrC1([H])C=CC=C[CH+]1,id=sg]"
+              "[MECHARROW:bz:0-1>brp:0][/COMPOSITE]"):
+        _, bad3 = _validate(t)
+        assert not bad3, [r.reason for r in bad3]
+
+
+def test_polar_pi_electrons_flow_rules():
+    """R2/R3（que_test6 图 23）：羧酸根共振——O- 孤对不能指向 C=O 双键、
+    C=O π 电子不能流向碳端；正确写法通过。"""
+    pytest.importorskip("rdkit")
+    # R3：孤对 → 双键
+    _, bad = _validate(
+        "[COMPOSITE:reaction][BLOCK][STRUCT:[O-]C=O,id=r1][ARROW:type=resonance]"
+        "[STRUCT:O=C[O-],id=r2][MECHARROW:r1:0>r1:1-2][/BLOCK][/COMPOSITE]")
+    assert len(bad) == 1 and "已是双/三键" in bad[0].reason
+    # R2：C=O π → 碳端
+    _, bad2 = _validate(
+        "[COMPOSITE:reaction][BLOCK][STRUCT:[O-]C=O,id=r1][ARROW:type=resonance]"
+        "[STRUCT:O=C[O-],id=r2][MECHARROW:r1:1-2>r1:1][/BLOCK][/COMPOSITE]")
+    assert len(bad2) == 1 and "极性 π 键" in bad2[0].reason
+    # 正确共振式（O- 孤对→C—O 单键、C=O π→O）通过
+    _, bad3 = _validate(
+        "[COMPOSITE:reaction][BLOCK][STRUCT:[O-]C=O,id=r1][ARROW:type=resonance]"
+        "[STRUCT:O=C[O-],id=r2][MECHARROW:r1:0>r1:0-1][MECHARROW:r1:1-2>r1:2]"
+        "[/BLOCK][/COMPOSITE]")
+    assert not bad3, [r.reason for r in bad3]
+
+
+def test_protonated_label_requires_cation():
+    """氧鎓一致性（Q4 连续基线失败）：label 标「质子化」但 SMILES 无带
+    正电杂原子 → 拦截并给出 CC[OH+]CC 等正确写法；正确写法与
+    「去质子化」label 不误伤。"""
+    pytest.importorskip("rdkit")
+    _, bad = _validate(
+        "[COMPOSITE:reaction][STRUCT:CCOCC,label=质子化乙醚,id=pe][/COMPOSITE]")
+    assert len(bad) == 1 and "CC[OH+]CC" in bad[0].reason
+    _, bad2 = _validate(
+        "[COMPOSITE:reaction][STRUCT:CC[OH+]CC,label=质子化乙醚,id=pe]"
+        "[/COMPOSITE]")
+    assert not bad2, [r.reason for r in bad2]
+    _, bad3 = _validate(
+        "[COMPOSITE:reaction][STRUCT:CCO,label=去质子化产物,id=p][/COMPOSITE]")
+    assert not bad3, [r.reason for r in bad3]

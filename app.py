@@ -5,14 +5,21 @@ process_question(user_question) 是核心编排函数，FastAPI 适配层
 （api.py）在此基础上包装 /chat/completions 端点。
 """
 
+import re
+
 from core.config import settings
 from core.llm_client import ask_llm
 from core.tag_parser import parse_tags
 from core.tag_injector import inject_tags_into_text
-from core.tag_validator import degrade_text_friendly, validate_tags
+from core.tag_validator import (
+    autofix_mech_bond_endpoint, degrade_text_friendly, validate_tags,
+)
 from renderers.registry import RENDERER_REGISTRY, render_tag
 # 渲染器失败串的统一前缀（各渲染器内部约定："（XX渲染失败：原因）"）
 _RENDER_ERROR_PREFIX = "（"
+
+# 失败 fingerprint 数字归一化（P3 逃生：同批错误跨轮比对）
+_FP_DIGITS_RE = re.compile(r"\d+")
 
 # 非化合物名的角色/流程 label（过滤：不作为 PubChem 查询依据）
 _ROLE_LABELS = {
@@ -217,6 +224,21 @@ def _context_around(text: str, tag) -> str:
     return ctx[:160] if ctx else ""
 
 
+def _failure_class(err: str) -> str:
+    """失败原因分类（修正 prompt 按类注入规则 + 逐条标注）。"""
+    if "MECHARROW" in err:
+        return "mech"
+    if "不守恒" in err:
+        return "balance"
+    if "无效 SMILES" in err or "无效物种" in err:
+        return "smiles"
+    return "other"
+
+
+_CLASS_LABELS = {"mech": "机理箭头", "balance": "守恒",
+                 "smiles": "SMILES", "other": "其他"}
+
+
 def _build_correction_prompt(user_question: str, original: str,
                              failures: list) -> str:
     """构造 P2 修正 prompt：失败标记清单（含上下文）+ 修正要求。
@@ -224,9 +246,12 @@ def _build_correction_prompt(user_question: str, original: str,
     部分修正模式：模型**只输出修正后的标记**（不重输出整个回答），
     process_question 用修正标记替换原文对应位置后重新校验/渲染——
     相比"全篇重生成"大幅节省 token 且修正更聚焦。
+    修正要求按失败类型动态裁剪（20260821 P2），风格对齐 system_prompt：
+    简洁、明确、无与本次失败无关的语句。
 
     failures: [(RenderTag, 失败原因字符串), ...]。
     """
+    classes = {_failure_class(err) for _, err in failures}
     lines = [
         "你刚才的回答中有一些化学标记无法渲染。下面列出每个失败标记及其原因，",
         "请为每个标记输出**修正后的标记**。",
@@ -237,7 +262,8 @@ def _build_correction_prompt(user_question: str, original: str,
         "渲染失败的标记及原因：",
     ]
     for i, (tag, err) in enumerate(failures[:10], 1):
-        lines.append(f"- 标记 {i}：{tag.raw}")
+        lines.append(f"- 标记 {i}（{_CLASS_LABELS[_failure_class(err)]}）："
+                     f"{tag.raw}")
         lines.append(f"  原因：{err}")
         ctx = _context_around(original, tag)
         if ctx:
@@ -251,55 +277,37 @@ def _build_correction_prompt(user_question: str, original: str,
         lines.append("")
         lines.append(pubchem_ref)
 
-    lines += [
-        "",
-        "修正要求：",
-        "1. **只输出修正后的标记本身**（保持 [TYPE:...] 语法；COMPOSITE 容器要完整，"
+    reqs = [
+        "**只输出修正后的标记本身**（保持 [TYPE:...] 语法；COMPOSITE 容器要完整，"
         "含开闭标签），多个失败标记按上面顺序依次输出；不要输出解释、序号或任何其他文字。",
-        "2. 不要新增或删除其他标记；修正后的标记必须严格遵循标记语法。",
-        "3. 若失败原因是化学校验（两侧原子不守恒或净电荷不守恒）：先核对两侧"
-        "元素计数与电荷，补全缺失的具体反应物/生成物（如催化脱氢/芳构化确实"
-        "放 H2 才补 -H2），或修正化学计量系数（整数或 n/2，如 2CCO、1/2O2）"
-        "使两侧守恒；也可用 2b 箭头补足——把省略的具体物质写进反应条件"
-        "（无符号=反应物侧补足、如 H2O；\"-\"前缀=产物侧补足、如 -H2O），"
-        "补上后两侧守恒即可；"
-        "**同时核对每个物种的分子式与它在反应中的角色是否对应**（如 SN1/SN2"
-        "离去步之后，碳正离子/底物的碳数必须与原料相同——不能多写或漏写碳）；"
-        "**氧化剂（KMnO4/K2Cr2O7 等）参与反应（被还原）时是反应物，必须写"
-        "完整配平方程式，不能用 2b 省略**（如乙醇被 KMnO4 氧化产物是乙酸："
-        "5CCO+4KMnO4+6H2SO4→5CH3COOH+4MnSO4+2K2SO4+11H2O）；"
-        "**无机物种（盐/酸/氧化物/单质）可直接写化学式**（KMnO4、H2SO4、"
-        "MnSO4、K2SO4、H2O、O2、CO2——渲染为文本），不必转离子 SMILES；"
-        "**氧化反应不要补 -H2**（氧化不放氢气，H 与氧化剂供的 O 结合成水）；"
-        "禁止用 [O]/[H] 占位符配平，补足物质必须真实参与该反应。"
-        "催化剂/溶剂等辅助试剂写在箭头条件里，不列入反应物或产物列表。"
-        "单→单反应建议改用 [ARROW]（只画主物种，不做全元素守恒）。"
-        "**原始用户问题是\"化学方程式/配平\"时：必须保持 REACTION 并补全物种"
-        "使守恒（配离子带电荷写，如银氨 [Ag+]([NH3])([NH3])、氢氧根 [OH-]，"
-        "按电荷配系数），不得降级为 ARROW——ARROW 只在用户只要转化示意时使用。**",
-        "4. 若失败原因是无效 SMILES（如 [Ag(NH3)2]OH、NH3 裸写）：SMILES 不是"
-        "化学式——配位化合物/络离子（银氨 [Ag(NH3)2]+ 等）不能用 \"(NH3)2\" 表示"
-        "配位，氨必须写 [NH3] 或 N（RDKit 中 NH3 裸写非法）。改法：络离子拆成"
-        "可表达的组分（如银氨写 [Ag]([NH3])[NH3] 或 [Ag+]，氨写 N，氢氧化银"
-        "写 [Ag+] 与 [OH-] 分离）；实在写不出合法 SMILES 的物种（如复杂配合物）"
-        "降级为文字描述或从方程式中省略，只保留能渲染的主物种。",
-        "5. 若失败原因是无机盐/含氧酸盐 SMILES 非法（如 KMnO4 写成 K[Mn](=O)(=O)=O"
-        "或 KMn(=O)=O——金属与中心原子无直接键）：**最简单改法是直接写教科书化学式**"
-        "（KMnO4、H2SO4、MnSO4、K2SO4、Na2CO3、NaCl——渲染为文本，无需 SMILES）；"
-        "需要画结构图时才改离子式——阳离子 [K+]/[Na+] 与阴离子用 . 分隔，"
-        "含氧酸根中心原子带足双键氧：KMnO4 写 [K+].[O-][Mn](=O)(=O)=O，K2Cr2O7 写 "
-        "[K+].[K+].[O-][Cr](=O)(=O)O[Cr]"
-        "(=O)(=O)[O-]，KClO3 写 [K+].[O-][Cl](=O)=O，Na2CO3 写"
-        "[Na+].[Na+].[O-]C(=O)[O-]，H2SO4 写 OS(=O)(=O)O，HNO3 写"
-        "[O-][N+](=O)O，NO2+（硝鎂离子）写 [N+](=O)=O，NO3-（硝酸根）写"
-        "[O-][N+](=O)[O-]，硝基（R-NO2）写 R[N+](=O)[O-]——注意 N 的"
-        "正电荷离子必须连足配体（3 个键序），不能写 N+=O 或 O=N+（N 缺配体"
-        "导致 SMILES 非法）。",
-        "6. 若失败原因是无效物种/无效 SMILES（如 `-H+`）：`-` 前缀补足只写在箭头条件里"
-        "（第 3 段，如 `|-H2O`），**不能写进反应物/产物列表**——列表中的离子直接写"
-        "（H+、Br-、[OH-] 或 [H+]、[Br-]），去掉 `-` 前缀并用 `;` 分隔、保证两侧电荷"
-        "守恒；无法解析的物种从方程式省略或降级为文字描述。",
+        "不要新增或删除其他标记；修正后的标记必须严格遵循标记语法。",
     ]
+    if "mech" in classes:
+        reqs.append(
+            "机理箭头修正：按原因中给出的建议端点直接改写（「应直接改写为"
+            "「x-y」」），不要自己猜编号；提示无显式 H 时，先把该 H 写成显式 "
+            "[H]（参与编号）再按原子地图引用。")
+    if "balance" in classes:
+        reqs.append(
+            "守恒修正：按给出的元素/电荷差值补物种或调系数（2CCO、1/2O2）；"
+            "辅助试剂写入箭头条件（H2O 补左侧、-H2O 补右侧）；氧化剂被还原时"
+            "必须写完整配平方程式（不能用箭头补足省略，氧化反应不补 -H2）；"
+            "禁用 [O]/[H] 占位符；核对每个物种的分子式与其角色（底物/中间体/"
+            "产物的碳数一致）；用户要配平方程式时必须守恒，只要转化示意时可改"
+            "单→单 [ARROW]（不查全元素守恒）。")
+    if "smiles" in classes:
+        reqs.append(
+            "无效 SMILES 修正：无机物/配离子直接写分子式（KMnO4、"
+            "[Ag(NH3)2]+，配体括号写全）；金属盐用 . 分隔阴阳离子"
+            "（[K+].[O-][Mn](=O)(=O)=O）；含氧酸根中心原子带足双键氧"
+            "（H2SO4=OS(=O)(=O)O、HNO3=[O-][N+](=O)O、硝基=R[N+](=O)[O-]）；"
+            "氨写 [NH3] 或 N；写不出的物种省略或文字描述。")
+        reqs.append(
+            "「-」前缀只用于箭头条件（|-H2O）；反应物/产物列表中的离子直接写"
+            "（[H+]、[Br-]、[OH-]）。")
+    lines.append("")
+    lines.append("修正要求：")
+    lines += [f"{i}. {r}" for i, r in enumerate(reqs, 1)]
     return "\n".join(lines)
 
 
@@ -504,6 +512,7 @@ def _generate_with_corrections(user_question: str, model=None,
         if not full_response:
             return "（LLM 调用失败，请检查 .env 配置与网络）"
 
+    prev_fps = None   # 上一轮失败 fingerprint（P3 逃生比对）
     for attempt in range(max_corrections + 1):
         # 2. 解析标记
         tags = parse_tags(full_response)
@@ -515,6 +524,35 @@ def _generate_with_corrections(user_question: str, model=None,
         # 2.5 标记契约校验（P1）：渲染前拦截坏参数（非法 SMILES / 越界引用 /
         #    超长 label / 格式错误），降级为友好提示，坏参数不进渲染器
         valid_tags, invalid = validate_tags(tags)
+        # 2.6 确定性自动修复（20260821 P1，不经 LLM）：MECHARROW 键端点
+        #    "唯一候选"改写——逐标记修复并单标记重校验，全部校验规则
+        #    （含化学配对）通过才替换进原文
+        if invalid:
+            fixed_any = False
+            for r in invalid:
+                fix = autofix_mech_bond_endpoint(r.tag)
+                if fix is None or r.tag.raw not in full_response:
+                    continue
+                new_raw, note = fix
+                _, bad_fix = validate_tags(parse_tags(new_raw))
+                if bad_fix:
+                    continue
+                full_response = full_response.replace(r.tag.raw, new_raw, 1)
+                fixed_any = True
+                print(f"[process_question] 端点自动修复：{note}")
+                if diagnostics is not None:
+                    diagnostics.append({
+                        "round": attempt,
+                        "stage": stage,
+                        "type": "AUTOFIX",
+                        "raw": new_raw,
+                        "reason": f"端点自动修复：{note}",
+                        "friendly": "",
+                        "resolved": True,
+                    })
+            if fixed_any:
+                tags = parse_tags(full_response)
+                valid_tags, invalid = validate_tags(tags)
         degraded = {}
         for r in invalid:
             partial = None
@@ -550,6 +588,11 @@ def _generate_with_corrections(user_question: str, model=None,
         #     每一轮失败记入 diagnostics（含最后一轮——供后端日志/质量分析，
         #     前端只展示注入的友好降级文本）
         problems = [(r.tag, r.reason) for r in invalid] + failures
+        # P3 逃生锚点（20260821）：错误 fingerprint（类型+原因，数字归一化）
+        # 与上一轮完全相同 = LLM 修正无进展（同一错误反复犯）——不再消耗
+        # 修正轮次，直接走降级
+        fps = sorted(f"{t.type}:{_FP_DIGITS_RE.sub('N', e)}"
+                     for t, e in problems)
         if diagnostics is not None:
             for tag, err in problems:
                 diagnostics.append({
@@ -573,19 +616,25 @@ def _generate_with_corrections(user_question: str, model=None,
             for tag, err in problems[:5]:
                 print(f"  - {tag.raw[:60]} → {err[:80]}")
         if problems and attempt < max_corrections:
-            if correction_callback is not None:
-                correction_callback()
-            correction = _build_correction_prompt(
-                user_question, full_response, problems)
-            fixed = ask_llm(correction, on_piece=progress_callback,
-                            thinking="disabled", model=model)
-            if fixed:
-                # 部分修正：用模型输出的修正标记替换原文对应位置
-                patched = _apply_patch_corrections(
-                    full_response, problems, fixed)
-                if patched is not None:
-                    full_response = patched
-                    continue
+            if prev_fps is not None and fps == prev_fps:
+                print(f"[process_question] 失败原因与上一轮完全相同，"
+                      f"LLM 修正无进展——跳过剩余修正轮次，直接降级")
+            else:
+                if correction_callback is not None:
+                    correction_callback()
+                correction = _build_correction_prompt(
+                    user_question, full_response, problems)
+                fixed = ask_llm(correction, on_piece=progress_callback,
+                                thinking="disabled", model=model)
+                if fixed:
+                    # 部分修正：用模型输出的修正标记替换原文对应位置
+                    patched = _apply_patch_corrections(
+                        full_response, problems, fixed)
+                    if patched is not None:
+                        full_response = patched
+                        prev_fps = fps
+                        continue
+        prev_fps = fps
 
         final_ok = not problems  # 修正救回（最终无失败）或从未失败
         if problems and max_corrections == 0:

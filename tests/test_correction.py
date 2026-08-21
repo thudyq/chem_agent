@@ -149,33 +149,38 @@ def test_correction_prompt_chem_guidance():
     assert vr.reason.startswith("化学校验：")
     prompt = _build_correction_prompt("乙醇氧化成乙醛", text, [(tag, vr.reason)])
     assert "两侧原子" in prompt                      # 失败原因
-    assert "补全缺失的具体反应物/生成物" in prompt   # 修正指导
-    assert "催化剂" in prompt and "箭头条件" in prompt  # 辅助试剂归位规则
+    assert "补物种或调系数" in prompt               # 修正指导
+    assert "辅助试剂" in prompt and "箭头条件" in prompt  # 辅助试剂归位规则
     assert "[O]" in prompt and "[H]" in prompt        # 占位符禁止提示
-    assert "2b 箭头补足" in prompt                    # 2b 方案提示
+    assert "氧化剂" in prompt                        # 氧化配平规则
 
 
 def test_correction_prompt_invalid_smiles_guidance():
-    """无效 SMILES（配离子写法错误）时修正 prompt 给出具体改法
-    （Drawbacks 十：银镜反应 [Ag(NH3)2]OH / NH3 裸写）。"""
+    """无效 SMILES 时修正 prompt 给出具体改法（20260821 更新：配离子
+    走分子式轨道——[Ag(NH3)2]+ 直写合法，不再建议拆分组分）。"""
     from core.tag_parser import parse_tags
     from core.tag_validator import validate_tag
-    text = ("[COMPOSITE:reaction][STRUCT:CC=O,id=a][PLUS]"            "[STRUCT:2[Ag(NH3)2]OH,id=b][ARROW:type=single,Δ]"            "[STRUCT:CC(=O)[O-],id=c][/COMPOSITE]")
+    text = ("[COMPOSITE:reaction][STRUCT:CC=O,id=a][PLUS]"
+            "[STRUCT:[Ag(NH3)2OH],id=b][ARROW:type=single,Δ]"
+            "[STRUCT:CC(=O)[O-],id=c][/COMPOSITE]")
     tag = parse_tags(text)[0]
     vr = validate_tag(tag)
+    assert "无效 SMILES" in vr.reason
     prompt = _build_correction_prompt("银镜反应", text, [(tag, vr.reason)])
-    assert "[Ag(NH3)2]OH" in prompt                  # 失败标记原文
-    assert "[Ag]([NH3])[NH3]" in prompt              # 配离子拆分改法
-    assert "NH3" in prompt and "裸写" in prompt       # 氨写法提醒
-    assert "降级为文字描述" in prompt                 # 降级策略
+    assert "[Ag(NH3)2OH]" in prompt                  # 失败标记原文
+    assert "[Ag(NH3)2]+" in prompt                   # 配离子分子式改法
+    assert "分子式" in prompt                         # 分子式轨道指引
+    assert "省略或文字描述" in prompt                 # 降级策略
 
 
 def test_correction_prompt_inorganic_salt_guidance():
-    """无机盐/含氧酸盐 SMILES 非法时修正 prompt 给出离子式改法
-    （KMnO4 写成 K[Mn](=O)(=O)=O / KMn(=O)=O——金属与中心原子无直接键）。"""
+    """无机盐/含氧酸盐 SMILES 非法时修正 prompt 给出分子式/离子式改法
+    （KMnO4 写成 K[Mn](=O)(=O)=O——金属与中心原子无直接键）。"""
     from core.tag_parser import parse_tags
     from core.tag_validator import validate_tag
-    text = ("[COMPOSITE:reaction][STRUCT:CCO,id=a][PLUS]"            "[STRUCT:K[Mn](=O)(=O)=O,id=k][ARROW:type=single]"            "[STRUCT:CC=O,id=b][/COMPOSITE]")
+    text = ("[COMPOSITE:reaction][STRUCT:CCO,id=a][PLUS]"
+            "[STRUCT:K[Mn](=O)(=O)=O,id=k][ARROW:type=single]"
+            "[STRUCT:CC=O,id=b][/COMPOSITE]")
     tag = parse_tags(text)[0]
     vr = validate_tag(tag)
     assert "无效 SMILES" in vr.reason or "化学校验" in vr.reason
@@ -183,7 +188,7 @@ def test_correction_prompt_inorganic_salt_guidance():
                                       [(tag, vr.reason)])
     assert "K[Mn](=O)(=O)=O" in prompt              # 失败标记原文
     assert "[K+].[O-][Mn](=O)(=O)=O" in prompt      # 离子式改法
-    assert "离子式" in prompt                        # 引导策略
+    assert "分子式" in prompt                        # 分子式轨道指引
 
 
 def test_retry_succeeds_after_smiles_fix(fake_rdkit, fake_renderers,
@@ -299,12 +304,33 @@ def test_route_upgrade_on_failure(fake_rdkit, fake_renderers, monkeypatch):
 
 def test_route_upgrade_then_correction(fake_rdkit, fake_renderers,
                                        monkeypatch):
-    """flash 失败 → 升级 pro 部分修正仍失败 → 再次修正救回。"""
+    """flash 失败 → 升级 pro 部分修正仍失败（相同错误）→ P3 逃生不再烧轮次。"""
     _enable_route(monkeypatch)
     calls = []
     answers = [
         "苯是 [STRUCT:XYZABC]。",      # flash 首跑失败
-        "[STRUCT:XYZABC]",              # pro 第 1 次修正仍失败
+        "[STRUCT:XYZABC]",              # pro 第 1 次修正原样重犯（同 fingerprint）
+    ]
+    monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
+    monkeypatch.setattr(
+        "app.ask_llm", lambda *a, **k: calls.append(k) or answers.pop(0))
+    result = process_question("画苯", max_corrections=2)
+    # P3：修正后失败原因与上轮完全相同 → 跳过剩余修正轮次（20260821）
+    assert len(calls) == 2
+    assert calls[0].get("model") is None
+    assert calls[1].get("model") == "deepseek-v4-pro"
+    assert calls[1].get("thinking") == "disabled"   # 修正调用关思考
+    assert "RENDERED" not in result                  # 未救回 → 降级文本
+
+
+def test_route_correction_continues_on_new_error(fake_rdkit, fake_renderers,
+                                                 monkeypatch):
+    """修正后失败原因**变化**（fingerprint 不同）→ 不触发 P3，继续修正救回。"""
+    _enable_route(monkeypatch)
+    calls = []
+    answers = [
+        "苯是 [STRUCT:XYZABC]。",      # flash 首跑失败
+        "[STRUCT:XYZABD]",              # pro 第 1 次修正仍失败（不同原因串）
         "[STRUCT:c1ccccc1]",            # pro 第 2 次修正成功
     ]
     monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
@@ -312,11 +338,7 @@ def test_route_upgrade_then_correction(fake_rdkit, fake_renderers,
         "app.ask_llm", lambda *a, **k: calls.append(k) or answers.pop(0))
     result = process_question("画苯", max_corrections=2)
     assert len(calls) == 3
-    assert calls[0].get("model") is None
-    assert calls[1].get("model") == "deepseek-v4-pro"
     assert calls[2].get("model") == "deepseek-v4-pro"
-    assert calls[1].get("thinking") == "disabled"   # 修正调用关思考
-    assert calls[2].get("thinking") == "disabled"
     assert "RENDERED:c1ccccc1" in result
 
 
@@ -403,3 +425,37 @@ def test_non_mecharrow_still_whole_degrade(monkeypatch):
     result = process_question("画苯", max_corrections=1)
     assert "图示无法渲染" in result
     assert "无效 SMILES" not in result                # 前端友好（无技术细节）
+
+
+def test_autofix_endpoint_skips_llm_correction(monkeypatch):
+    """P1 端到端：唯一候选端点自动修复——主生成后直接渲染，零修正调用。"""
+    pytest.importorskip("rdkit")
+    calls = []
+    bad_tag = ("[COMPOSITE:reaction]"
+               "[STRUCT:O=[N+]([O-])C([H])1C=CC=C[CH+]1,id=sg]"
+               "[PLUS][STRUCT:O=[N+]([O-])[O-],id=no3]"
+               "[ARROW:type=single][STRUCT:O=[N+]([O-])C1=CC=CC=C1,id=nb]"
+               "[PLUS][STRUCT:O=[N+]([O-])O,id=hno3]"
+               "[MECHARROW:no3:2>sg:4,sg:3-6>sg:3][/COMPOSITE]")  # 3-6 应为 3-4
+    monkeypatch.setattr(
+        "app.ask_llm", lambda *a, **k: calls.append(k) or f"机理：{bad_tag}")
+    result = process_question("磺化脱质子", max_corrections=2)
+    assert len(calls) == 1                     # 端点自动修复，无 LLM 修正
+    assert "渲染失败" not in result and "无法渲染" not in result
+    assert "tikzpicture" in result
+
+
+def test_correction_prompt_dynamic_sections():
+    """P2：修正要求按失败类型裁剪——mech 失败只给端点指引，不掺守恒讲座。"""
+    pytest.importorskip("rdkit")
+    from core.tag_parser import parse_tags
+    from core.tag_validator import validate_tag
+    text = ("[COMPOSITE:reaction][STRUCT:CC(C)(C)[OH2+],id=p]"
+            "[MECHARROW:p:3-4>p:4][/COMPOSITE]")
+    tag = parse_tags(text)[0]
+    vr = validate_tag(tag)
+    assert "MECHARROW" in vr.reason
+    prompt = _build_correction_prompt("脱质子", text, [(tag, vr.reason)])
+    assert "直接改写" in prompt                  # mech 指引在场
+    assert "禁用 [O]/[H] 占位符" not in prompt      # 守恒段落被裁掉
+    assert "配体括号写全" not in prompt             # SMILES 段落被裁掉
