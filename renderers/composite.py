@@ -954,7 +954,7 @@ def render_composite(layout: str, children: list) -> str:
             scope, bbox_or_err = _mode_scope_lines(comp, allow_aromatic)
             if scope is None:
                 return (f"（COMPOSITE 渲染失败：{bbox_or_err}"
-                        f"（组件 {comp['id']}）")
+                        f"（组件 {comp['id']}））")
             modecomps[comp["id"]] = {"lines": scope, "bbox": bbox_or_err}
             continue
         mol = prepare_mol(comp["smiles"], allow_aromatic=allow_aromatic)
@@ -968,7 +968,7 @@ def render_composite(layout: str, children: list) -> str:
                     "coeff": comp.get("coeff", 1.0),
                 }
                 continue
-            return f"（COMPOSITE 渲染失败：无效 SMILES「{comp['smiles']}」（组件 {comp['id']}）"
+            return f"（COMPOSITE 渲染失败：无效 SMILES「{comp['smiles']}」（组件 {comp['id']}））"
         scale_mol_coords(mol, _MOL_SCALE)
         anno = annotations.get(comp["id"], {})
         # 显式 H 对账：仅 [XH] 子标记（氢的显示由 XH 负责，HBOND 只画点）

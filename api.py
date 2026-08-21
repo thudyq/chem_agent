@@ -391,12 +391,18 @@ def _sse_frame(cid: str, created: int, delta: dict,
 # P2 修正触发标记：correction_callback 经 progress_q 传给主循环的哨兵（非文本片段）
 _CORRECTION_MARK = object()
 
+# 思考期心跳间隔（秒）：SSE 长时间无数据帧时 Nginx 等网关可能断开
+# （proxy_read_timeout 默认 60s），需要保活帧；但清小搭等前端对 reasoning
+# 帧是逐条追加显示，心跳太频繁会刷屏——10s 一次是保活与观感的折中。
+_HEARTBEAT_INTERVAL = 10.0
+
 
 def _sse_stream(question: str, history: list, cid: str, created: int,
                 public_base: str):
-    """SSE 帧序列：role 帧 → 思考帧（B2：实时转发 LLM 生成草稿；P2 修正提示）→
-    （有图时）图示渲染提示 → content 增量 → （编译超 3s 心跳）→
-    stop 帧（usage + x_soda.attachments）→ [DONE]。
+    """SSE 帧序列：role 帧 → 思考帧（固定提示 + 低频心跳 + P2 修正提示；不再
+    转发草稿增量——清小搭等前端对 reasoning 帧逐条追加显示，草稿帧会造成
+    "正在生成… 草稿"无限叠加错乱）→（有图时）图示渲染提示 → content 增量
+    →（编译超 3s 心跳）→ stop 帧（usage + x_soda.attachments）→ [DONE]。
 
     文本先行：process_question 一返回立即发 content 帧，附件 PNG 编译在
     work 线程与 content 发送并行、完成后挂 stop 帧——用户先读到完整文字
@@ -438,7 +444,6 @@ def _sse_stream(question: str, history: list, cid: str, created: int,
         result_q.put(attachments)
 
     threading.Thread(target=work, daemon=True).start()
-    draft = []          # LLM 生成草稿（限长保留，reasoning 帧覆盖式显示）
     last_flush = time.time()
     while True:
         try:
@@ -446,8 +451,10 @@ def _sse_stream(question: str, history: list, cid: str, created: int,
             break
         except queue.Empty:
             pass
-        # 批量取出 LLM 增量（限频，避免每 chunk 一帧刷屏）
-        pieces = []
+        # 消费 progress_q（防止队列满阻塞 process_question 的 on_piece 回调），
+        # 但**不再把草稿增量作为 reasoning 帧转发**：清小搭等前端对 reasoning
+        # 帧逐条追加显示，草稿帧（"正在生成… 草稿"）会无限叠加错乱。
+        # 本地 Streamlit 走 progress_callback 直连 UI，不依赖本通道，不受影响。
         correction = False
         while True:
             try:
@@ -456,25 +463,14 @@ def _sse_stream(question: str, history: list, cid: str, created: int,
                 break
             if p is _CORRECTION_MARK:
                 correction = True
-            else:
-                pieces.append(p)
         if correction:
-            draft.clear()  # 修正调用重新生成，旧草稿作废
             yield _sse_frame(cid, created, {"reasoning": "正在修正回答…"})
             last_flush = time.time()
-        if pieces:
-            draft.append("".join(pieces))
-            if len(draft) > 4:
-                draft.pop(0)
-            yield _sse_frame(cid, created,
-                             {"reasoning": f"正在生成… {''.join(draft)}"})
+        elif time.time() - last_flush >= _HEARTBEAT_INTERVAL:
+            yield _sse_frame(cid, created, {"reasoning": "正在思考…"})
             last_flush = time.time()
-        elif not correction:
-            if time.time() - last_flush >= 3.0:
-                yield _sse_frame(cid, created, {"reasoning": "仍在思考…"})
-                last_flush = time.time()
-            else:
-                time.sleep(0.2)
+        else:
+            time.sleep(0.2)
 
     if isinstance(answer, Exception):
         yield _sse_frame(cid, created, {}, finish="stop",
@@ -483,9 +479,8 @@ def _sse_stream(question: str, history: list, cid: str, created: int,
         yield "data: [DONE]\n\n"
         return
 
-    # 收尾排空：answer 就绪时队列里可能仍有未消费的草稿片段/修正标记
-    # （快速回答时主循环来不及逐批取出），丢弃会丢修正提示
-    leftover = []
+    # 收尾排空：answer 就绪时队列里可能仍有未消费的修正标记（快速回答时
+    # 主循环来不及取出）——只保留修正提示；草稿片段一律丢弃（不再转发）。
     correction = False
     while True:
         try:
@@ -494,13 +489,8 @@ def _sse_stream(question: str, history: list, cid: str, created: int,
             break
         if p is _CORRECTION_MARK:
             correction = True
-        else:
-            leftover.append(p)
     if correction:
         yield _sse_frame(cid, created, {"reasoning": "正在修正回答…"})
-    if leftover:
-        yield _sse_frame(cid, created,
-                         {"reasoning": f"正在生成… {''.join(leftover)[-200:]}"})
 
     answer = answer or "（未能生成回答）"
     if extract_code_blocks(answer):

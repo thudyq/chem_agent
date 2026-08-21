@@ -125,6 +125,37 @@ def test_chat_stream_sse(client):
                                                     "function_call")
 
 
+def test_sse_no_draft_reasoning_frames(monkeypatch):
+    """草稿增量不再作为 reasoning 帧转发（清小搭等前端对 reasoning 帧逐条
+    追加显示，"正在生成… 草稿"会无限叠加错乱）；修正提示保留；content 完整。"""
+    def fake_pipeline(question, history=None, progress_callback=None,
+                      correction_callback=None, diagnostics=None, responses=None):
+        progress_callback("苯的硝化是亲电芳香取代反应（SEAr）的经典范例。")
+        progress_callback("[COMPOSITE:reaction][STRUCT:...]")
+        correction_callback()          # P2 修正触发
+        progress_callback("修正后的标记内容")
+        return "最终回答内容。"
+
+    monkeypatch.setattr(api, "process_question", fake_pipeline)
+    monkeypatch.setattr(api, "build_attachments", lambda a, b: [])
+    # _sse_stream 是生成器，直接消费为帧字符串（不经过 HTTP，避免临时目录依赖）
+    sse_text = "".join(api._sse_stream("q", [], "cid", 1, "http://x"))
+    # 不再出现草稿增量帧（含"正在生成…"前缀或草稿原文）
+    assert "正在生成…" not in sse_text
+    assert "苯的硝化是" not in sse_text and "COMPOSITE" not in sse_text
+    # 修正提示保留
+    assert "正在修正回答…" in sse_text
+    # content 帧拼出完整回答
+    import json as _json
+    content = "".join(
+        _json.loads(blk[len("data:"):].strip())["choices"][0]
+        ["delta"].get("content", "")
+        for blk in sse_text.split("\n\n")
+        if blk.strip().startswith("data:") and "[DONE]" not in blk
+    )
+    assert content == "最终回答内容。"
+
+
 def test_chat_stream_error_fallback(client, monkeypatch):
     """管线抛异常时：stop 帧 + error 字段，finish_reason 不为 error。"""
     def _boom(*a, **k):

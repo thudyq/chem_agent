@@ -112,6 +112,30 @@ def _extract_names_from_question(question: str) -> list:
     return names[:3]
 
 
+def _run_with_timeout(fn, timeout: float, default=None):
+    """在独立守护线程运行 fn，超时返回 default（线程继续跑，结果丢弃）。
+
+    用于 PubChem 兜底/增强等"锦上添花"的网络调用：PubChem 在部分网络环境
+    慢/被限流（503 重试可卡 90s+），若同步执行会拖住整个回答流程——清小搭
+    端表现为"正在思考"长时间无进展。超时放弃后主流程照常走 LLM。
+    """
+    import threading
+    box = {}
+
+    def _target():
+        try:
+            box["v"] = fn()
+        except Exception:
+            box["v"] = default
+
+    t = threading.Thread(target=_target, daemon=True)
+    t.start()
+    t.join(timeout)
+    if t.is_alive():
+        return default
+    return box.get("v", default)
+
+
 def _translate_name_zh2en(name: str) -> str | None:
     """中文化学名 → 英文（LLM 翻译）；已是英文或翻译失败返回原样/None。"""
     if not name or not isinstance(name, str):
@@ -220,7 +244,9 @@ def _build_correction_prompt(user_question: str, original: str,
             lines.append(f"  上下文：{ctx}")
 
     # PubChem 兜底：失败标记的 label 是化合物名时，反查权威 SMILES 作为修正参考
-    pubchem_ref = _fetch_pubchem_references(failures, user_question)
+    # （12s 硬超时：PubChem 慢/限流时放弃，不拖住修正主流程）
+    pubchem_ref = _run_with_timeout(
+        lambda: _fetch_pubchem_references(failures, user_question), 12.0, "")
     if pubchem_ref:
         lines.append("")
         lines.append(pubchem_ref)
@@ -265,7 +291,10 @@ def _build_correction_prompt(user_question: str, original: str,
         "[K+].[K+].[O-][Cr](=O)(=O)O[Cr]"
         "(=O)(=O)[O-]，KClO3 写 [K+].[O-][Cl](=O)=O，Na2CO3 写"
         "[Na+].[Na+].[O-]C(=O)[O-]，H2SO4 写 OS(=O)(=O)O，HNO3 写"
-        "[O-][N+](=O)O。",
+        "[O-][N+](=O)O，NO2+（硝鎂离子）写 [N+](=O)=O，NO3-（硝酸根）写"
+        "[O-][N+](=O)[O-]，硝基（R-NO2）写 R[N+](=O)[O-]——注意 N 的"
+        "正电荷离子必须连足配体（3 个键序），不能写 N+=O 或 O=N+（N 缺配体"
+        "导致 SMILES 非法）。",
         "6. 若失败原因是无效物种/无效 SMILES（如 `-H+`）：`-` 前缀补足只写在箭头条件里"
         "（第 3 段，如 `|-H2O`），**不能写进反应物/产物列表**——列表中的离子直接写"
         "（H+、Br-、[OH-] 或 [H+]、[Br-]），去掉 `-` 前缀并用 `;` 分隔、保证两侧电荷"
@@ -455,7 +484,10 @@ def _generate_with_corrections(user_question: str, model=None,
                         chem_name = chem_name[len(_p):].strip()
                         break
                 if chem_name and not _re.search(r"反应|机理|方程", user_question):
-                    pub_smiles = name_to_smiles(chem_name)
+                    # 8s 硬超时：PubChem 慢/被限流时跳过增强（不阻塞主流程，
+                    # 否则清小搭端表现为"正在思考"长时间无进展）
+                    pub_smiles = _run_with_timeout(
+                        lambda: name_to_smiles(chem_name), 8.0, None)
                     if pub_smiles:
                         llm_input = (
                             f"[参考] 化合物「{chem_name}」的 PubChem 标准 SMILES 为"
