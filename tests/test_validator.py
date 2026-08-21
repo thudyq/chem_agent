@@ -1117,3 +1117,45 @@ def test_radical_charge_conflict_rejected():
         "[COMPOSITE:reaction][STRUCT:CCl,id=a][PLUS][STRUCT:[O-],id=b]"
         "[ARROW:type=single][STRUCT:CO,id=c][/COMPOSITE]")
     assert any("自由基单电子" in r.reason for r in bad3)
+
+
+def test_proton_transfer_pairing():
+    """质子转移配对校验（4b，20260820）：
+    A. 碱孤对→显式 H 但缺 X—H 键电子回落 → 拦截；
+    B. 脱质子（X—H 键电子落回同组件 X）但缺碱夺 H 箭头 → 拦截；
+    C. 自由脱质子（容器内有 [H+]）豁免；
+    D. 双箭头配对完整 → 放行（示例 9 模式）；
+    E. 鱼钩夺氢（自由基）豁免（示例 8 模式）。"""
+    pytest.importorskip("rdkit")
+    # A：缺配对 → 拦截
+    _, bad = _validate(
+        "[COMPOSITE:reaction][STRUCT:C([H])C=O,id=ald][PLUS][STRUCT:[OH-],id=base]"
+        "[ARROW:type=single][STRUCT:[CH2-]C=O][PLUS][STRUCT:O]"
+        "[MECHARROW:base:0>ald:1][/COMPOSITE]")
+    assert any("缺配对箭头" in r.reason for r in bad)
+    # D：配对完整 → 放行
+    _, ok = _validate(
+        "[COMPOSITE:reaction][STRUCT:C([H])C=O,id=ald][PLUS][STRUCT:[OH-],id=base]"
+        "[ARROW:type=single][STRUCT:[CH2-]C=O][PLUS][STRUCT:O]"
+        "[MECHARROW:base:0>ald:1][MECHARROW:ald:0-1>ald:0][/COMPOSITE]")
+    assert not ok, [r.reason for r in ok]
+    # B：脱质子缺碱箭头 → 拦截
+    _, bad2 = _validate(
+        "[COMPOSITE:reaction][STRUCT:C([H])C=O,id=ald][PLUS][STRUCT:[OH-],id=base]"
+        "[ARROW:type=single][STRUCT:[CH2-]C=O][PLUS][STRUCT:O]"
+        "[MECHARROW:ald:0-1>ald:0][/COMPOSITE]")
+    assert any("缺配对箭头" in r.reason for r in bad2)
+    # C：自由脱质子（写出 [H+]）→ 豁免
+    _, ok2 = _validate(
+        "[COMPOSITE:reaction][STRUCT:C([H])C=O,id=ald]"
+        "[ARROW:type=single][STRUCT:[CH2-]C=O,id=en][PLUS][STRUCT:[H+],id=hp]"
+        "[MECHARROW:ald:0-1>ald:0][/COMPOSITE]")
+    assert not ok2, [r.reason for r in ok2]
+    # E：鱼钩（>>）夺氢豁免 → 放行（示例 8 完整写法）
+    _, ok3 = _validate(
+        "[COMPOSITE:reaction][STRUCT:[Cl],id=cl,label=Cl·][PLUS]"
+        "[STRUCT:C([H]),id=ch4,label=CH4][ARROW:type=single]"
+        "[STRUCT:Cl,id=hcl,label=HCl][PLUS][STRUCT:[CH3],id=me,label=·CH3]"
+        "[MECHARROW:cl:0>>cl:0+ch4:1]"
+        "[MECHARROW:ch4:0-1>>cl:0+ch4:1][MECHARROW:ch4:0-1>>ch4:0][/COMPOSITE]")
+    assert not ok3, [r.reason for r in ok3]

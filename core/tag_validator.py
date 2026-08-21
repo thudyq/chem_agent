@@ -519,6 +519,91 @@ def _arrow_supplement_matches(left, right, condition: str,
 _ARROW_TYPES = ("single", "reversible", "resonance", "retro")
 
 
+def _explicit_h_heavy(mol, idx: int):
+    """idx 为显式 H 原子时返回其重原子邻居序号；否则 None。
+
+    fake mol（测试 fixture）或无邻居信息时返回 None（跳过配对校验）。
+    """
+    if mol is None or not isinstance(idx, int):
+        return None
+    gai = getattr(mol, "GetAtomWithIdx", None)
+    if gai is None or not (0 <= idx < mol.GetNumAtoms()):
+        return None
+    atom = gai(idx)
+    if getattr(atom, "GetAtomicNum", lambda: -1)() != 1:
+        return None
+    for n in getattr(atom, "GetNeighbors", list)():
+        if getattr(n, "GetAtomicNum", lambda: 0)() != 1:
+            return n.GetIdx()
+    return None
+
+
+def _check_proton_transfer_pairing(mech_children: list, comp_mols: dict,
+                                   comps: dict) -> str:
+    """质子转移配对校验（20260820 基线驱动，化学复审 4b）。
+
+    双电子 MECHARROW 引用显式 H 时必须画全配对（§五 规则 7/10）：
+    - Case A：终点为显式 H（碱夺 H）→ 需同组件配套箭头：X—H 键中点 → X
+      （键电子落回与 H 相连的重原子）；
+    - Case B：起点为含显式 H 的键中点、且终点恰为同组件的重原子 X
+      （脱质子、电子落回给体原子）→ 需配套碱孤对指向该 H 的箭头；
+      容器内存在游离 [H+] 组件时豁免（自由脱质子，如 EAS 脱质子步）。
+    豁免：鱼钩 >>（自由基模式）；X—H 键指向其他原子（氢负离子迁移等，
+    H 随电子对移动，非脱质子）；跨组件终点序号巧合（Case B 要求
+    dst_id == src_id）。
+    """
+    arrows = []   # (src_id, src_pt, dst_id, dst_pt)，仅双电子
+    for child in mech_children:
+        if not child.args or not child.args[0]:
+            continue
+        for spec in child.args[0].split(","):
+            spec = spec.strip()
+            if not spec or ">>" in spec:
+                continue
+            m = _MECH_ARROW_RE.match(spec)
+            if not m or m.group(6) is not None:
+                continue    # 格式问题/成键空白（自由基场景）由端点校验处理
+            arrows.append((m.group(1), m.group(2), m.group(4), m.group(5)))
+
+    for src_id, src_pt, dst_id, dst_pt in arrows:
+        # Case A：终点为显式 H → 碱夺 H
+        if dst_pt.isdigit():
+            heavy = _explicit_h_heavy(comp_mols.get(dst_id), int(dst_pt))
+            if heavy is not None:
+                bond_pats = {f"{heavy}-{dst_pt}", f"{dst_pt}-{heavy}"}
+                if not any(s == dst_id and sp in bond_pats
+                           and d == dst_id and dp == str(heavy)
+                           for s, sp, d, dp in arrows):
+                    return (f"质子转移缺配对箭头：「{src_id}:{src_pt}>{dst_id}:"
+                            f"{dst_pt}」的电子落向显式 H（{dst_id}:{dst_pt}），"
+                            f"还需画出 X—H 键电子落回 X 的配套箭头"
+                            f"（{dst_id}:{heavy}-{dst_pt}>{dst_id}:{heavy}）")
+        # Case B：起点为含显式 H 的键中点、终点恰为同组件重原子 → 脱质子
+        if "-" in src_pt and dst_pt.isdigit() and dst_id == src_id:
+            a, _, b = src_pt.partition("-")
+            for h, x in ((a, b), (b, a)):
+                if not h.isdigit():
+                    continue
+                if _explicit_h_heavy(comp_mols.get(src_id), int(h)) is None:
+                    continue
+                if dst_pt != x:
+                    continue    # 键电子去其他原子（氢负离子迁移等），非脱质子
+                # 自由脱质子豁免：容器内有游离 [H+] 组件（H+ 已写出，
+                # 无需碱夺 H 箭头，如 EAS 脱质子步）
+                has_free_proton = any(
+                    (c.get("smiles") or "").strip() == "[H+]"
+                    for c in comps.values())
+                if has_free_proton:
+                    continue
+                if not any(dp == h for _s, _sp, _d, dp in arrows):
+                    return (f"质子转移缺配对箭头：「{src_id}:{src_pt}>{dst_id}:"
+                            f"{dst_pt}」是脱质子（X—H 键电子落回 {x}），还需"
+                            f"画出碱孤对指向该 H 的配套箭头"
+                            f"（如 base:0>{src_id}:{h}）；若是自由脱质子"
+                            f"（无碱参与），产物中应写出 [H+] 组件")
+    return ""
+
+
 def _opaque_comp(comps: dict, cid: str) -> bool:
     """组件是否为立体画法组件（stereo/chair/newman，仅展示的不透明单元，
     不支持 MECHARROW/HBOND/CHARGE/XH/BOND 等原子级引用）。"""
@@ -1333,6 +1418,10 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
                            f"（arrow 令牌组件必须被唯一一个 ARROW 引用）")
 
     if _RDKIT_OK:
+        # 质子转移配对（4b）：双电子箭头引用显式 H 时必须画全配对
+        reason = _check_proton_transfer_pairing(mech_children, comp_mols, comps)
+        if reason:
+            return False, reason
         for ref, idxs in xh_usage.items():
             reason = _check_xh_h_usage(comp_mols.get(ref), idxs, f"组件 {ref} ")
             if reason:
