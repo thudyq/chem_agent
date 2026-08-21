@@ -164,6 +164,15 @@ _FORMULA_LABEL_ELEMENTS = {
 }
 _FORMULA_LABEL_RE = re.compile(r"^([A-Z][a-z]?\d*)+([+-]\d*)?$")
 
+# 配离子/配合物分子式：[Ag(NH3)2]+、[Cu(NH3)4]2+、[Fe(CN)6]3-，及带反
+# 离子的中性形式 [Ag(NH3)2]OH、K4[Fe(CN)6]、[Co(NH3)6]Cl3——方括号包裹、
+# 内部为"中心原子 + (配体元素序列)系数"，尾部电荷或前后置反离子
+# （20260821：配离子走分子式文本通道，无需写 SMILES 结构式）。
+_COMPLEX_ION_RE = re.compile(
+    r"^(?:[A-Z][a-z]?\d*)*"
+    r"\[[A-Z][a-z]?(?:\((?:[A-Za-z]\d*)+\)\d*)+\]"
+    r"(?:(?:\d*[+-])|(?:[A-Z][a-z]?\d*)+)?$")
+
 
 def is_formula_label(label: str) -> bool:
     """label 是否为纯化学式（含自由基符号 · 的也算，如 Cl·、·CH3）。
@@ -171,9 +180,14 @@ def is_formula_label(label: str) -> bool:
     用于决定 label 是否在分子下方重复显示：纯化学式（CH3Cl、OH-、Cl·）
     分子本身已展示，不重复；中文/角色标注（底物、质子化乙醇）需显示。
     去 · 后需全由可识别元素 + 数字组成（首字符大写）。
+    20260821：配离子分子式（[Ag(NH3)2]+ 等）同样识别为纯化学式。
     """
     s = (label or "").strip().replace("·", "")
-    if not s or not _FORMULA_LABEL_RE.match(s):
+    if not s:
+        return False
+    if _COMPLEX_ION_RE.match(s):
+        return True
+    if not _FORMULA_LABEL_RE.match(s):
         return False
     return all(sym in _FORMULA_LABEL_ELEMENTS
                for sym in re.findall(r"([A-Z][a-z]?)", s))
@@ -558,13 +572,19 @@ def lone_pair_count(atom) -> tuple[int, int]:
 
     非键电子数 = 价电子 - 键级和 - 形式电荷 - 自由基电子数 - 标签氢数；
     不在表中的元素（金属等）返回 (0, 0)。
+    带形式电荷原子的 2 个"自由基电子"是 RDKit 对缺电子离子的簿记
+    （[Br+]/[Cl+]：6 个价电子实为 3 对孤对电子）——并入非键电子按
+    孤对电子画出，不画单电子点（20260821，教学画法：Br⁺ 三对孤对电子）。
     """
     ve = _VALENCE_ELECTRONS.get(atom.GetAtomicNum())
     if ve is None:
         return 0, 0
     bonds = sum(int(round(b.GetBondTypeAsDouble())) for b in atom.GetBonds())
     radicals = atom.GetNumRadicalElectrons()
-    nonbonding = max(0, ve - bonds - atom.GetFormalCharge() - radicals
+    fc = atom.GetFormalCharge()
+    if fc != 0 and radicals == 2:
+        radicals = 0   # 2 个簿记电子回到非键池，按孤对电子成对画出
+    nonbonding = max(0, ve - bonds - fc - radicals
                      - _implicit_shown_hs(atom))
     return nonbonding // 2, radicals
 

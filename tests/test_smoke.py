@@ -287,6 +287,22 @@ def test_smoke_hbond_toplevel_rejected():
     assert bad == 1
 
 
+def test_smoke_complex_ion_formula():
+    """20260821：配离子分子式通道——[Ag(NH3)2]+ 渲染为文本节点，
+    无需 SMILES 结构式（银镜反应组件）。"""
+    outs, bad = _render(
+        "[COMPOSITE:reaction]"
+        "[STRUCT:CC=O,id=ald,label=乙醛][PLUS][STRUCT:2[Ag(NH3)2]+,id=ag]"
+        "[PLUS][STRUCT:3[OH-],id=oh]"
+        "[ARROW:type=single,Δ]"
+        "[STRUCT:CC(=O)[O-],id=ac][PLUS][STRUCT:2[Ag],id=ag0]"
+        "[PLUS][STRUCT:4[NH3],id=am][PLUS][STRUCT:2H2O,id=w]"
+        "[/COMPOSITE]")
+    assert len(outs) == 1 and bad == 0, [r.reason for r in bad]
+    # 配离子文本节点（方括号 + 下标 + 上标电荷）——非 SMILES 走文本通道
+    _assert_ok(outs[0], "[Ag(NH$_3$)$_2$]$^{+}$")
+
+
 
 def test_smoke_pipeline_inject():
     """完整管线冒烟：解析 → 校验 → 渲染 → 注入（无 LLM）。"""
@@ -306,3 +322,49 @@ def test_smoke_pipeline_inject():
     assert "[STRUCT:" not in result and "[COMPOSITE:" not in result, "标记应被替换"
     assert "\\begin{tikzpicture}" in result
     assert "苯的结构" in result and "和" in result
+
+
+def test_smoke_complex_compound_counterion():
+    """20260821：带反离子的中性配合物分子式——[Ag(NH3)2]OH、K4[Fe(CN)6]
+    等同样走文本通道并参与守恒计数。"""
+    from core.tag_validator import _parse_complex_ion
+    from renderers.mol_primitives import is_formula_label
+    cases = {
+        "[Ag(NH3)2]OH": ({"Ag": 1, "N": 2, "H": 7, "O": 1}, 0),
+        "[Cu(NH3)4]SO4": ({"Cu": 1, "N": 4, "H": 12, "S": 1, "O": 4}, 0),
+        "K4[Fe(CN)6]": ({"K": 4, "Fe": 1, "C": 6, "N": 6}, 0),
+        "[Co(NH3)6]Cl3": ({"Co": 1, "N": 6, "H": 18, "Cl": 3}, 0),
+        "[Ni(CO)4]": ({"Ni": 1, "C": 4, "O": 4}, 0),
+    }
+    for s, want in cases.items():
+        assert _parse_complex_ion(s) == want, (s, _parse_complex_ion(s))
+        assert is_formula_label(s), s
+    # 裸中心/无配体带电写法不属于本通道
+    for s in ("[Fe]", "[Ag]+", "[AgNH3]+"):
+        assert _parse_complex_ion(s) is None, s
+        assert not is_formula_label(s), s
+    # 守恒：银氨溶液电离 [Ag(NH3)2]OH → [Ag(NH3)2]+ + OH-（原子+电荷）
+    outs, bad = _render(
+        "[COMPOSITE:reaction]"
+        "[STRUCT:[Ag(NH3)2]OH,id=tollens,label=银氨溶液]"
+        "[ARROW:type=single]"
+        "[STRUCT:[Ag(NH3)2]+,id=ag][PLUS][STRUCT:[OH-],id=oh]"
+        "[/COMPOSITE]")
+    assert len(outs) == 1 and bad == 0, [r.reason for r in bad]
+    _assert_ok(outs[0], "[Ag(NH$_3$)$_2$]OH")
+
+
+def test_smoke_toplevel_struct_formula():
+    """20260821：顶层 STRUCT 双轨制——纯化学式/配离子（KMnO4、
+    [Ag(NH3)2]+）渲染为文本节点（与 COMPOSITE textcomps 一致）。"""
+    outs, bad = _render("[STRUCT:[Ag(NH3)2]+]")
+    assert len(outs) == 1 and bad == 0
+    _assert_ok(outs[0], "[Ag(NH$_3$)$_2$]$^{+}$")
+    outs, bad = _render("[STRUCT:KMnO4,label=高锰酸钾]")
+    assert len(outs) == 1 and bad == 0
+    _assert_ok(outs[0], "KMnO$_4$", "高锰酸钾")
+    # 化学式无原子结构：mode 等参数校验拒绝
+    from core.tag_parser import parse_tags
+    from core.tag_validator import validate_tags
+    _, bad = validate_tags(parse_tags("[STRUCT:KMnO4,mode=lewis]"))
+    assert len(bad) == 1 and "没有原子结构" in bad[0].reason

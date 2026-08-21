@@ -44,7 +44,8 @@ def render_structure(smiles: str, label: str = None, mode: str = "skeleton",
         return render_newman(smiles, bond, angle)
 
     from .mol_primitives import (
-        aromatic_ring_info, has_aromatic_lowercase, prepare_mol, wrap_format_text,
+        aromatic_ring_info, has_aromatic_lowercase, is_formula_label,
+        label_wrapped_size, prepare_mol, wrap_format_text,
     )
     from .layout import molecule_scope_lines
 
@@ -53,6 +54,22 @@ def render_structure(smiles: str, label: str = None, mode: str = "skeleton",
     # RDKit 默认会把任意交替式归一化为芳香环，丢失用户指定的单双键位置
     mol = prepare_mol(smiles, allow_aromatic=is_aromatic)
     if mol is None:
+        # 双轨制（与 COMPOSITE textcomps 一致）：纯化学式/配离子
+        # （KMnO4、[Ag(NH3)2]+）渲染为文本节点
+        if is_formula_label(smiles):
+            text = wrap_format_text(smiles)
+            align = "align=center, " if "\\\\" in text else ""
+            lines = ["\\begin{tikzpicture}",
+                     f"  \\node[fill=white, inner sep=1pt, {align}] "
+                     f"at (0.00,0.00) {{{text}}};"]
+            if label and not is_formula_label(label):
+                ltext = wrap_format_text(label)
+                lalign = "align=center, " if "\\\\" in ltext else ""
+                _, h_t = label_wrapped_size(smiles)
+                lines.append(f"  \\node[{lalign}anchor=north] "
+                             f"at (0.00,{-h_t / 2 - 0.15:.2f}) {{{ltext}}};")
+            lines.append("\\end{tikzpicture}")
+            return "\n".join(lines)
         return f"（结构渲染失败：无法为「{smiles}」生成结构式，请检查 SMILES）"
 
     rings = aromatic_ring_info(mol) if is_aromatic else None

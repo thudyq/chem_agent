@@ -367,13 +367,20 @@ def molecule_scope_lines(mol, shift: Tuple[float, float], *,
                 for dx, dy in ((x1, y1), (x2, y2)):
                     lines.append(f"    \\fill ({dx:.2f},{dy:.2f}) circle (0.028);")
                     occ.add_circle(dx, dy, DOT_R)
+            # 带电原子的"单电子"是 RDKit 对缺电子离子的簿记（如 [Br+] 的
+            # 2 个），不是自由基——带形式电荷时不画单电子点
+            if atom.GetFormalCharge() != 0:
+                singles = []
             for dx, dy in singles:
                 lines.append(f"    \\fill ({dx:.2f},{dy:.2f}) circle (0.028);")
                 occ.add_circle(dx, dy, DOT_R)
     else:
         # 自由基单电子不受孤对电子开关影响：不画点会被误读为离子
-        # （如 ·CH3 变成 CH3±）——show_lone_pairs=False 只抑制孤对电子对
+        # （如 ·CH3 变成 CH3±）——show_lone_pairs=False 只抑制孤对电子对；
+        # 带形式电荷的原子不画（[Br+] 等的"单电子"是簿记而非自由基）
         for atom in mol.GetAtoms():
+            if atom.GetFormalCharge() != 0:
+                continue
             idx = atom.GetIdx()
             _, singles = lone_pair_dot_groups(
                 mol, idx, explicit_hs=hs.get(idx, 0))

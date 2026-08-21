@@ -342,6 +342,43 @@ def test_reaction_sup_attachment_balance():
     assert "arrow 令牌" in invalid2[0].reason
 
 
+def test_reaction_complex_ion_balance():
+    """20260821：配离子分子式（[Ag(NH3)2]+ 等）参与守恒校验。
+
+    银镜反应：CH3CHO + 2[Ag(NH3)2]+ + 3OH- → CH3COO- + 2Ag + 4NH3 + 2H2O
+    （配离子按中心原子 + 配体元素乘括号系数计数）。
+    """
+    _, invalid = _validate(
+        "[COMPOSITE:reaction]"
+        "[STRUCT:CC=O,id=ald][PLUS][STRUCT:2[Ag(NH3)2]+,id=ag]"
+        "[PLUS][STRUCT:3[OH-],id=oh]"
+        "[ARROW:type=single,Δ]"
+        "[STRUCT:CC(=O)[O-],id=ac][PLUS][STRUCT:2[Ag],id=ag0]"
+        "[PLUS][STRUCT:4[NH3],id=am][PLUS][STRUCT:2H2O,id=w]"
+        "[/COMPOSITE]")
+    assert len(invalid) == 0, [r.reason for r in invalid]
+    # 不守恒（左侧少 1 OH-）→ 拦截
+    _, invalid2 = _validate(
+        "[COMPOSITE:reaction]"
+        "[STRUCT:CC=O,id=ald][PLUS][STRUCT:2[Ag(NH3)2]+,id=ag]"
+        "[PLUS][STRUCT:2[OH-],id=oh]"
+        "[ARROW:type=single,Δ]"
+        "[STRUCT:CC(=O)[O-],id=ac][PLUS][STRUCT:2[Ag],id=ag0]"
+        "[PLUS][STRUCT:4[NH3],id=am][PLUS][STRUCT:2H2O,id=w]"
+        "[/COMPOSITE]")
+    assert len(invalid2) == 1
+    assert "化学校验" in invalid2[0].reason
+
+
+def test_complex_ion_counts():
+    """配离子分子式元素计数（校验层 _parse_complex_ion）。"""
+    from core.tag_validator import _parse_complex_ion
+    assert _parse_complex_ion("[Ag(NH3)2]+") == ({'Ag': 1, 'H': 6, 'N': 2}, 1)
+    assert _parse_complex_ion("[Cu(NH3)4]2+") == ({'Cu': 1, 'H': 12, 'N': 4}, 2)
+    assert _parse_complex_ion("[Fe(CN)6]3-") == ({'Fe': 1, 'C': 6, 'N': 6}, -3)
+    assert _parse_complex_ion("[Ag(NH3)2]+".replace("+", "x")) is None  # 非法
+
+
 def test_reaction_arrow_type_invalid():
     """ARROW type 非法枚举拦截。"""
     _, invalid = _validate(
@@ -1196,3 +1233,27 @@ def test_sn2_attack_site():
         "[ARROW:type=single][STRUCT:CC(C)(C)[OH2+],id=ox]"
         "[MECHARROW:w:0>cat:1][/COMPOSITE]")
     assert not ok4, [r.reason for r in ok4]
+
+
+def test_halogen_cation_eas_electrophile_allowed():
+    """卤素阳离子是 EAS 亲电试剂的形式写法（[Br+]/[Cl+]，RDKit 簿记为
+    电荷+2 单电子）——不拦截、渲染不画单电子点（20260821 修复 4a 误伤）。"""
+    pytest.importorskip("rdkit")
+    _, ok = _validate(
+        "[COMPOSITE:reaction][STRUCT:BrBr,id=br2][PLUS]"
+        "[STRUCT:Br[Fe](Br)Br,id=fe][ARROW:type=single]"
+        "[STRUCT:[Br+],id=brp][PLUS][STRUCT:Br[Fe-](Br)(Br)Br,id=fe4]"
+        "[/COMPOSITE]")
+    assert not ok, [r.reason for r in ok]
+    from renderers.structure import render_structure
+    assert "\\fill" not in render_structure("[Br+]")   # Br+ 不画单电子点
+    assert "\\fill" not in render_structure("[CH3+]")  # 碳正离子本就没有
+    # 带形式电荷原子的 2 个簿记"自由基电子"并入孤对电子：
+    # [Br+]/[Cl+] 画 3 对孤对电子、0 个单电子（教学画法，20260821）
+    from renderers.mol_primitives import prepare_mol, lone_pair_count
+    for smi in ("[Br+]", "[Cl+]"):
+        a = prepare_mol(smi).GetAtomWithIdx(0)
+        assert lone_pair_count(a) == (3, 0), (smi, lone_pair_count(a))
+    # 真矛盾态（电荷+1 单电子）仍拦截
+    _, bad = _validate("[STRUCT:[O-]]")
+    assert len(bad) == 1 and "自由基单电子" in bad[0].reason

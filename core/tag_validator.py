@@ -196,11 +196,17 @@ def tag_name(tag_type: str) -> str:
 
 
 def _smiles_ok(smiles: str) -> bool:
-    """SMILES 语义校验；rdkit 不可用时放行（格式校验已做）。"""
+    """SMILES 语义校验；rdkit 不可用时放行（格式校验已做）。
+
+    20260821：配离子分子式（[Ag(NH3)2]+ 等，非 SMILES 但走分子式文本
+    通道）同样放行——渲染层按 textcomps 画文本节点。
+    """
     if not _RDKIT_OK:
         return True
     try:
-        return _parse_mol(smiles) is not None
+        if _parse_mol(smiles) is not None:
+            return True
+        return _parse_complex_ion(smiles) is not None
     except Exception:
         return False
 
@@ -334,8 +340,64 @@ def _formula_or_smiles_counts(token: str):
         mol = _parse_mol(token)
     if mol is not None:
         return _mol_counts(mol)
+    # 配离子分子式（[Ag(NH3)2]+ 等，20260821 走分子式文本通道）
+    cion = _parse_complex_ion(token)
+    if cion is not None:
+        return cion
     cands = _parse_plain_formula(token)
     return cands[0] if cands else None
+
+
+def _parse_complex_ion(text: str):
+    """配离子/配合物分子式 → (元素计数 dict, 净电荷)；无法解析返回 None。
+
+    支持 [Ag(NH3)2]+、[Cu(NH3)4]2+、[Fe(CN)6]3- 等带电形式，及带反离子
+    的中性形式 [Ag(NH3)2]OH、K4[Fe(CN)6]、[Co(NH3)6]Cl3：方括号包裹、
+    内部为"中心原子 + (配体)系数" 序列，尾部电荷或前后置反离子（按电
+    中性计 0，与分子式轨道不验电荷一致）。中心原子/配体/反离子均为元
+    素序列（如 NH3 = N1H3），计数乘配体括号系数。
+    氢与配体是共价结合，计数计入分子式（与 SMILES 的 GetTotalNumHs 一致）。
+    方括号内无配体且无前后置成分的裸写法（[Fe]）不属于本通道。
+    """
+    s = (text or "").strip()
+    m = re.fullmatch(
+        r"((?:[A-Z][a-z]?\d*)*)"                       # 前置反离子（K4）
+        r"\[([A-Z][a-z]?\d*)((?:\((?:[A-Za-z]\d*)+\)\d*)*)\]"
+        r"(?:(\d*)([+-])|((?:[A-Z][a-z]?\d*)+))?",     # 尾部电荷或后置反离子
+        s)
+    if not m:
+        return None
+    prefix, center, ligands, qdigits, qsign, suffix = m.groups()
+    if not (prefix or ligands or suffix):
+        return None   # 裸中心+电荷（[Ag]+）/裸中心（[Fe]）不属于本通道
+    counts, charge = {}, 0
+    cm = re.fullmatch(r"([A-Z][a-z]?)(\d*)", center)
+    if not cm or cm.group(1) not in _REAL_ELEMENTS:
+        return None
+    counts[cm.group(1)] = int(cm.group(2)) if cm.group(2) else 1
+    rest = ligands
+    while rest:
+        lm = re.match(r"\(((?:[A-Za-z]\d*)+)\)(\d*)", rest)
+        if not lm:
+            return None
+        ligand, mult = lm.group(1), lm.group(2)
+        mult_n = int(mult) if mult else 1
+        for sym, num in _FORMULA_TOKEN_RE.findall(ligand):
+            if sym not in _REAL_ELEMENTS:
+                return None
+            counts[sym] = counts.get(sym, 0) \
+                + (int(num) if num else 1) * mult_n
+        rest = rest[lm.end():]
+    # 前后置反离子（OH、SO4、Cl3、K4 等）：元素序列直接计入，净电荷按 0
+    for part in (prefix, suffix or ""):
+        for sym, num in _FORMULA_TOKEN_RE.findall(part):
+            if sym not in _REAL_ELEMENTS:
+                return None
+            counts[sym] = counts.get(sym, 0) + (int(num) if num else 1)
+    if qsign:
+        charge = int(qdigits) * (1 if qsign == "+" else -1) if qdigits \
+            else (1 if qsign == "+" else -1)
+    return counts, charge
 
 
 def _hill_str(counts: dict) -> str:
@@ -918,12 +980,13 @@ def _check_chair_subs(smi: str, spec: str) -> Tuple[bool, str]:
 
 
 def _check_radical_charge_conflict(mol) -> str:
-    """同一原子同时带形式电荷与自由基单电子 → 原因串（""=无冲突）。
+    """同一原子带形式电荷 + 恰好 1 个自由基单电子 → 原因串（""=无冲突）。
 
-    同一原子电荷+自由基在教学场景几乎必是书写错误（如图 32 把 FeBr4- 的
-    负电荷画成 Fe⊖ 还带单电子点）；合法自由基离子的电荷与单电子在不同
-    原子上（超氧根 [O-][O]），不受影响。孤立小离子的 RDKit 电子簿记
-    （[O-]→1 单电子、[NH3+]→1 单电子）同属异常写法，一并拦截。
+    奇数电子与电荷共存于同一原子在教学场景必错（[O-]/[NH3+]/[CH2-]）；
+    合法自由基离子的电荷与单电子在不同原子上（超氧根 [O-][O]）。
+    电荷+2 单电子是缺电子阳离子的 RDKit 簿记（[Br+]/[Cl+] 为 EAS 亲电
+    试剂的形式写法），不拦（20260821 收窄，修复对溴代机理的误伤）。
+    fake mol（测试 fixture）跳过。
     """
     atoms_fn = getattr(mol, "GetAtoms", None)
     if atoms_fn is None:
@@ -931,9 +994,13 @@ def _check_radical_charge_conflict(mol) -> str:
     for atom in atoms_fn():
         fc = getattr(atom, "GetFormalCharge", lambda: 0)()
         nre = getattr(atom, "GetNumRadicalElectrons", lambda: 0)()
-        if fc != 0 and nre > 0:
+        # 只拦"电荷 + 恰好 1 个单电子"的真矛盾态（[O-]/[NH3+]/[CH2-] 等——
+        # 奇数电子与电荷共存于同一原子，教学场景必错）；
+        # 电荷 + 2 单电子是缺电子阳离子的 RDKit 簿记（[Br+]/[Cl+] 为 EAS
+        # 亲电试剂的教科书形式写法），放行（20260821 收窄，修复误伤溴代）
+        if fc != 0 and nre == 1:
             return (f"原子 {atom.GetIdx()}（{atom.GetSymbol()}）同时带形式电荷 "
-                    f"{fc:+d} 与 {nre} 个自由基单电子——同一原子不能既是离子又是"
+                    f"{fc:+d} 与 1 个自由基单电子——同一原子不能既是离子又是"
                     f"自由基（电荷与单电子应分开写在不同原子上，如 [O-][O]）")
     return ""
 
@@ -954,8 +1021,18 @@ def _validate_struct_args(args: list, attrs: dict = None) -> Tuple[bool, str]:
     if not ok:
         return False, reason
     smi = args[0].strip()
-    if not _smiles_ok(smi):
+    # 双轨制（与容器内一致）：非 SMILES 的纯化学式/配离子（KMnO4、
+    # [Ag(NH3)2]+）放行——渲染端走文本节点轨道；无原子可索引，
+    # 不支持 mode/subs/bond/charge 参数
+    smiles_ok = _smiles_ok(smi)
+    is_formula = not smiles_ok and bool(_parse_plain_formula(smi))
+    if not smiles_ok and not is_formula:
         return False, f"无效 SMILES「{smi}」"
+    if is_formula and (attrs.get("mode") not in (None, "", "skeleton")
+                       or attrs.get("subs") or attrs.get("bond")
+                       or attrs.get("charge")):
+        return False, (f"化学式文本组件「{smi}」没有原子结构，不支持 "
+                       f"mode/subs/bond/charge 参数")
     if _RDKIT_OK:
         mol = _parse_mol(smi)
         if mol is not None:
