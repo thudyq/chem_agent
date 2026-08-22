@@ -725,9 +725,6 @@ def _render_energy_layout(points_str: str, structs: list, mols: dict,
         return "（COMPOSITE 渲染失败：能量点至少需要 2 个）"
 
     n = len(values)
-    info = energy_point_coords(values)
-    x_last = info["x_last"]
-    roles = energy_point_roles(values)
 
     at_map = {}
     for comp in structs:
@@ -739,28 +736,19 @@ def _render_energy_layout(points_str: str, structs: list, mols: dict,
                     f"at={comp['at']} 超出能量点范围 0~{n - 1}）")
         at_map[comp["at"]] = comp
 
-    # 先计算全部组件的已占区域，再决定标注框与纵轴高度（避免遮挡）
-    # P3 冲突消解：先预置驻点标签区域；结构按驻点序号放置（相邻先检测），
-    # 与已占区域重叠时向右错开（最多 8.0），避免相邻驻点结构互相压叠。
-    occupied = []
-    for i, v, x, y in info["points"]:
-        label = (at_map[i]["label"]
-                 if (i in at_map and at_map[i]["label"]) else roles.get(i))
-        if not label:
-            continue
-        yoff = 0.35 if roles.get(i) == "过渡态" else -0.3
-        occupied.append((x - 0.85, y + yoff - 0.22, x + 0.85, y + yoff + 0.22))
-
-    mol_placements = []
-    for comp in sorted(structs, key=lambda c: c["at"]):
-        _, _, x, y = info["points"][comp["at"]]
+    # 方案 A（20260821，que_test7 图 28）：先算各驻点结构的实际 bbox，
+    # 相邻"有结构"驻点的横向间距按 (w_i + w_j)/2 + 0.6 加宽——固定
+    # xstep=1.5 时宽结构（叔丁基 ~2.2）横向必重叠，上方空间被相邻
+    # 高峰 TS 标签挤占，结构被迫整体下移脱离驻点
+    bboxes = {}
+    for comp in structs:
         mc = modecomps.get(comp["id"])
         tc = textcomps.get(comp["id"])
         if mc is not None:
-            bbox = mc["bbox"]
+            bboxes[comp["at"]] = mc["bbox"]
         elif tc is not None:
             w_t, h_t = label_wrapped_size(tc["text"])
-            bbox = (-w_t / 2.0, -h_t / 2.0, w_t / 2.0, h_t / 2.0)
+            bboxes[comp["at"]] = (-w_t / 2.0, -h_t / 2.0, w_t / 2.0, h_t / 2.0)
         else:
             cinfo = mols[comp["id"]]
             # 多组分（`CCl.[OH-]` 等点分隔驻点结构）：预渲染片段竖直
@@ -770,22 +758,72 @@ def _render_energy_layout(points_str: str, structs: list, mols: dict,
                 frag_lines, frag_bbox = _frag_lines_and_bbox(
                     frags, show_numbers=show_numbers)
                 cinfo["frag_lines"] = frag_lines
-                bbox = frag_bbox
+                bboxes[comp["at"]] = frag_bbox
             else:
-                bbox = mol_visual_bbox(cinfo["mol"], include_lone_pairs=False)
-        # 驻点结构防重叠：按"小边距→大边距、声明 pos→另一侧"优先级尝试
-        # （宽结构横向间距不足时上下错开或加高，避免整体右移脱点）；
-        # 全部碰撞才右移（兜底）
+                bboxes[comp["at"]] = mol_visual_bbox(
+                    cinfo["mol"], include_lone_pairs=False)
+    steps = []
+    for i in range(n - 1):
+        wi = bboxes.get(i)
+        wj = bboxes.get(i + 1)
+        need = (((wi[2] - wi[0]) if wi else 0.0)
+                + ((wj[2] - wj[0]) if wj else 0.0)) / 2.0 + 0.6
+        steps.append(max(1.5, need))
+
+    info = energy_point_coords(values, steps=steps)
+    x_last = info["x_last"]
+    roles = energy_point_roles(values)
+
+    # 先计算全部组件的已占区域，再决定标注框与纵轴高度（避免遮挡）
+    # P3 冲突消解：先预置驻点标签区域；结构按驻点序号放置（相邻先检测），
+    # 与已占区域重叠时向右错开（最多 8.0），避免相邻驻点结构互相压叠。
+    # 标签矩形按实际文本宽度计算（20260821：原 ±0.85 固定半宽是幻影占位，
+    # 宽结构上方放置被相邻 TS 标签幻影区挤出）
+    occupied = []
+    label_meta = {}   # 点序号 → [yoff, 宽, 高, occupied 索引]（后处理可翻转）
+    for i, v, x, y in info["points"]:
+        label = (at_map[i]["label"]
+                 if (i in at_map and at_map[i]["label"]) else roles.get(i))
+        if not label:
+            continue
+        yoff = 0.35 if roles.get(i) == "过渡态" else -0.3
+        w_t, h_t = label_wrapped_size(f"{format_chem_text(label)} ({v:+.0f})")
+        label_meta[i] = [yoff, w_t, h_t, len(occupied)]
+        occupied.append((x - w_t / 2 - 0.15, y + yoff - h_t / 2 - 0.05,
+                         x + w_t / 2 + 0.15, y + yoff + h_t / 2 + 0.05))
+
+    mol_placements = []
+    resolved = {}   # at → {place(shift 所在 dict), side, rect, occ_idx}
+    for comp in sorted(structs, key=lambda c: c["at"]):
+        _, _, x, y = info["points"][comp["at"]]
+        mc = modecomps.get(comp["id"])
+        tc = textcomps.get(comp["id"])
+        bbox = bboxes[comp["at"]]
+        # 驻点结构防重叠：按"小边距→大边距、微水平错位→声明 pos→另一侧"
+        # 优先级尝试；测试某侧位置时豁免本驻点的同侧标签（该标签在后处理
+        # 中会被碰撞驱动翻转到另一侧——否则 below@0.6 永远被自己的标签
+        # pad 撞掉，结构被迫远离驻点）
         preferred = comp["pos"]
         alt = "below" if preferred == "above" else "above"
+        own_label_idx = (label_meta[comp["at"]][3]
+                         if comp["at"] in label_meta else None)
         shift = rect = None
+        side_used = preferred
         for m in (0.6, 0.9, 1.3, 1.8, 2.4):
-            for pos in (preferred, alt):
-                cand = place_bbox(bbox, x, y, pos, margin=m)
-                cand_rect = (bbox[0] + cand[0], bbox[1] + cand[1],
-                             bbox[2] + cand[0], bbox[3] + cand[1])
-                if not any(_rects_intersect(cand_rect, o) for o in occupied):
-                    shift, rect = cand, cand_rect
+            for dx in (0.0, 0.35, -0.35, 0.7, -0.7):
+                for pos in (preferred, alt):
+                    cand = place_bbox(bbox, x + dx, y, pos, margin=m)
+                    cand_rect = (bbox[0] + cand[0], bbox[1] + cand[1],
+                                 bbox[2] + cand[0], bbox[3] + cand[1])
+                    blockers = [o for j, o in enumerate(occupied)
+                                if not (j == own_label_idx
+                                        and (pos == "below")
+                                        == (label_meta[comp["at"]][0] < 0))]
+                    if not any(_rects_intersect(cand_rect, o)
+                               for o in blockers):
+                        shift, rect, side_used = cand, cand_rect, pos
+                        break
+                if shift is not None:
                     break
             if shift is not None:
                 break
@@ -798,16 +836,58 @@ def _render_energy_layout(points_str: str, structs: list, mols: dict,
                     break
                 shift = (shift[0] + 0.4, shift[1])
         if mc is not None:
-            mc["shift"] = shift
-            mol_placements.append(mc)
+            place = mc
         elif tc is not None:
-            tc["shift"] = shift
             tc["bbox"] = bbox
-            mol_placements.append(tc)
+            place = tc
         else:
-            cinfo["shift"] = shift
-            mol_placements.append(cinfo)
+            place = mols[comp["id"]]
+        place["shift"] = shift
+        mol_placements.append(place)
+        resolved[comp["at"]] = {"place": place, "side": side_used,
+                                "rect": rect, "occ": len(occupied)}
         occupied.append(rect)
+
+    # 后处理 1：下方结构顶边对齐（统一成排，消除随驻点高度的错位感）
+    belows = [r for r in resolved.values() if r["side"] == "below"]
+    if len(belows) > 1:
+        target = min(r["rect"][3] for r in belows)   # 对齐到最低顶边（成排下沉）
+        for r in belows:
+            dy = target - r["rect"][3]
+            if abs(dy) < 1e-6:
+                continue
+            r["place"]["shift"] = (r["place"]["shift"][0],
+                                   r["place"]["shift"][1] + dy)
+            r["rect"] = (r["rect"][0], r["rect"][1] + dy,
+                         r["rect"][2], r["rect"][3] + dy)
+            occupied[r["occ"]] = r["rect"]
+
+    # 后处理 2：标签碰撞驱动翻转（标签与结构同侧相碰 → 翻到点的另一侧；
+    # 另一侧也碰则保持原位）
+    for i, meta in label_meta.items():
+        _, _, x, y = info["points"][i]
+        yoff, w_t, h_t, oi = meta
+        cur = occupied[oi]
+        if not any(_rects_intersect(cur, r["rect"]) for r in resolved.values()):
+            continue
+        new_rect = (x - w_t / 2 - 0.15, y - yoff - h_t / 2 - 0.05,
+                    x + w_t / 2 + 0.15, y - yoff + h_t / 2 + 0.05)
+        blocked = [r["rect"] for r in resolved.values()] + \
+                  [o for j, o in enumerate(occupied) if j != oi]
+        if not any(_rects_intersect(new_rect, o) for o in blocked):
+            occupied[oi] = new_rect
+            meta[0] = -yoff
+
+    # 引导线（方案 A 兜底）：结构最近边与驻点距离 > 0.8 时连接二者；
+    # 锚点 = 矩形上离驻点最近的点（对齐/翻转后的最终位置）
+    leaders = []
+    for at, r in resolved.items():
+        _, _, x, y = info["points"][at]
+        rect = r["rect"]
+        ax = min(max(x, rect[0]), rect[2])
+        ay = min(max(y, rect[1]), rect[3])
+        if math.hypot(ax - x, ay - y) > 0.8:
+            leaders.append((x, y, ax, ay))
 
     box_x, box_y, box_anchor, axis_top = energy_annotation_placement(
         occupied, x_last)
@@ -831,10 +911,15 @@ def _render_energy_layout(points_str: str, structs: list, mols: dict,
         lines.append(f"  \\begin{{scope}}[shift={{({x:.1f},{y:.2f})}}]")
         lines.append("    \\fill[blue] (0,0) circle (0.06);")
         if label:
-            yoff = 0.35 if roles.get(i) == "过渡态" else -0.3
+            yoff = (label_meta[i][0] if i in label_meta
+                    else (0.35 if roles.get(i) == "过渡态" else -0.3))
             lines.append(f"    \\node[font=\\small] at (0,{yoff:.2f}) "
                          f"{{{format_chem_text(label)} ({v:+.0f})}};")
         lines.append("  \\end{scope}")
+
+    for x, y, ax, ay in leaders:
+        lines.append(f"  \\draw[gray, dotted, thin] ({x:.2f},{y:.2f}) -- "
+                     f"({ax:.2f},{ay:.2f});")
 
     for cinfo in mol_placements:
         if "lines" in cinfo:

@@ -179,6 +179,10 @@ def test_is_formula_label():
     assert is_formula_label("CH3Cl")
     assert is_formula_label("OH-")
     assert is_formula_label("ClH")
+    # 系数前缀（模型误写进 label，que_test7 图 17 的 "2 Cl·"）→ True
+    assert is_formula_label("2 Cl·")
+    assert is_formula_label("1/2 O2")
+    assert is_formula_label("3NH3")
     # 中文/角色标注/含结构括号 → False（显示在下方）
     assert not is_formula_label("底物")
     assert not is_formula_label("产物")

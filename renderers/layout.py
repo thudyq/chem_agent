@@ -392,8 +392,12 @@ def molecule_scope_lines(mol, shift: Tuple[float, float], *,
 
 
 def energy_point_coords(values: list, *, x0: float = 1.0, xstep: float = 1.5,
-                        height: float = 3.0) -> dict:
+                        height: float = 3.0, steps: list = None) -> dict:
     """能量点序列 → 势能面画布坐标（R-3 驻点布局）。
+
+    steps：逐间隙宽度列表（len = n-1），优先于等距 xstep——energy 布局
+    按驻点结构实际宽度自适应加宽（20260821 方案 A：宽结构横向重叠导致
+    被迫下移脱离驻点）。
 
     返回 dict：
         points: [(i, value, x, y), ...]  每个驻点的序号、能量值、画布坐标；
@@ -404,14 +408,16 @@ def energy_point_coords(values: list, *, x0: float = 1.0, xstep: float = 1.5,
     emax, emin = max(values), min(values)
     erange = (emax - emin) or 1.0
     points = []
+    x = x0
     for i, v in enumerate(values):
-        x = x0 + i * xstep
         y = (v - emin) / erange * height
         points.append((i, v, x, y))
+        if i < n - 1:
+            x += steps[i] if steps is not None else xstep
     return {
         "points": points,
         "max_idx": values.index(emax),
-        "x_last": x0 + (n - 1) * xstep,
+        "x_last": points[-1][2],
     }
 
 

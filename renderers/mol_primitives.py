@@ -180,9 +180,11 @@ def is_formula_label(label: str) -> bool:
     用于决定 label 是否在分子下方重复显示：纯化学式（CH3Cl、OH-、Cl·）
     分子本身已展示，不重复；中文/角色标注（底物、质子化乙醇）需显示。
     去 · 后需全由可识别元素 + 数字组成（首字符大写）。
-    20260821：配离子分子式（[Ag(NH3)2]+ 等）同样识别为纯化学式。
+    20260821：配离子分子式（[Ag(NH3)2]+ 等）同样识别为纯化学式；
+    系数前缀（模型误把系数写进 label，如 "2 Cl·"）剥掉再判。
     """
     s = (label or "").strip().replace("·", "")
+    s = re.sub(r"^\d+(?:/\d+)?\s*", "", s)   # 系数前缀（2 Cl·、1/2 O2）
     if not s:
         return False
     if _COMPLEX_ION_RE.match(s):
