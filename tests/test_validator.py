@@ -1405,3 +1405,25 @@ def test_autofix_mech_bond_endpoint_leaving_group():
     t3 = ("[COMPOSITE:reaction][STRUCT:CC(C)(C)[OH2+],id=p]"
           "[MECHARROW:p:3-4>p:4][/COMPOSITE]")
     assert autofix_mech_bond_endpoint(parse_tags(t3)[0]) is None
+
+
+def test_mecharrow_same_src_dst_rejected():
+    """箭头始末相同（无电子流向）必拦截（que_test7：sigma:1-2>sigma:1-2
+    脱质子步写错，应为 1-2>1-7）；成键空白位（dst2 非空）合法豁免。"""
+    pytest.importorskip("rdkit")
+    _, bad = _validate(
+        "[COMPOSITE:reaction][STRUCT:BrC([H])1C=CC=C[CH+]1,id=sigma]"
+        "[ARROW:type=single][STRUCT:BrC1=CC=CC=C1,id=p][PLUS][STRUCT:[H+],id=h]"
+        "[MECHARROW:sigma:1-2>sigma:1-2][/COMPOSITE]")
+    assert len(bad) == 1 and "始末不能相同" in bad[0].reason
+    _, ok = _validate(
+        "[COMPOSITE:reaction][STRUCT:BrC([H])1C=CC=C[CH+]1,id=sigma]"
+        "[ARROW:type=single][STRUCT:BrC1=CC=CC=C1,id=p][PLUS][STRUCT:[H+],id=h]"
+        "[MECHARROW:sigma:1-2>sigma:1-7][/COMPOSITE]")
+    assert not ok, [r.reason for r in ok]
+    _, ok2 = _validate(
+        "[COMPOSITE:reaction][STRUCT:[CH3],id=me][PLUS][STRUCT:ClCl,id=cl2]"
+        "[ARROW:type=single][STRUCT:CCl,id=p][PLUS][STRUCT:[Cl],id=cl]"
+        "[MECHARROW:me:0>>me:0+cl2:0][MECHARROW:cl2:0-1>>me:0+cl2:0]"
+        "[MECHARROW:cl2:0-1>>cl2:1][/COMPOSITE]")
+    assert not ok2, [r.reason for r in ok2]

@@ -1748,6 +1748,13 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
             if not m:
                 return False, f"MECHARROW 格式错误「{spec}」"
             src_id, src_pt, _, dst_id, dst_pt, dst2_id, dst2_pt = m.groups()
+            # 始末相同即无电子流向，必是写错（如 sigma:1-2>sigma:1-2，
+            # que_test7 脱质子步应为 1-2>1-7）；成键空白位
+            #（me:0>>me:0+cl2:0，dst2 非空）是合法例外
+            if src_id == dst_id and src_pt == dst_pt and dst2_id is None:
+                return False, (f"MECHARROW 起点与终点相同「{spec.strip()}」"
+                               f"——箭头必须表示电子从供体流向受体，"
+                               f"始末不能相同")
             if src_id not in comps or dst_id not in comps:
                 return False, f"MECHARROW 引用未知组件「{src_id}→{dst_id}」"
             if dst2_id is not None and dst2_id not in comps:
