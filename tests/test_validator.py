@@ -1381,3 +1381,27 @@ def test_protonated_label_requires_cation():
     _, bad3 = _validate(
         "[COMPOSITE:reaction][STRUCT:CCO,label=去质子化产物,id=p][/COMPOSITE]")
     assert not bad3, [r.reason for r in bad3]
+
+
+def test_autofix_mech_bond_endpoint_leaving_group():
+    """P1 扩展（LG 规则）：离去基团端点——卤素/无 H 鎓离子端点有唯一
+    重原子邻居 → 改写为 C—LG 键（CC(C)(C)Br 的 C—Br 实为 1-4）。
+    双卤素歧义、带 H 鎓离子（断裂/脱质子两可）不修。"""
+    pytest.importorskip("rdkit")
+    from core.tag_validator import autofix_mech_bond_endpoint
+    # 卤素端点：3-4（相邻猜测）→ 1-4（真实 C—Br），修复后整标记通过
+    t = ("[COMPOSITE:reaction][STRUCT:CC(C)(C)Br,id=s]"
+         "[ARROW:type=single][STRUCT:C[C+](C)C,id=c][PLUS][STRUCT:[Br-],id=br]"
+         "[MECHARROW:s:3-4>s:4][/COMPOSITE]")
+    fix = autofix_mech_bond_endpoint(parse_tags(t)[0])
+    assert fix is not None and "s:1-4" in fix[0], fix
+    _, bad = _validate(fix[0])
+    assert not bad, [r.reason for r in bad]
+    # 双卤素歧义（两端都是离去基团）不修
+    t2 = ("[COMPOSITE:reaction][STRUCT:BrCCBr,id=s]"
+          "[MECHARROW:s:0-3>s:3][/COMPOSITE]")
+    assert autofix_mech_bond_endpoint(parse_tags(t2)[0]) is None
+    # 带 H 鎓离子（[OH2+]，断裂/脱质子两可）不修
+    t3 = ("[COMPOSITE:reaction][STRUCT:CC(C)(C)[OH2+],id=p]"
+          "[MECHARROW:p:3-4>p:4][/COMPOSITE]")
+    assert autofix_mech_bond_endpoint(parse_tags(t3)[0]) is None

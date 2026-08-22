@@ -112,6 +112,8 @@ _MECH_ARROW_RE = re.compile(
     rf"([A-Za-z0-9_]+)\s*:\s*({_MECH_PT_RE})"
     r"(?:\s*\+\s*([A-Za-z0-9_]+)\s*:\s*(\d+))?\s*$"
 )
+# 离去基团卤素（自动修复 LG 规则用）：F/Cl/Br/I 无 H 歧义
+_LG_HALOGENS = {9, 17, 35, 53}
 
 # 标记类型 → 中文名（降级提示用）
 _TAG_NAMES = {
@@ -1385,10 +1387,13 @@ def _check_polar_arrow_semantics(src_id: str, src_pt: str,
 def autofix_mech_bond_endpoint(tag) -> tuple | None:
     """MECHARROW 键端点高置信自动修复（20260821 P1，不经 LLM）。
 
-    场景：COMPOSITE 内某 MECHARROW 的 a-b 键端点引用了不存在的键，
-    且两端原子之一连着**唯一**显式 H 邻居 h（典型：脱质子步该写 C—H
-    键却写错编号）——端点改写为 a-h/b-h 是唯一候选修复。两端都有唯一
-    H 邻居（歧义）或无显式 H（需改 SMILES，超出端点改写范围）则不修。
+    场景：COMPOSITE 内某 MECHARROW 的 a-b 键端点引用了不存在的键。
+    两类唯一候选修复（合计候选必须恰好 1 个，否则不修）：
+    - 脱质子：某端点连着**唯一**显式 H 邻居 h → 改写为 x-h；
+    - 断裂（离去基团）：某端点本身是离去基团——卤素（无 H 歧义）或
+      无 H 的鎓离子杂原子（fc>0 的 N/O/S）——且有唯一重原子邻居 c
+      → 改写为 c-lg（典型：CC(C)(C)Br 的 C—Br 实为 1-4，模型按相邻
+      编号猜成 3-4）。鎓离子带 H（如 [OH2+]）时断裂/脱质子两可，不修。
     仅做文本替换，是否采用由调用方重校验决定（全规则把关，含化学
     配对校验）。返回 (新 raw, 修复说明)；不适用返回 None。
     """
@@ -1435,11 +1440,21 @@ def autofix_mech_bond_endpoint(tag) -> tuple | None:
                     continue
                 cands = []
                 for idx in (ia, ib):
+                    atom = mol.GetAtomWithIdx(idx)
                     hs = [n.GetIdx()
-                          for n in mol.GetAtomWithIdx(idx).GetNeighbors()
+                          for n in atom.GetNeighbors()
                           if n.GetAtomicNum() == 1]
                     if len(hs) == 1:
                         cands.append(f"{idx}-{hs[0]}")
+                    z = atom.GetAtomicNum()
+                    is_lg = z in _LG_HALOGENS or (
+                        z in (7, 8, 16) and atom.GetFormalCharge() > 0
+                        and atom.GetTotalNumHs() == 0)
+                    if is_lg:
+                        heavy = [n.GetIdx() for n in atom.GetNeighbors()
+                                 if n.GetAtomicNum() > 1]
+                        if len(heavy) == 1:
+                            cands.append(f"{heavy[0]}-{idx}")
                 if len(cands) != 1:
                     continue
                 old_tok = f"{cid}:{pt}"
