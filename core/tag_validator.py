@@ -1740,6 +1740,30 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
     # MECHARROW 统一校验（顶层 + BLOCK 内；块内组件已注册进全局 comps，
     # 块内/跨块混合引用自动支持）
     blank_refs = {}   # 成键空白位（规范化键）→ [(是否鱼钩, spec)]，配对校验用
+    # 组件 → 步序号（顶层 ARROW 分步；BLOCK 内组件归属块所在步；sup 附件
+    # 按符号归属：+id 随左侧步、-id 随右侧步）——跨步校验用（20260822：
+    # que_test8 图 4，etoh:2>pro:2 跨主箭头进攻产物）
+    comp_step = {}
+    step = 0
+    for child in children:
+        if child.type == "ARROW":
+            sup = child.args[1] if len(child.args) > 1 else []
+            for s in (sup or []):
+                s = s.strip()
+                if s:
+                    sign, sid = (s[0], s[1:]) if s[0] in "+-" else ("+", s)
+                    comp_step[sid] = step if sign == "+" else step + 1
+            step += 1
+        elif child.type == "STRUCT":
+            cid = child.attrs.get("id")
+            if cid and not child.attrs.get("arrow") and cid not in comp_step:
+                comp_step[cid] = step
+        elif child.type == "BLOCK":
+            for bc in (child.args[0] if child.args else []):
+                if bc.type == "STRUCT":
+                    bid = bc.attrs.get("id")
+                    if bid:
+                        comp_step[bid] = step
     for child in mech_children:
         if not child.args or not child.args[0]:
             return False, "MECHARROW 为空"
@@ -1759,6 +1783,15 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
                 return False, f"MECHARROW 引用未知组件「{src_id}→{dst_id}」"
             if dst2_id is not None and dst2_id not in comps:
                 return False, f"MECHARROW 引用未知组件「{dst2_id}」"
+            # 跨步拦截（前置：比端点/化学语义更根本的错误）
+            refs_steps = [comp_step.get(c) for c in (src_id, dst_id, dst2_id)
+                          if c]
+            if None not in refs_steps and len(set(refs_steps)) > 1:
+                return False, (f"MECHARROW「{spec.strip()}」跨越主反应箭头"
+                               f"（{src_id} 在第 {comp_step[src_id] + 1} 步、"
+                               f"{dst_id} 在第 {comp_step[dst_id] + 1} 步）——"
+                               f"机理箭头只能画在同一步内（同一反应箭头的"
+                               f"同一侧）；跨步的电子转移应拆成两步分别画")
             if _opaque_comp(comps, src_id) or _opaque_comp(comps, dst_id) or \
                     (dst2_id is not None and _opaque_comp(comps, dst2_id)):
                 return False, (f"MECHARROW 引用立体画法组件「{spec}」"

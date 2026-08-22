@@ -455,7 +455,7 @@ def place_bbox(bbox: Tuple[float, float, float, float], x: float, y: float,
 
 
 def energy_annotation_placement(occupied: list, x_last: float, *,
-                                box_h: float = 0.8, gap: float = 0.3,
+                                box_h: float = 1.25, gap: float = 0.3,
                                 min_top: float = 3.5):
     """势能面 Ea/ΔH 标注框与纵轴高度的无遮挡布局。
 

@@ -79,8 +79,8 @@
   {
     "id": "radical-h-abstraction-explicit-h-20260812",
     "source": "B1 修复后（20260812→20260821）：Q14 自由基夺氢步骤——20260821 起显式 H 是真实原子参与编号（a#k 语法废弃），用 C([H])([H])([H])[H] 写甲烷、ch4:1 直接引用 H 原子、断键写 0-1 键中点",
-    "llm_output": "甲烷氯代：\n[COMPOSITE:reaction][STRUCT:ClCl,id=cl2,label=Cl2][ARROW:type=single,hν][STRUCT:[Cl],id=clA,label=Cl·][PLUS][STRUCT:[Cl],id=clB,label=Cl·][MECHARROW:cl2:0-1>>clA:0][MECHARROW:cl2:0-1>>clB:0][/COMPOSITE]\n[COMPOSITE:reaction][STRUCT:[Cl],id=cl,label=Cl·][PLUS][STRUCT:C([H])([H])([H])[H],id=ch4,label=CH4][ARROW:type=single][STRUCT:Cl,id=hcl,label=HCl][PLUS][STRUCT:[CH3],id=me,label=·CH3][MECHARROW:cl:0>>cl:0+ch4:0][MECHARROW:ch4:1>>cl:0+ch4:0][MECHARROW:ch4:1>>me:0][/COMPOSITE]",
+    "llm_output": "甲烷氯代：\n[COMPOSITE:reaction][STRUCT:ClCl,id=cl2,label=Cl2][ARROW:type=single,hν][STRUCT:[Cl],id=clA,label=Cl·][PLUS][STRUCT:[Cl],id=clB,label=Cl·][MECHARROW:cl2:0-1>>cl2:0][MECHARROW:cl2:0-1>>cl2:1][/COMPOSITE]\n[COMPOSITE:reaction][STRUCT:[Cl],id=cl,label=Cl·][PLUS][STRUCT:C([H])([H])([H])[H],id=ch4,label=CH4][ARROW:type=single][STRUCT:Cl,id=hcl,label=HCl][PLUS][STRUCT:[CH3],id=me,label=·CH3][MECHARROW:cl:0>>cl:0+ch4:0][MECHARROW:ch4:1>>cl:0+ch4:0][MECHARROW:ch4:1>>ch4:0][/COMPOSITE]",
     "expect": {"valid": 2, "invalid": 0},
-    "note": "链引发（Cl2 均裂）用键中点 a-b；夺氢用 SMILES 显式 H 原子序号（ch4:1，C—H 断键可写 ch4:0-1）；回归固化 B1 修复（20260821 a#k 废弃）"
+    "note": "链引发（Cl2 均裂）用键中点 a-b；夺氢用 SMILES 显式 H 原子序号（ch4:1，C—H 断键可写 ch4:0-1）；回归固化 B1 修复（20260821 a#k 废弃）；20260822 第三根鱼钩改为同步内 ch4:1>>ch4:0（跨主反应箭头的机理箭头已禁止；均裂鱼钩改为反应物侧自指 cl2:0-1>>cl2:0/cl2:1）"
   }
 ]

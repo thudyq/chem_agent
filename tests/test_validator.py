@@ -262,9 +262,9 @@ def test_opaque_comp_reference_rejected():
     # MECHARROW 端点引用 stereo 组件
     _, invalid = _validate(
         "[COMPOSITE:reaction][STRUCT:CCl,id=r0][PLUS][STRUCT:[OH-],id=nu]"
+        "[PLUS][STRUCT:C[C@H](O)C(=O)O, mode=stereo, id=st]"
         "[ARROW:type=single][STRUCT:CO][PLUS][STRUCT:[Cl-]]"
         "[MECHARROW:nu:0>r0:0]"
-        "[STRUCT:C[C@H](O)C(=O)O, mode=stereo, id=st]"
         "[MECHARROW:nu:0>st:1][/COMPOSITE]")
     assert any("立体画法组件" in r.reason for r in invalid)
     # CHARGE 标注引用 chair 组件
@@ -433,8 +433,9 @@ def test_block_mecharrow_supported():
         "[COMPOSITE:reaction]"
         "[BLOCK][STRUCT:C1=CC=CC=C1,id=b1][ARROW:type=resonance]"
         "[STRUCT:C1C=CC=CC=1,id=b2][/BLOCK]"
+        "[PLUS][STRUCT:c1ccccc1,id=C]"
         "[ARROW:type=single]"
-        "[STRUCT:c1ccccc1,id=C]"
+        "[STRUCT:C1=CC=CC=C1,id=d][PLUS][STRUCT:C1=CC=CC=C1,id=e]"
         "[MECHARROW:b2:0>C:0][/COMPOSITE]")
     assert len(invalid2) == 0
     # 块内引用未知组件 → 拦截
@@ -474,7 +475,7 @@ def test_composite_energy_at_out_of_range(fake_rdkit):
 
 
 def test_composite_mecharrow_unknown_id(fake_rdkit):
-    text = ("[COMPOSITE:reaction][STRUCT:CCl,id=r0][ARROW:type=single]"
+    text = ("[COMPOSITE:reaction][STRUCT:CCl,id=r0][PLUS]"
             "[STRUCT:CO,id=p0][MECHARROW:ghost:0>r0:0][/COMPOSITE]")
     _, invalid = _validate(text)
     assert len(invalid) == 1
@@ -482,7 +483,7 @@ def test_composite_mecharrow_unknown_id(fake_rdkit):
 
 
 def test_composite_mecharrow_atom_out_of_range(fake_rdkit):
-    text = ("[COMPOSITE:reaction][STRUCT:CCl,id=r0][ARROW:type=single]"
+    text = ("[COMPOSITE:reaction][STRUCT:CCl,id=r0][PLUS]"
             "[STRUCT:CO,id=p0][MECHARROW:r0:5>p0:0][/COMPOSITE]")
     _, invalid = _validate(text)
     assert len(invalid) == 1
@@ -801,26 +802,26 @@ class TestCoeffAndBalanceRules:
 def test_composite_mecharrow_bond_form_midpoint_passes(fake_rdkit):
     # 单根鱼钩指向空白位：单电子不能单独成键 → R4 拦截（20260821 收紧，
     # que_test6 图 20：两个空白位各 1 根鱼钩是真实漏网错误）
-    text = ("[COMPOSITE:reaction][STRUCT:CCl,id=r0][ARROW:type=single]"
+    text = ("[COMPOSITE:reaction][STRUCT:CCl,id=r0][PLUS]"
             "[STRUCT:CO,id=p0][MECHARROW:r0:0>>r0:0+p0:0][/COMPOSITE]")
     _, invalid = _validate(text)
     assert len(invalid) == 1
     assert "空白位配对" in invalid[0].reason
     # 两根鱼钩汇聚同一空白位（各出一个单电子成键）→ 通过
-    text = ("[COMPOSITE:reaction][STRUCT:CCl,id=r0][ARROW:type=single]"
+    text = ("[COMPOSITE:reaction][STRUCT:CCl,id=r0][PLUS]"
             "[STRUCT:CO,id=p0][MECHARROW:r0:0>>r0:0+p0:0,"
             "r0:0-1>>r0:0+p0:0][/COMPOSITE]")
     _, invalid = _validate(text)
     assert len(invalid) == 0
     # 极性成键：一根双电子箭头指向空白位 → 通过
-    text = ("[COMPOSITE:reaction][STRUCT:CCl,id=r0][ARROW:type=single]"
+    text = ("[COMPOSITE:reaction][STRUCT:CCl,id=r0][PLUS]"
             "[STRUCT:CO,id=p0][MECHARROW:r0:0>r0:0+p0:0][/COMPOSITE]")
     _, invalid = _validate(text)
     assert len(invalid) == 0
 
 
 def test_composite_mecharrow_midpoint_unknown_id(fake_rdkit):
-    text = ("[COMPOSITE:reaction][STRUCT:CCl,id=r0][ARROW:type=single]"
+    text = ("[COMPOSITE:reaction][STRUCT:CCl,id=r0][PLUS]"
             "[STRUCT:CO,id=p0][MECHARROW:r0:0>r0:0+ghost:0][/COMPOSITE]")
     _, invalid = _validate(text)
     assert len(invalid) == 1
@@ -828,7 +829,7 @@ def test_composite_mecharrow_midpoint_unknown_id(fake_rdkit):
 
 
 def test_composite_mecharrow_midpoint_atom_out_of_range(fake_rdkit):
-    text = ("[COMPOSITE:reaction][STRUCT:CCl,id=r0][ARROW:type=single]"
+    text = ("[COMPOSITE:reaction][STRUCT:CCl,id=r0][PLUS]"
             "[STRUCT:CO,id=p0][MECHARROW:r0:0>r0:0+p0:9][/COMPOSITE]")
     _, invalid = _validate(text)
     assert len(invalid) == 1
@@ -836,7 +837,7 @@ def test_composite_mecharrow_midpoint_atom_out_of_range(fake_rdkit):
 
 
 def test_composite_mecharrow_midpoint_bond_mixed_rejected(fake_rdkit):
-    text = ("[COMPOSITE:reaction][STRUCT:CCl,id=r0][ARROW:type=single]"
+    text = ("[COMPOSITE:reaction][STRUCT:CCl,id=r0][PLUS]"
             "[STRUCT:CO,id=p0][MECHARROW:r0:0>r0:0-1+p0:0][/COMPOSITE]")
     _, invalid = _validate(text)
     assert len(invalid) == 1
@@ -860,7 +861,7 @@ class TestMechArrowExplicitH:
                 "[STRUCT:Cl,id=hcl,label=HCl][PLUS][STRUCT:[CH3],id=me,label=·CH3]"
                 "[MECHARROW:cl:0>>cl:0+ch4:0]"
                 "[MECHARROW:ch4:1>>cl:0+ch4:0]"
-                "[MECHARROW:ch4:1>>me:0]"
+                "[MECHARROW:ch4:1>>ch4:0]"
                 "[/COMPOSITE]")
         _, invalid = _validate(text)
         assert len(invalid) == 0
@@ -873,7 +874,7 @@ class TestMechArrowExplicitH:
                 "[STRUCT:C([H])([H])([H])[H],id=ch4,label=CH4]"
                 "[ARROW:type=single]"
                 "[STRUCT:Cl,id=hcl,label=HCl][PLUS][STRUCT:[CH3],id=me,label=·CH3]"
-                "[MECHARROW:ch4:0-1>>me:0]"
+                "[MECHARROW:ch4:0-1>>ch4:0]"
                 "[/COMPOSITE]")
         _, invalid = _validate(text)
         assert len(invalid) == 0
@@ -886,7 +887,7 @@ class TestMechArrowExplicitH:
                 "[STRUCT:C([H])([H])([H])[H],id=ch4,label=CH4]"
                 "[ARROW:type=single]"
                 "[STRUCT:Cl,id=hcl,label=HCl][PLUS][STRUCT:[CH3],id=me,label=·CH3]"
-                "[MECHARROW:ch4:5>>me:0]"
+                "[MECHARROW:ch4:5>>ch4:0]"
                 "[/COMPOSITE]")
         _, invalid = _validate(text)
         assert len(invalid) == 1
@@ -1109,8 +1110,9 @@ def test_composite_formula_comp_validation():
     # MECHARROW 引用化学式组件 → 拦截（无原子可索引）
     _, invalid3 = _validate(
         "[COMPOSITE:reaction][STRUCT:CCl,id=r0][PLUS][STRUCT:[OH-],id=nu]"
+        "[PLUS][STRUCT:NaCl,id=s]"
         "[ARROW:type=single][STRUCT:CO][PLUS][STRUCT:[Cl-]]"
-        "[STRUCT:NaCl,id=s][MECHARROW:nu:0>s:0][/COMPOSITE]")
+        "[MECHARROW:nu:0>s:0][/COMPOSITE]")
     assert any("化学式组件" in r.reason for r in invalid3)
     # 化学式组件 mode/bond/charge 标注 → 拦截
     _, invalid4 = _validate(
@@ -1427,3 +1429,20 @@ def test_mecharrow_same_src_dst_rejected():
         "[MECHARROW:me:0>>me:0+cl2:0][MECHARROW:cl2:0-1>>me:0+cl2:0]"
         "[MECHARROW:cl2:0-1>>cl2:1][/COMPOSITE]")
     assert not ok2, [r.reason for r in ok2]
+
+
+def test_mecharrow_cross_step_rejected():
+    """跨步拦截（que_test8 图 4）：机理箭头不能跨越主反应箭头
+    （etoh:2>pro:2 从反应物侧指向产物侧）；同步内/附件 sup=+id 引用放行。"""
+    pytest.importorskip("rdkit")
+    _, bad = _validate(
+        "[COMPOSITE:reaction][STRUCT:CCO,id=etoh][PLUS][STRUCT:[H+],id=h]"
+        "[ARROW:type=reversible][STRUCT:CC[OH2+],id=pro]"
+        "[MECHARROW:etoh:2>pro:2][/COMPOSITE]")
+    assert len(bad) == 1 and "跨越主反应箭头" in bad[0].reason
+    # 同步内（箭头同侧）放行
+    _, ok = _validate(
+        "[COMPOSITE:reaction][STRUCT:CCO,id=etoh][PLUS][STRUCT:[H+],id=h]"
+        "[ARROW:type=reversible][STRUCT:CC[OH2+],id=pro]"
+        "[MECHARROW:etoh:2>h:0][/COMPOSITE]")
+    assert not ok, [r.reason for r in ok]
