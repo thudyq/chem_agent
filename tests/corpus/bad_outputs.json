@@ -82,5 +82,19 @@
     "llm_output": "甲烷氯代：\n[COMPOSITE:reaction][STRUCT:ClCl,id=cl2,label=Cl2][ARROW:type=single,hν][STRUCT:[Cl],id=clA,label=Cl·][PLUS][STRUCT:[Cl],id=clB,label=Cl·][MECHARROW:cl2:0-1>>cl2:0][MECHARROW:cl2:0-1>>cl2:1][/COMPOSITE]\n[COMPOSITE:reaction][STRUCT:[Cl],id=cl,label=Cl·][PLUS][STRUCT:C([H])([H])([H])[H],id=ch4,label=CH4][ARROW:type=single][STRUCT:Cl,id=hcl,label=HCl][PLUS][STRUCT:[CH3],id=me,label=·CH3][MECHARROW:cl:0>>cl:0+ch4:0][MECHARROW:ch4:1>>cl:0+ch4:0][MECHARROW:ch4:1>>ch4:0][/COMPOSITE]",
     "expect": {"valid": 2, "invalid": 0},
     "note": "链引发（Cl2 均裂）用键中点 a-b；夺氢用 SMILES 显式 H 原子序号（ch4:1，C—H 断键可写 ch4:0-1）；回归固化 B1 修复（20260821 a#k 废弃）；20260822 第三根鱼钩改为同步内 ch4:1>>ch4:0（跨主反应箭头的机理箭头已禁止；均裂鱼钩改为反应物侧自指 cl2:0-1>>cl2:0/cl2:1）"
+  },
+  {
+    "id": "sulfonation-pi-attack-wrong-target-20260822",
+    "source": "真实 metrics 基线 20260822 第 8 次测试（fast_test/que_test8）Q11 苯磺化机理第一步：苯环 π 电子应进攻 SO₃ 的 S、S=O 的 π 电子应转给 O，LLM 却把两个弯箭头的靶原子写反（π→O、O→S）",
+    "llm_output": "第一步：亲电进攻。苯环的一对 π 电子进攻 SO₃ 的 S：\n[COMPOSITE:reaction]\n[STRUCT:C1=CC=CC=C1,label=苯,id=ar][PLUS][STRUCT:O=S(=O)=O,label=SO3,id=so3]\n[ARROW:type=single]\n[STRUCT:O=S([O-])(=O)C([H])1C=CC=C[CH+]1,label=σ 络合物,id=sigma]\n[MECHARROW:ar:0-1>so3:0][MECHARROW:so3:0-1>so3:1]\n[/COMPOSITE]",
+    "expect": {"valid": 1, "invalid": 0},
+    "note": "化学方向错误但未被拦截（攻击靶原子应为 S 而非 O、S=O π 应转给 O 而非回流 S）——两箭头靶序号与正确相反（so3:0=O、so3:1=S）；语法/守恒均通过，属「机理弯箭头方向语义」校验缺口（Drawbacks 十三 16.png，仍开放）。若后续实现方向语义校验，此例应改写为拦截。"
+  },
+  {
+    "id": "sn2-step-missing-protonated-ether-intermediate-20260822",
+    "source": "真实 metrics 基线 20260822 第 8 次测试（fast_test/que_test8）Q4 乙醇→乙醚机理第二步（SN2）：生成物应为质子化乙醚+水（下一步才去质子化），LLM 写成乙醚+水+H+，跳过质子化乙醚中间体",
+    "llm_output": "第二步：亲核取代（SN2）：\n[COMPOSITE:reaction]\n[STRUCT:CC[OH2+],label=质子化乙醇,id=pro][PLUS][STRUCT:CCO,label=乙醇,id=nu]\n[ARROW:type=single]\n[STRUCT:CCOCC,label=乙醚][PLUS][STRUCT:O,label=水][PLUS][STRUCT:[H+],label=H+]\n[MECHARROW:nu:2>pro:1]\n[MECHARROW:pro:1-2>pro:2]\n[/COMPOSITE]",
+    "expect": {"valid": 1, "invalid": 0},
+    "note": "分步产物错误但未被拦截（原子+电荷守恒通过：CCOCC+H₂O+H⁺ 与质子化乙醚+H₂O 同组成；但本步产物应为质子化乙醚+水，H⁺ 应在下去质子化步才写出——跳过了中间体）；属「步内产物与机理类型一致性」校验缺口（Drawbacks 十三 5.png，较难静态校验，可能需 LLM 裁判复审）。"
   }
 ]

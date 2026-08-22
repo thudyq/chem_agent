@@ -38,6 +38,9 @@ KNOWN_SMILES = {
     "CC(=O)O[H]": _FakeMol(5),
     # CHAIR：取代环己烷
     "BrC1CCCCC1": _FakeMol(7), "CC1CCCCC1": _FakeMol(7),
+    # 20260822 corpus：苯磺化（EAS 机理），真实 RDKit 可解析的凯库勒苯/SO3/σ 络合物
+    "C1=CC=CC=C1": _FakeMol(6), "O=S(=O)=O": _FakeMol(4),
+    "O=S([O-])(=O)C([H])1C=CC=C[CH+]1": _FakeMol(10),
 }
 
 
