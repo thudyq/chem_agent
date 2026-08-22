@@ -62,7 +62,9 @@ def render_energy(points_str: str) -> str:
     # Ea / ΔH 标注框（净空带，anchor 定位）
     ea = max(values) - values[0]
     dh = values[-1] - values[0]
-    node_text = f"Ea $\\approx$ {ea:.0f} kJ/mol\\\\$\\Delta$H $\\approx$ {dh:+.0f} kJ/mol"
+    node_text = (f"Ea $\\approx$ {ea:.0f} kJ/mol\\\\$\\Delta$H "
+                 f"$\\approx$ {dh:+.0f} kJ/mol\\\\"
+                 r"{\color{gray}\scriptsize 数值仅示意}")
     lines.append(
         "  \\node[draw, rounded corners, fill=yellow!10, font=\\small, align=left, "
         f"anchor={box_anchor}] at ({box_x:.2f},{box_y:.2f}) {{{node_text}}};"
