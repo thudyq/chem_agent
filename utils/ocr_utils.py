@@ -42,6 +42,44 @@ def _parse_description(text: str) -> dict:
     return {"type": ctype, "content": content}
 
 
+def _is_valid_smiles(smi: str) -> bool:
+    """SMILES 是否可解析（RDKit）；无 rdkit 环境保守放行 True。"""
+    try:
+        from utils.rdkit_utils import validate_smiles
+        return validate_smiles(smi)
+    except ImportError:
+        return True
+
+
+def _structure_smiles_ok(content: str, ctype: str) -> bool:
+    """B1（20260826）：结构式内容里声称的 SMILES 是否可解析（RDKit 硬校验）。
+
+    - 非结构式（文字题/反应式/机理图/其他/未分类）→ True（未声称具体结构，
+      无可核验的 SMILES 断言）；
+    - 显式 "SMILES: xxx" 声明 → 校验声明的 token，非法则 False；
+    - 无显式声明、且内容为"单一、无汉字、无空格"的化学串 → 当裸 SMILES
+      校验（非法则 False）；
+    - 其余（含汉字的文字描述，如"苯环连一个硝基（无法确定 SMILES）"）→ True，
+      不做硬判（避免把描述文字误判为错误 SMILES）。
+    说明：只能拦截"不可解析的垃圾"，拦不住"合法但认错"的分子（如
+    环癸二炔被认成环辛四烯——两者都是合法 SMILES）。
+    """
+    if ctype != "结构式":
+        return True
+    s = (content or "").strip()
+    if not s:
+        return True
+    # 显式 SMILES: 声明（token 到逗号/分号/空白为止）
+    claim = re.search(r"SMILES\s*[:：]\s*([^\s,，;；]+)", s)
+    if claim:
+        return _is_valid_smiles(claim.group(1))
+    # 无显式声明：单一、无汉字、无空格的化学串 → 当裸 SMILES 校验
+    if not re.search(r"[\u4e00-\u9fff]", s) and not re.search(r"\s", s):
+        return _is_valid_smiles(s)
+    return True
+
+
+
 def _read_image_b64(image_path: str) -> str | None:
     """读图片文件 → base64 字符串；失败返回 None。"""
     try:
@@ -157,6 +195,9 @@ def describe_image(image_path: str, max_attempts: int = _VISION_MAX_ATTEMPTS) ->
     for attempt in range(1, max_attempts + 1):
         desc, retryable = _describe_once(url, headers, dict(payload), model)
         if desc:
+            # B1（20260826）：结构式 SMILES 过 RDKit 硬校验，供调用方示警
+            desc["smiles_ok"] = _structure_smiles_ok(
+                desc.get("content"), desc.get("type"))
             return desc
         if not retryable or attempt >= max_attempts:
             return None

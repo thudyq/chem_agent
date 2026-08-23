@@ -25,7 +25,8 @@ r"""renderers/chair.py — [CHAIR] 标记渲染器：环己烷椅式构象。
 
 import math
 
-from .mol_primitives import atom_main_label, format_chem_text, label_bond_margin, prepare_mol
+from .mol_primitives import (_label_symbol_shift_x, atom_main_label,
+                             format_chem_text, label_bond_margin, prepare_mol)
 
 _SIGMA = 15.0       # 浅斜键与水平夹角（Klein 约束解出，视觉校准后可调）
 _STEEP = 60.0       # 陡斜键与水平夹角（Klein 明文 60°）
@@ -78,12 +79,17 @@ def _equatorial_angle(pos: int, vx: float, vy: float, centroid,
     return _SIGMA if out_right else (180.0 - _SIGMA)
 
 
-def _substituent_label(mol, ring_idx: int, ring_set: set) -> str:
-    """环位原子的非环取代基标签（Br/CH3/OH 等）；无取代基返回 ""。"""
+def _substituent_label(mol, ring_idx: int, ring_set: set, flip: bool = False):
+    """环位原子的非环取代基标签（Br/CH3/OH 等）+ 该取代基原子。
+
+    flip：键端在标签右侧时元素符号右移（OH→HO，Drawbacks 第 6 条），
+    与 _label_flip_for 同口径（氯/溴等无 H 后缀不受影响）。
+    无取代基返回 ("", None)。
+    """
     for nbr in mol.GetAtomWithIdx(ring_idx).GetNeighbors():
         if nbr.GetIdx() not in ring_set:
-            return atom_main_label(nbr) or nbr.GetSymbol()
-    return ""
+            return atom_main_label(nbr, flip=flip) or nbr.GetSymbol(), nbr
+    return "", None
 
 
 def _parse_spec(spec: str) -> tuple:
@@ -146,18 +152,27 @@ def chair_scope_lines(smiles: str, spec: str = ""):
         ang = (90.0 if up else -90.0) if kind == "ax" else \
             _equatorial_angle(pos, vx, vy, (cx, cy), up, mirror)
         r = math.radians(ang)
-        label = _substituent_label(mol, ring[pos - 1], ring_set)
-        if not label:
-            continue            # 该环位无取代基（校验层已拦截，渲染兜底跳过）
         # 取代基键线终点距环碳 _SUB_LEN=1.1（短于环键，避免过长遮挡）；
         # 标签中心再沿键方向外移 label_bond_margin（标签不压键线终点；
         # 环碳端是键线式顶点不标 C 无标签不收缩）
         bx, by = vx + _SUB_LEN * math.cos(r), vy + _SUB_LEN * math.sin(r)
+        # 元素符号朝向：环碳相对取代基原子在右侧且水平占主导 → 翻转（OH→HO）
+        # （与 _label_flip_for 同口径；methylene/carbon 标签不翻转）
+        flip = (vx - bx > 0.05 and abs(vx - bx) > abs(vy - by))
+        label, nbr = _substituent_label(mol, ring[pos - 1], ring_set, flip)
+        if not label:
+            continue            # 该环位无取代基（校验层已拦截，渲染兜底跳过）
         m = label_bond_margin(label)
+        # 元素符号中心落在键线延长点上（ex,ey = 键终点再外移 m 的沿键方向点），
+        # 标签节点再按符号偏移平移——键延伸到元素符号而非整条标签中点
+        # （与 STRUCT/COMPOSITE 的 label_node_pos 同一口径）
         ex, ey = bx + math.cos(r) * m, by + math.sin(r) * m
+        sym = nbr.GetSymbol()
+        sym = sym[0].upper() + sym[1:]
+        nx, ny = ex - _label_symbol_shift_x(label, sym), ey
         lines.append(f"  \\draw ({vx:.2f},{vy:.2f}) -- ({bx:.2f},{by:.2f});")
         lines.append(
-            f"  \\node[fill=white, inner sep=1pt] at ({ex:.2f},{ey:.2f}) "
+            f"  \\node[fill=white, inner sep=1pt] at ({nx:.2f},{ny:.2f}) "
             f"{{{format_chem_text(label)}}};")
         xs += [bx, ex]
         ys += [by, ey]

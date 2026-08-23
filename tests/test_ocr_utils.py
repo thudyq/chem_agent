@@ -73,6 +73,39 @@ def test_describe_unconfigured_returns_none(monkeypatch):
     assert ocr.describe_image("no-such-file.png") is None
 
 
+# ---------------- B1：结构式 SMILES RDKit 硬校验（20260826） ----------------
+
+def test_describe_structure_good_smiles_ok(fake_vision):
+    """结构式内容含合法 SMILES（c1ccccc1）→ smiles_ok=True。"""
+    state, img = fake_vision  # 默认 "苯环，SMILES: c1ccccc1"
+    desc = ocr.describe_image(img)
+    assert desc["smiles_ok"] is True
+
+
+def test_describe_structure_bad_smiles_flagged(fake_vision):
+    """结构式内容含不可解析 SMILES（XYZABC）→ smiles_ok=False（供 B3 示警）。"""
+    state, img = fake_vision
+    state["content"] = "类型：结构式\n内容：SMILES: XYZABC"
+    desc = ocr.describe_image(img)
+    assert desc["smiles_ok"] is False
+
+
+def test_describe_non_structure_smiles_ok(fake_vision):
+    """非结构式（机理图）→ 无可核验 SMILES 断言 → smiles_ok=True。"""
+    state, img = fake_vision
+    state["content"] = "类型：机理图\n内容：苯环 π 进攻 SO3 的 S"
+    desc = ocr.describe_image(img)
+    assert desc["smiles_ok"] is True
+
+
+def test_describe_structure_text_desc_ok(fake_vision):
+    """结构式但无法确定、用文字描述 → 无 SMILES token → smiles_ok=True。"""
+    state, img = fake_vision
+    state["content"] = "类型：结构式\n内容：苯环连一个硝基（无法确定 SMILES）"
+    desc = ocr.describe_image(img)
+    assert desc["smiles_ok"] is True
+
+
 # ---------------- 重试容错（连接不稳定，20260818） ----------------
 
 def test_describe_retries_then_succeeds(fake_vision, monkeypatch):

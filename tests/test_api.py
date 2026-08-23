@@ -6,6 +6,7 @@ process_question 全部 mock，不调用真实 LLM。
 """
 
 import json
+import types
 
 import pytest
 from fastapi.testclient import TestClient
@@ -188,6 +189,34 @@ def test_chat_multimodal_image(client, monkeypatch, tmp_path):
     assert resp.status_code == 200
     assert "这是什么分子？" in captured["q"]
     assert "c1ccccc1" in captured["q"]
+
+
+def test_build_question_image_caution(monkeypatch):
+    """B3（20260826）：图片输入时提示识别可能有误（smiles_ok 缺省 → 一般提示）。"""
+    import utils.ocr_utils as ocr
+    monkeypatch.setattr(api, "settings", types.SimpleNamespace(
+        vision=types.SimpleNamespace(is_configured=True)))
+    monkeypatch.setattr(api, "_fetch_image_to_temp", lambda url, tmp: "x.png")
+    monkeypatch.setattr(ocr, "describe_image",
+                        lambda p: {"type": "结构式", "content": "c1ccccc1"})
+    q = api._build_question("这是什么？",
+                            ["data:image/png;base64,AAAA"], [], [], "tmp")
+    assert "识别可能有误" in q
+    assert "c1ccccc1" in q
+
+
+def test_build_question_image_bad_smiles_specific_caution(monkeypatch):
+    """B3：smiles_ok=False（结构 SMILES 无法解析）→ 特定"无法解析/核对"提示。"""
+    import utils.ocr_utils as ocr
+    monkeypatch.setattr(api, "settings", types.SimpleNamespace(
+        vision=types.SimpleNamespace(is_configured=True)))
+    monkeypatch.setattr(api, "_fetch_image_to_temp", lambda url, tmp: "x.png")
+    monkeypatch.setattr(ocr, "describe_image",
+                        lambda p: {"type": "结构式", "content": "SMILES: XYZABC",
+                                   "smiles_ok": False})
+    q = api._build_question("这是什么？",
+                            ["data:image/png;base64,AAAA"], [], [], "tmp")
+    assert "无法解析" in q
 
 
 def test_extract_question_format_variants():

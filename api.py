@@ -333,6 +333,17 @@ def _build_question(text: str, images: list, audios: list, files: list,
                         f"（用户上传的图片 {i} 的内容（{desc['type']}）："
                         f"{desc['content']}）"
                     )
+                    # B3（20260826）：图像为视觉模型自动识别，提示用户识别可能有误
+                    if desc.get("smiles_ok") is False:
+                        parts.append(
+                            f"（提示：图片 {i} 识别出的结构式 SMILES 经校验"
+                            "无法解析，识别可能有误；请在回答中提醒用户核对"
+                            "图片/结构，必要时请用户用文字描述该结构）")
+                    else:
+                        parts.append(
+                            f"（提示：图片 {i} 为视觉模型自动识别，识别可能"
+                            "有误；请在回答中提醒用户以图片为准、核对识别内容，"
+                            "如有出入可请用户用文字补充说明）")
                 else:
                     print(f"[api] 视觉模型未能理解图片: {url[:80]}")
                     # 识别失败：空内容 + 用户文字照常传给主 LLM，并明确
