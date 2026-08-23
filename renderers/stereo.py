@@ -8,8 +8,8 @@ RDKit 解析含 @/@@ 的 SMILES → PrepareMolForDrawing（含坐标+楔形方�
 
 import math
 
-from .mol_primitives import atom_label, atom_pos, charge_tikz, \
-    label_bond_margin, mol_visual_bbox, prepare_mol, wrap_format_text
+from .mol_primitives import _label_flip_for, atom_label, atom_pos, charge_tikz, \
+    label_bond_margin, label_node_pos, mol_visual_bbox, prepare_mol, wrap_format_text
 
 
 def stereo_scope_lines(mol) -> list:
@@ -72,10 +72,10 @@ def stereo_scope_lines(mol) -> list:
 
     for atom in mol.GetAtoms():
         idx = atom.GetIdx()
-        lab = atom_label(atom)
+        lab = atom_label(atom, flip=_label_flip_for(mol, idx))
         if lab:
-            x, y = atom_pos(mol, idx)
-            lines.append(f"  \\node[fill=white, inner sep=1pt] at ({x:.2f},{y:.2f}) {{{lab}}};")
+            nx, ny = label_node_pos(mol, idx)
+            lines.append(f"  \\node[fill=white, inner sep=1pt] at ({nx:.2f},{ny:.2f}) {{{lab}}};")
         # 形式电荷统一用圆圈电荷显示，不内嵌上标
         charge = charge_tikz(mol, idx)
         if charge:

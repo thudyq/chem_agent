@@ -10,8 +10,9 @@
 """
 
 from .mol_primitives import (
-    atom_main_label, atom_pos, bond_segments, charge_tikz, label_bond_margin,
-    lone_pair_tikz, mol_visual_bbox, prepare_mol, wrap_format_text,
+    _label_flip_for, atom_main_label, bond_segments, charge_tikz,
+    label_bond_margin, label_node_pos, lone_pair_tikz, mol_visual_bbox,
+    prepare_mol, wrap_format_text,
 )
 
 
@@ -42,10 +43,10 @@ def render_lewis(smiles: str, label: str = None) -> str:
 
     # 原子标签（主标签不含电荷）+ 圆圈电荷（右上角）
     for atom in mol.GetAtoms():
-        lab = atom_main_label(atom)
+        lab = atom_main_label(atom, flip=_label_flip_for(mol, atom.GetIdx()))
         if lab:
-            x, y = atom_pos(mol, atom.GetIdx())
-            lines.append(f"  \\node[fill=white,inner sep=1pt] at ({x:.2f},{y:.2f}) {{{lab}}};")
+            nx, ny = label_node_pos(mol, atom.GetIdx())
+            lines.append(f"  \\node[fill=white,inner sep=1pt] at ({nx:.2f},{ny:.2f}) {{{lab}}};")
         charge = charge_tikz(mol, atom.GetIdx())
         if charge:
             lines.append(f"  {charge}")

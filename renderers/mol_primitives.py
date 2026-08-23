@@ -795,34 +795,66 @@ def _weighted_plain_len(lab: str) -> float:
     return w
 
 
-def _dot_center(mol, idx: int, explicit_hs: int = 0) -> tuple[float, float]:
-    """孤对电子点的环绕中心：元素符号在标签内的估计位置。
+def _label_symbol_shift_x(lab: str, sym: str) -> float:
+    """元素符号中心相对标签节点中心的水平偏移（符号在左为负、在右为正）。
 
-    元素符号在标签**左端**（如 OH、CH₃）→ 左移修正（点绕 O 而非绕 OH）；
-    在标签**右端**（如水的 H₂O）→ 右移修正。偏移按加权宽度估算
-    （下标/上标小字降权）。含下标标签文字主体相对 node 中心上移
-    （下标占下方空间）→ 环绕中心随之上移补偿，避免电荷/电子点重叠。
+    标签文本把元素符号与 H 后缀排成一行（如 OH 的 O 在左、水的 H₂O 的 O
+    在右），节点居中于原子时符号中心会偏出原子坐标。偏移按加权宽度估算
+    （下标/上标小字降权，_weighted_plain_len）。供两个方向一致使用：
+    _dot_center 用它定位元素符号中心；label_node_pos 用它把节点平移使
+    符号居中于原子（二者符号相反）。
+    """
+    shift = _CHAR_HALF_W * (_weighted_plain_len(lab)
+                            - _weighted_plain_len(sym))
+    plain = re.sub(r"[$_{}^\\]", "", lab)
+    if plain.startswith(sym):
+        return -shift
+    if plain.endswith(sym):
+        return shift
+    return 0.0
+
+
+def _dot_center(mol, idx: int, explicit_hs: int = 0) -> tuple[float, float]:
+    """孤对电子点的环绕中心 = 元素符号中心（= 原子坐标）。
+
+    配合 label_node_pos（标签节点平移使元素符号居中于原子），元素符号
+    中心落在原子坐标上，故点/电荷绕原子环绕即可与键线（终点=元素符号）
+    对齐——不再另加水平偏移（原逻辑把符号中心估算为"原子+偏移"，而
+    键线却用原子坐标，导致竖直键延长线穿过整条标签中点而非元素符号）。
+    含下标标签文字主体相对 node 中心上移（下标占下方空间）→ 环绕中心
+    随之上移补偿（_SUBSCRIPT_DEPTH_COMP），避免电荷/电子点重叠。
     explicit_hs 已显式画出的 H 会同步缩小后缀宽度。
-    flip 感知（_label_flip_for）：键端在标签右侧时绘制标签翻转
-    （OH→HO，元素符号从标签左端变右端），环绕中心必须按翻转后的
-    标签文本修正，否则电荷/孤对电子点错位约半个标签宽。
+    flip 感知（_label_flip_for）：翻转只影响标签读向（OH→HO），符号
+    中心仍居中于原子，需按翻转后的标签判断是否含下标（y 补偿）。
     """
     atom = mol.GetAtomWithIdx(idx)
     x, y = atom_pos(mol, idx)
     lab = mol_default_labeler(mol)(atom, explicit_hs,
                                    flip=_label_flip_for(mol, idx))
+    if lab and "$_{" in lab:
+        y += _SUBSCRIPT_DEPTH_COMP
+    return x, y
+
+
+def label_node_pos(mol, idx: int, explicit_hs: int = 0) -> tuple[float, float]:
+    """标签节点放置位置：使元素符号中心落在原子（键连接点）上。
+
+    标签直接居中于原子时，真正与键相连的元素符号会偏出原子坐标
+    （如 OH 的 O 在左、偏离 -0.13），导致键线延长线穿过整条标签中点
+    而非元素符号（规范：键应连到实际成键的原子）。本函数把节点沿水平
+    平移「-元素符号偏移」，使符号居中于原子、H 后缀顺延到自由侧；
+    与 _dot_center（符号中心=原子坐标）、键线（终点=原子坐标）三者一致。
+    flip 感知（_label_flip_for）：翻转后符号在右端则反向平移
+    （H 后缀移到左侧自由侧）。
+    """
+    x, y = atom_pos(mol, idx)
+    atom = mol.GetAtomWithIdx(idx)
+    lab = mol_default_labeler(mol)(atom, explicit_hs,
+                                   flip=_label_flip_for(mol, idx))
     if lab:
         sym = atom.GetSymbol()
         sym = sym[0].upper() + sym[1:]
-        plain = re.sub(r"[$_{}^\\]", "", lab)
-        if plain.startswith(sym):
-            x -= _CHAR_HALF_W * (_weighted_plain_len(lab)
-                                 - _weighted_plain_len(sym))
-        elif plain.endswith(sym):
-            x += _CHAR_HALF_W * (_weighted_plain_len(lab)
-                                 - _weighted_plain_len(sym))
-        if "$_{" in lab:
-            y += _SUBSCRIPT_DEPTH_COMP
+        x -= _label_symbol_shift_x(lab, sym)
     return x, y
 
 

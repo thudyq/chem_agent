@@ -151,10 +151,15 @@ def test_scope_flips_label():
 
 
 def test_dot_center_flip_aware():
-    """_dot_center 感知标签翻转：键端在右侧（标签 HO）时元素符号中心
-    右移（+0.13），而非按未翻转标签 OH 左移（-0.13）——电荷/孤对
-    电子点错位约半个标签宽的回归锚点。"""
-    from renderers.mol_primitives import _label_flip_for, symbol_center
+    """元素符号中心 = 原子坐标（flip 无关）；标签翻转的偏移体现在
+    label_node_pos（节点平移使符号居中于原子，H 后缀到自由侧）。
+
+    回归锚点：键端在右侧（标签 HO，O 符号在右端）时节点应**左移**，
+    使 O 落在原子（0）上；键端在左侧（OH，O 在左端）时节点应**右移**。
+    翻转只影响标签读向与节点平移方向，不影响符号中心（=原子）。
+    """
+    from renderers.mol_primitives import (label_node_pos, _label_flip_for,
+                                          symbol_center)
     mol = prepare_mol("OC")
     conf = mol.GetConformer()
     o = _atom(mol, "O")
@@ -162,11 +167,13 @@ def test_dot_center_flip_aware():
     conf.SetAtomPosition(o.GetIdx(), (0, 0, 0))
     conf.SetAtomPosition(c.GetIdx(), (2, 0, 0))   # 键端在右侧 → 翻转
     assert _label_flip_for(mol, o.GetIdx())
-    assert symbol_center(mol, o.GetIdx())[0] > 0  # 右移（HO 的 O 在右侧）
-    # 反向（键端在左侧）→ 不翻转，中心左移（OH 的 O 在左侧）
+    assert abs(symbol_center(mol, o.GetIdx())[0]) < 1e-9   # 符号中心=原子 0
+    assert label_node_pos(mol, o.GetIdx())[0] < 0          # HO：节点左移
+    # 反向（键端在左侧）→ 不翻转，节点右移（OH 的 O 在左端）
     conf.SetAtomPosition(c.GetIdx(), (-2, 0, 0))
     assert not _label_flip_for(mol, o.GetIdx())
-    assert symbol_center(mol, o.GetIdx())[0] < 0
+    assert abs(symbol_center(mol, o.GetIdx())[0]) < 1e-9
+    assert label_node_pos(mol, o.GetIdx())[0] > 0          # OH：节点右移
 
 
 def test_is_formula_label():

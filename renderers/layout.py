@@ -16,7 +16,7 @@ from .collide import DOT_R, Occupancy
 from .mol_primitives import (
     _label_flip_for, aromatic_ring_info, atom_label, atom_main_label, atom_pos,
     bond_segments, charge_tikz, heavy_atom_count, label_bond_margin,
-    label_visual_width,
+    label_node_pos, label_visual_width,
     label_wrapped_size, lone_pair_dot_groups, lone_pair_tikz, mol_visual_bbox,
 )
 
@@ -336,19 +336,23 @@ def molecule_scope_lines(mol, shift: Tuple[float, float], *,
         )
         occ.add_circle(cx, cy, radius)
     for atom in mol.GetAtoms():
-        x, y = atom_pos(mol, atom.GetIdx())
         idx = atom.GetIdx()
+        x, y = atom_pos(mol, idx)
+        ex_hs = hs.get(idx, 0)
         # 键端在标签右侧时翻转标签（OH→HO），使键连的元素符号靠近键端
         lab = labeler(atom, flip=_label_flip_for(mol, idx))
         if lab:
+            # 标签节点平移使元素符号居中于原子（键线终点/孤对符号中心=
+            # 原子坐标三者一致——竖直键延长线穿元素符号而非整条标签中点）
+            nx, ny = label_node_pos(mol, idx, ex_hs)
             lines.append(
-                f"    \\node[fill=white, inner sep=1pt] at ({x:.2f},{y:.2f}) {{{lab}}};"
+                f"    \\node[fill=white, inner sep=1pt] at ({nx:.2f},{ny:.2f}) {{{lab}}};"
             )
             # 标签占据按字形估算（label_visual_width 的 0.6 折减——该宽度
             # 是为组件间距设计的保守上限，字形实际约占六成）
             hw = max(0.11, label_visual_width(lab) * 0.3)
-            occ.add_rect(x - hw, y - 0.12, x + hw, y + 0.12)
-        charge = charge_tikz(mol, idx, explicit_hs=hs.get(idx, 0),
+            occ.add_rect(nx - hw, ny - 0.12, nx + hw, ny + 0.12)
+        charge = charge_tikz(mol, idx, explicit_hs=ex_hs,
                              occupancy=occ)
         if charge:
             lines.append(f"    {charge}")

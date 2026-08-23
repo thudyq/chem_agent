@@ -558,18 +558,21 @@ def test_charge_annotation_child():
     )
     assert "$\\delta^-$" in out and "$\\delta^+$" in out
     assert "red" in out
-    # δ- 标注在 O（标签 "OH"）的元素符号中心：符号中心 = 标签中心左移 0.13
+    # δ- 标注在 O（标签 "OH"）的元素符号中心：符号中心 = 原子坐标
+    # （标签节点平移使符号居中于原子，见 label_node_pos）
     import renderers.mol_primitives as mp
     mol = mp.prepare_mol("OCC")
     mp.scale_mol_coords(mol, 0.8)   # 与 composite 布局一致（_MOL_SCALE=0.8）
     cx, cy = mp.symbol_center(mol, 0)
     ox, oy = mp.atom_pos(mol, 0)
-    assert abs(cx - (ox - 0.13)) < 0.01          # 基准修正存在（绕 O 而非绕 OH）
+    assert abs(cx - ox) < 0.01                    # 符号中心=原子（绕 O 而非绕 OH）
     # 各 δ 节点应落在 shift + partial_charge_pos（方向避让后的期望坐标）；
-    # shift 由 OH 节点反推（row 布局单分子只平移不缩放）
+    # shift 由 OH 节点反推（节点现按 label_node_pos 平移至"符号居中于原子"，
+    # 该平移已含在节点坐标里，故用节点参考位置 = label_node_pos 反推真实组件 shift）
     o_node = _resolve_node_positions(out, "OH")
     assert o_node
-    shift_x, shift_y = o_node[0][0] - ox, o_node[0][1] - oy
+    ref_x, ref_y = mp.label_node_pos(mol, 0)
+    shift_x, shift_y = o_node[0][0] - ref_x, o_node[0][1] - ref_y
     nodes = re.findall(
         r"\\node\[font=\\small, red\] at \(([-\d.]+),([-\d.]+)\)", out)
     assert len(nodes) == 3
