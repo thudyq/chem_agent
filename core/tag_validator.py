@@ -1381,6 +1381,47 @@ def _check_polar_arrow_semantics(src_id: str, src_pt: str,
                             f"无空轨道接受电子对——若意图是碱夺 H⁺（脱质子），"
                             f"请把目标 H 写成显式 [H] 并指向该 H；若意图是"
                             f"亲核进攻，目标应是缺电子原子（碳正离子/羰基碳）")
+    # R4（20260826，A1）π 进攻靶不能是"中性氧"（仅跨分子亲核进攻）：
+    # π 电子（双键/芳香键）作供体时，靶原子若为电负性的中性 O，则 O 不是
+    # 亲电体（亲电中心应是与之相连的中央原子/带正电原子/缺电子原子）。
+    # 典型误写：苯磺化 ar:0-1>so3:0（π 攻 O，应攻 S so3:1）。仅跨分子触发
+    # （src_id != dst_id）；同分子是电子重排/补偿（如 S=O→O），不拦。
+    if (src_id != dst_id and "-" in src_pt and "-" not in dst_pt
+            and src_mol is not None and dst_mol is not None):
+        gba = getattr(src_mol, "GetBondBetweenAtoms", None)
+        gai = getattr(dst_mol, "GetAtomWithIdx", None)
+        if gba is not None and gai is not None:
+            try:
+                sa, sb = (int(x) for x in src_pt.split("-"))
+                t = int(dst_pt)
+            except ValueError:
+                sa = sb = t = -1
+            if (0 <= sa < src_mol.GetNumAtoms()
+                    and 0 <= sb < src_mol.GetNumAtoms()
+                    and 0 <= t < dst_mol.GetNumAtoms()):
+                bond = gba(sa, sb)
+                atom = gai(t)
+                is_pi = bond is not None and (
+                    bond.GetIsAromatic()
+                    or abs(bond.GetBondTypeAsDouble() - 2.0) < 0.1)
+                if (is_pi and atom.GetAtomicNum() == 8
+                        and atom.GetFormalCharge() <= 0):
+                    # 建议真正亲电位：带正电原子 > 被误靶氧的重原子邻居
+                    elec = ""
+                    for a in dst_mol.GetAtoms():
+                        if a.GetFormalCharge() > 0:
+                            elec = (f"目标应为带正电的 {a.GetSymbol()} "
+                                    f"({dst_id}:{a.GetIdx()})")
+                            break
+                    if not elec:
+                        nbrs = [f"{dst_id}:{n.GetIdx()}（{n.GetSymbol()}）"
+                                for n in atom.GetNeighbors()
+                                if n.GetAtomicNum() > 1]
+                        if nbrs:
+                            elec = "目标应为与氧相连的 " + "、".join(nbrs)
+                    return (f"π 电子（{src_id}:{src_pt} 的 π 键）应进攻亲电中心，"
+                            f"而非电负性的中性氧原子（{dst_id}:{t}）——"
+                            f"氧不是亲电体；{elec or '请核对靶原子'}")
     return ""
 
 

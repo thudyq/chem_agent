@@ -1346,6 +1346,41 @@ def test_polar_arrow_target_full_octet_cation():
         assert not bad3, [r.reason for r in bad3]
 
 
+def test_pi_attack_target_not_neutral_oxygen():
+    """R4（A1，20260826）：π 进攻靶不能是"中性氧"（仅跨分子亲核进攻）。
+    16.png 苯磺化 ar:0-1>so3:0（π 攻中性 O，应攻 S so3:1）→ 拦截；
+    正确磺化 π→S + S=O→O 补偿、正确硝化 π→N、SN2 孤对→碳 均放行。"""
+    pytest.importorskip("rdkit")
+    # 16.png：π → 中性 O，拦截且建议 so3:1 为亲电位
+    _, bad = _validate(
+        "[COMPOSITE:reaction][STRUCT:C1=CC=CC=C1,id=ar][PLUS]"
+        "[STRUCT:O=S(=O)=O,id=so3][ARROW:type=single]"
+        "[STRUCT:O=S([O-])(=O)C([H])1C=CC=C[CH+]1,id=sigma]"
+        "[MECHARROW:ar:0-1>so3:0][MECHARROW:so3:0-1>so3:1][/COMPOSITE]")
+    assert len(bad) == 1, [r.reason for r in bad]
+    assert "中性氧" in bad[0].reason and "so3:1" in bad[0].reason, bad[0].reason
+    # 正确磺化（π→S，S=O→O 补偿，同分子重排）放行
+    _, ok = _validate(
+        "[COMPOSITE:reaction][STRUCT:C1=CC=CC=C1,id=ar][PLUS]"
+        "[STRUCT:O=S(=O)=O,id=so3][ARROW:type=single]"
+        "[STRUCT:O=S([O-])(=O)C([H])1C=CC=C[CH+]1,id=sigma]"
+        "[MECHARROW:ar:0-1>so3:1][MECHARROW:so3:0-1>so3:2][/COMPOSITE]")
+    assert not ok, [r.reason for r in ok]
+    # 正确硝化（π→N）放行
+    _, ok2 = _validate(
+        "[COMPOSITE:reaction][STRUCT:C1=CC=CC=C1,id=ar][PLUS]"
+        "[STRUCT:[N+](=O)=O,id=nu][ARROW:type=single]"
+        "[STRUCT:O=[N+]([O-])C([H])1C=CC=C[CH+]1,id=sigma]"
+        "[MECHARROW:ar:0-1>nu:0][MECHARROW:nu:0-1>nu:2][/COMPOSITE]")
+    assert not ok2, [r.reason for r in ok2]
+    # SN2 孤对 → 碳 放行
+    _, ok3 = _validate(
+        "[COMPOSITE:reaction][STRUCT:[OH-],id=nu][PLUS][STRUCT:CCl,id=r0]"
+        "[ARROW:type=single][STRUCT:CO,id=p][PLUS][STRUCT:[Cl-],id=l]"
+        "[MECHARROW:nu:0>r0:0][MECHARROW:r0:0-1>r0:1][/COMPOSITE]")
+    assert not ok3, [r.reason for r in ok3]
+
+
 def test_polar_pi_electrons_flow_rules():
     """R2/R3（que_test6 图 23）：羧酸根共振——O- 孤对不能指向 C=O 双键、
     C=O π 电子不能流向碳端；正确写法通过。"""

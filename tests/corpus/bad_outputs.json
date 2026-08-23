@@ -88,7 +88,7 @@
     "source": "真实 metrics 基线 20260822 第 8 次测试（fast_test/que_test8）Q11 苯磺化机理第一步：苯环 π 电子应进攻 SO₃ 的 S、S=O 的 π 电子应转给 O，LLM 却把两个弯箭头的靶原子写反（π→O、O→S）",
     "llm_output": "第一步：亲电进攻。苯环的一对 π 电子进攻 SO₃ 的 S：\n[COMPOSITE:reaction]\n[STRUCT:C1=CC=CC=C1,label=苯,id=ar][PLUS][STRUCT:O=S(=O)=O,label=SO3,id=so3]\n[ARROW:type=single]\n[STRUCT:O=S([O-])(=O)C([H])1C=CC=C[CH+]1,label=σ 络合物,id=sigma]\n[MECHARROW:ar:0-1>so3:0][MECHARROW:so3:0-1>so3:1]\n[/COMPOSITE]",
     "expect": {"valid": 1, "invalid": 0},
-    "note": "化学方向错误但未被拦截（攻击靶原子应为 S 而非 O、S=O π 应转给 O 而非回流 S）——两箭头靶序号与正确相反（so3:0=O、so3:1=S）；语法/守恒均通过，属「机理弯箭头方向语义」校验缺口（Drawbacks 十三 16.png，仍开放）。若后续实现方向语义校验，此例应改写为拦截。"
+    "note": "化学方向错误（π 攻中性 O 而非 S）。20260826 起真实 RDKit 下已由 R4（A1 方向语义校验）拦截：MECHARROW「ar:0-1>so3:0」为跨分子 π→中性氧，报错并建议 so3:1（S）。本 corpus 走 fake_rdkit（缺少真实化学，R4 因无 GetBondBetweenAtoms/GetIsAromatic 而跳过），故按不可校验记 valid:1；真实拦截由 tests/test_validator.py::test_pi_attack_target_not_neutral_oxygen（rdkit 单测）覆盖。"
   },
   {
     "id": "sn2-step-missing-protonated-ether-intermediate-20260822",
