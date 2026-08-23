@@ -1007,6 +1007,39 @@ def _check_radical_charge_conflict(mol) -> str:
     return ""
 
 
+def _check_radical_label(mol, label: str) -> str:
+    """（20260826）label 含「自由基」→ SMILES 必须有且仅有一个原子带
+    恰好 1 个自由基单电子。
+
+    - 所有原子都不带单电子（C/CC/O，非自由基）→ 拦截；
+    - 多于一个原子带单电子（如 O2 双自由基/两个自旋中心）→ 拦截；
+    - 唯一带单电子的原子却带 2 个以上单电子（如 [CH2] 卡宾中心，非单
+      自由基）→ 拦截。
+    合法：一个原子恰好 1 个单电子（[CH3]/[Cl]=Cl·）；电荷与单电子在不
+    同原子的自由基离子（[O-][O] 超氧根）→ 放行。fake mol 跳过。
+    """
+    if not label or "自由基" not in label:
+        return ""
+    atoms_fn = getattr(mol, "GetAtoms", None)
+    if atoms_fn is None:
+        return ""   # fake mol（测试 fixture）：无原子遍历能力，跳过
+    radical = [a for a in atoms_fn()
+               if getattr(a, "GetNumRadicalElectrons", lambda: 0)() > 0]
+    if not radical:
+        return ("label 含「自由基」但 SMILES 没有任何带单电子的原子——自由基"
+                "必须有奇数电子（如 [CH3]、[Cl]=Cl·；C、CC、O 不带单电子，"
+                "不是自由基）")
+    if len(radical) > 1:
+        return (f"label 含「自由基」但 SMILES 有 {len(radical)} 个原子带单电子"
+                f"——自由基一般只有一个自旋中心（有且仅有一个原子带一个单电子）")
+    if radical[0].GetNumRadicalElectrons() != 1:
+        return (f"label 含「自由基」但唯一带单电子的原子 "
+                f"{radical[0].GetIdx()}（{radical[0].GetSymbol()}）带 "
+                f"{radical[0].GetNumRadicalElectrons()} 个单电子——单自由基的自旋"
+                f"中心应恰好 1 个单电子（如 [CH3]，而非 [CH2] 卡宾）")
+    return ""
+
+
 def _validate_struct_args(args: list, attrs: dict = None) -> Tuple[bool, str]:
     """校验单个 STRUCT 参数（顶层或容器内）：SMILES 非空 + label 长度 + 模式参数。
 
@@ -1054,6 +1087,11 @@ def _validate_struct_args(args: list, attrs: dict = None) -> Tuple[bool, str]:
                                f"杂原子——质子化醇/醚/羰基的杂原子带 +1："
                                f"质子化醇 CC[OH2+]、质子化醚 CC[OH+]CC、"
                                f"质子化羰基 CC=[OH+]，请按正确写法重写")
+            # 自由基一致性（20260826）：label 含「自由基」→ SMILES 必须有且
+            # 仅有一个原子带恰好 1 个自由基单电子
+            rad_reason = _check_radical_label(mol, label_text)
+            if rad_reason:
+                return False, rad_reason
     mode = attrs.get("mode", "skeleton")
     if mode not in _STRUCT_MODES:
         return False, (f"未知 STRUCT 模式「{mode}」，支持 "

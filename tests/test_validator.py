@@ -1170,6 +1170,31 @@ def test_radical_charge_conflict_rejected():
     assert any("自由基单电子" in r.reason for r in bad3)
 
 
+def test_radical_label_requires_single_electron():
+    """（20260826）label 含「自由基」→ SMILES 必须有且仅有一个原子带恰好
+    1 个自由基单电子。合法：[CH3]/[Cl]（1 原子 1 单电子）、[O-][O]（电荷/
+    单电子分写异原子）；拦截：C/CC/O（无单电子）、[CH2]（单原子带 2 单电子）；
+    非「自由基」label 不触发。"""
+    pytest.importorskip("rdkit")
+    # 合法（1 原子 1 单电子 / 自由基离子分写异原子）
+    for ok_text in ("[STRUCT:[CH3],label=甲基自由基]",
+                    "[STRUCT:[Cl],label=氯自由基]",
+                    "[STRUCT:[O-][O],label=超氧自由基]"):
+        _, invalid = _validate(ok_text)
+        assert len(invalid) == 0, f"{ok_text} → {[r.reason for r in invalid]}"
+    # 无单电子 → 拦截
+    _, bad = _validate("[STRUCT:C,label=甲基自由基]")
+    assert len(bad) == 1 and "没有任何带单电子" in bad[0].reason
+    _, bad2 = _validate("[STRUCT:O,label=超氧自由基]")
+    assert len(bad2) == 1
+    # 单原子带 2 单电子（卡宾）→ 拦截
+    _, bad3 = _validate("[STRUCT:[CH2],label=卡宾自由基]")
+    assert len(bad3) == 1 and "恰好 1 个单电子" in bad3[0].reason
+    # 非「自由基」label 不触发（不应被误拦）
+    _, invalid = _validate("[STRUCT:C,label=碳]")
+    assert len(invalid) == 0, [r.reason for r in invalid]
+
+
 def test_proton_transfer_pairing():
     """质子转移配对校验（4b，20260820）：
     A. 碱孤对→显式 H 但缺 X—H 键电子回落 → 拦截；
