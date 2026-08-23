@@ -1299,9 +1299,9 @@ def test_autofix_mech_bond_endpoint_no_candidate():
     """P1 边界：无显式 H（需改 SMILES）、合法端点、双候选歧义均不修。"""
     pytest.importorskip("rdkit")
     from core.tag_validator import autofix_mech_bond_endpoint
-    # 无显式 H（质子化叔丁醇 3-4）——需改 SMILES，超出端点改写范围
-    t1 = ("[COMPOSITE:reaction][STRUCT:CC(C)(C)[OH2+],id=p]"
-          "[MECHARROW:p:3-4>p:4][/COMPOSITE]")
+    # 中性杂原子（fc=0，如醇 O）不视为离去基团 → 无候选不修
+    t1 = ("[COMPOSITE:reaction][STRUCT:CCO,id=p]"
+          "[MECHARROW:p:0-2>p:2][/COMPOSITE]")
     assert autofix_mech_bond_endpoint(parse_tags(t1)[0]) is None
     # 合法端点不修
     t2 = ("[COMPOSITE:reaction][STRUCT:CC=O,id=a]"
@@ -1386,9 +1386,10 @@ def test_protonated_label_requires_cation():
 
 
 def test_autofix_mech_bond_endpoint_leaving_group():
-    """P1 扩展（LG 规则）：离去基团端点——卤素/无 H 鎓离子端点有唯一
-    重原子邻居 → 改写为 C—LG 键（CC(C)(C)Br 的 C—Br 实为 1-4）。
-    双卤素歧义、带 H 鎓离子（断裂/脱质子两可）不修。"""
+    """P1 扩展（LG 规则）：离去基团端点——卤素/鎓离子端点有唯一重原子
+    邻居 → 改写为 C—LG 键（CC(C)(C)Br 的 C—Br 实为 1-4）。
+    双卤素歧义不修；带 H 的 N/S 鎓（断裂/脱质子两可）不修，但带 H 的
+    O 鎓（[OH2+]/[OH3+]）按 LG 修复（SN1 质子化醇离去基团）. """
     pytest.importorskip("rdkit")
     from core.tag_validator import autofix_mech_bond_endpoint
     # 卤素端点：3-4（相邻猜测）→ 1-4（真实 C—Br），修复后整标记通过
@@ -1403,10 +1404,17 @@ def test_autofix_mech_bond_endpoint_leaving_group():
     t2 = ("[COMPOSITE:reaction][STRUCT:BrCCBr,id=s]"
           "[MECHARROW:s:0-3>s:3][/COMPOSITE]")
     assert autofix_mech_bond_endpoint(parse_tags(t2)[0]) is None
-    # 带 H 鎓离子（[OH2+]，断裂/脱质子两可）不修
+    # 带 H 的 O 鎓（[OH2+]）按 LG 修复：3-4（相邻猜测）→ 1-4（真实 C—O）
     t3 = ("[COMPOSITE:reaction][STRUCT:CC(C)(C)[OH2+],id=p]"
           "[MECHARROW:p:3-4>p:4][/COMPOSITE]")
-    assert autofix_mech_bond_endpoint(parse_tags(t3)[0]) is None
+    fix3 = autofix_mech_bond_endpoint(parse_tags(t3)[0])
+    assert fix3 is not None and "p:1-4" in fix3[0], fix3
+    _, bad3 = _validate(fix3[0])
+    assert not bad3, [r.reason for r in bad3]
+    # 带 H 的 N 鎓（[NH4+]/[NH3+]）断裂/脱质子两可，仍不修
+    t4 = ("[COMPOSITE:reaction][STRUCT:CC[NH3+],id=p]"
+          "[MECHARROW:p:0-2>p:2][/COMPOSITE]")
+    assert autofix_mech_bond_endpoint(parse_tags(t4)[0]) is None
 
 
 def test_mecharrow_same_src_dst_rejected():

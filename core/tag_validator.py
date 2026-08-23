@@ -1391,9 +1391,9 @@ def autofix_mech_bond_endpoint(tag) -> tuple | None:
     两类唯一候选修复（合计候选必须恰好 1 个，否则不修）：
     - 脱质子：某端点连着**唯一**显式 H 邻居 h → 改写为 x-h；
     - 断裂（离去基团）：某端点本身是离去基团——卤素（无 H 歧义）或
-      无 H 的鎓离子杂原子（fc>0 的 N/O/S）——且有唯一重原子邻居 c
+      鎓离子杂原子（fc>0 的 N/O/S；O 就算带 H 也算，如 [OH2+]）——且有唯一重原子邻居 c
       → 改写为 c-lg（典型：CC(C)(C)Br 的 C—Br 实为 1-4，模型按相邻
-      编号猜成 3-4）。鎓离子带 H（如 [OH2+]）时断裂/脱质子两可，不修。
+      编号猜成 3-4；质子化醇的 C—O 同理）。带 H 的 N/S 鎓（如 [NH4+]）断裂/脱质子两可，不修。
     仅做文本替换，是否采用由调用方重校验决定（全规则把关，含化学
     配对校验）。返回 (新 raw, 修复说明)；不适用返回 None。
     """
@@ -1447,9 +1447,13 @@ def autofix_mech_bond_endpoint(tag) -> tuple | None:
                     if len(hs) == 1:
                         cands.append(f"{idx}-{hs[0]}")
                     z = atom.GetAtomicNum()
+                    # LG 推广到带 H 的氧鎓（[OH2+]/[OH3+]）：O 带正电即视为离去
+                    # 基团，不论有无 H（如质子化醇/水的 C—O 键）。N/S 带 H 仍不修
+                    # （避免过宽误伤）。判定机制与既有 LG 完全一致（唯一重原子邻居
+                    # 候选 → 调用方全规则重校验把关）。
                     is_lg = z in _LG_HALOGENS or (
                         z in (7, 8, 16) and atom.GetFormalCharge() > 0
-                        and atom.GetTotalNumHs() == 0)
+                        and (atom.GetTotalNumHs() == 0 or z == 8))
                     if is_lg:
                         heavy = [n.GetIdx() for n in atom.GetNeighbors()
                                  if n.GetAtomicNum() > 1]
