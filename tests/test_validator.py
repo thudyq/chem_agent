@@ -619,13 +619,14 @@ class TestChemicalChecks:
         pytest.importorskip("rdkit")
         _, invalid = _validate("[STRUCT:XYZABC]")
         shown = tv.degrade_text_friendly(invalid[0].tag)
-        assert shown == "（结构式图示无法渲染，已省略）"
+        assert shown.startswith("（结构式图示无法渲染，已省略")
+        assert "图示无法渲染" in shown and "已省略" in shown
         assert "无效 SMILES" not in shown
         _, invalid2 = _validate(
             "[COMPOSITE:reaction][STRUCT:CCO,id=a][PLUS][STRUCT:O,id=w]"
             "[ARROW:type=single][STRUCT:CC=O,id=b][/COMPOSITE]")
         shown2 = tv.degrade_text_friendly(invalid2[0].tag)
-        assert shown2 == "（复合图图示无法渲染，已省略）"
+        assert shown2.startswith("（复合图图示无法渲染，已省略")
         assert "不守恒" not in shown2
         assert "化学校验" not in shown2
 

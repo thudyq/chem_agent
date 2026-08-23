@@ -1308,6 +1308,14 @@ def _validate_mech_arrow_pt(pt: str, n_atoms: int,
                                 for n in atom.GetNeighbors()]
                         parts.append(f"原子 {idx}={atom.GetSymbol()} "
                                      f"连接 [{', '.join(nbrs)}]")
+                        # 列出该原子的全部可引用键（照抄用，含 C—X 与 X—H）；
+                        # 避免只提示 C—H 而漏掉闭环/其它键（如 30.png 去质子
+                        # 应指闭环键，而非 C—H）
+                        cand = [f"{idx}-{n.GetIdx()}"
+                                for n in atom.GetNeighbors()]
+                        if cand:
+                            parts.append(
+                                "可直接引用的键：" + "、".join(cand))
                         hs = [n.GetIdx() for n in atom.GetNeighbors()
                               if n.GetAtomicNum() == 1]
                         if len(hs) == 1:
@@ -2173,9 +2181,10 @@ def degrade_text(tag: RenderTag, reason: str) -> str:
 
 def degrade_text_friendly(tag: RenderTag) -> str:
     """用户可见降级提示（友好版）：不含校验技术细节（原子守恒/元素差/索引
-    等），只告知该处图示未生成——普通用户不关心内部校验原因。详细原因仍由
-    reason（P2 修正 prompt / diagnostics / metrics）承载。"""
-    return f"（{_tag_name_for(tag)}图示无法渲染，已省略）"
+    等），只告知该处图示未生成并给出文字回退选项——普通用户不关心内部校验
+    原因。详细原因仍由 reason（P2 修正 prompt / diagnostics / metrics）承载。"""
+    return (f"（{_tag_name_for(tag)}图示无法渲染，已省略"
+            f"——需要的话我可以用文字讲清关键分子）")
 
 
 if __name__ == "__main__":

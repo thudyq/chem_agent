@@ -99,7 +99,7 @@ def test_diagnostics_resolved_after_correction(fake_rdkit, fake_renderers,
     assert diag[0]["round"] == 0
     assert diag[0]["resolved"] is True
     assert "无效 SMILES" in diag[0]["reason"]          # 技术细节留给后端
-    assert diag[0]["friendly"] == "（结构式图示无法渲染，已省略）"  # 前端友好版
+    assert diag[0]["friendly"].startswith("（结构式图示无法渲染，已省略")  # 前端友好版
     assert "RENDERED:c1ccccc1" in result
 
 

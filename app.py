@@ -563,7 +563,8 @@ def _generate_with_corrections(user_question: str, model=None,
                 partial = _partial_render_composite_without_mecharrows(r.tag)
             if partial is not None:
                 degraded[r.tag.raw] = (
-                    partial + "\n\n> 反应箭头无法渲染，已省略")
+                    partial + "\n\n> 反应箭头无法渲染，已省略"
+                              "；机理电子流向请以文字说明为准")
             else:
                 degraded[r.tag.raw] = degrade_text_friendly(r.tag)
 
