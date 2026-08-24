@@ -252,12 +252,24 @@ def _preamble(cjk: bool, uses_chemfig: bool = False) -> str:
         if on_windows_tex:
             parts.append(r"\usepackage[fontset=windows]{ctex}")
         else:
+            # Linux/macOS：ctex 默认 fandol，冷僻字缺字形。见到有全量覆盖的
+            # Noto CJK 就优先用（缺字体则静默回退，不影响编译）。
             parts.append(r"\usepackage{ctex}")
+            parts.append(_CJK_FULL_COVERAGE)
     parts.append(r"\begin{document}")
     return "\n".join(parts) + "\n"
 
 
 _POSTAMBLE = "\n\\end{document}\n"
+
+# 非 Windows 下 ctex 默认 fontset=fandol，Fandol 字库覆盖不全，冷僻字
+# （如“鎓”U+93D3）会缺字形、被 xelatex 渲染成占位符。这里在系统装有
+# 覆盖 GB18030 全量的 Noto CJK 时改用它；\IfFontExistsTF 守卫保证字体
+# 不存在时静默回退到 ctex 默认字体，绝不因此让编译失败。
+_CJK_FULL_COVERAGE = (
+    "\\IfFontExistsTF{Noto Serif CJK SC}{\\setCJKmainfont{Noto Serif CJK SC}}{}\n"
+    "\\IfFontExistsTF{Noto Sans CJK SC}{\\setCJKsansfont{Noto Sans CJK SC}}{}\n"
+)
 
 
 def _run_latex(engine: str, tex_path: str) -> Optional[str]:
