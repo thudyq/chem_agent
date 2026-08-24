@@ -550,7 +550,6 @@ async def chat_completions(request: Request, authorization: str | None = Header(
     # 严格按 JSON 布尔解析 stream（字符串 "false" 视为非流式）
     stream = body.get("stream", False)
     stream = stream if isinstance(stream, bool) else False
-    print(f"[api][debug] 收到会话请求 stream={stream!r}, model={body.get('model')!r}")
 
     text, images, audios, files = _extract_question(body.get("messages") or [])
     history = _extract_history(body.get("messages") or [])
