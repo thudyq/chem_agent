@@ -34,7 +34,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from app import process_question
-from core.attachments import build_attachments, extract_code_blocks
+from core.attachments import build_attachments, extract_code_blocks, strip_code_blocks
 from core.config import settings
 
 app = FastAPI(title="Chem_Agent", version="1.0.0")
@@ -507,9 +507,10 @@ def _sse_stream(question: str, history: list, cid: str, created: int,
     if extract_code_blocks(answer):
         yield _sse_frame(cid, created,
                          {"reasoning": "正在渲染化学图示（LaTeX 编译，首次较慢）…"})
+    display = strip_code_blocks(answer)   # 内容不含裸 TikZ（图由附件承载）
     step = 20
-    for i in range(0, len(answer), step):
-        yield _sse_frame(cid, created, {"content": answer[i:i + step]})
+    for i in range(0, len(display), step):
+        yield _sse_frame(cid, created, {"content": display[i:i + step]})
 
     # 附件编译在 work 线程并行进行；超 3s 发心跳保活
     att_flush = time.time()
@@ -595,7 +596,7 @@ async def chat_completions(request: Request, authorization: str | None = Header(
         "created": created,
         "choices": [{
             "index": 0,
-            "message": {"role": "assistant", "content": answer},
+            "message": {"role": "assistant", "content": strip_code_blocks(answer)},
             "finish_reason": "stop",
         }],
         "usage": _usage(question, answer),

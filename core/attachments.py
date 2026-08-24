@@ -34,6 +34,17 @@ def extract_code_blocks(text: str) -> list:
     return _CODE_RE.findall(text or "")
 
 
+def strip_code_blocks(text: str) -> str:
+    """移除文本中的 TikZ/chemfig 代码块（只留说明文字）。
+
+    这些代码块会被编译为 PNG 附件（x_soda.attachments），不应以裸 LaTeX
+    出现在最终回答里——清小搭端用附件承载图片，文本里保留裸 TikZ 会被当作
+    普通文本显示（20260826 实测）。失败未编译的块一并移除，宁可不显示也不
+    露源码。
+    """
+    return _CODE_RE.sub("", text or "")
+
+
 def _cleanup_old_files(dir_path: Path, ttl: int) -> None:
     if ttl <= 0 or not dir_path.is_dir():
         return

@@ -241,7 +241,7 @@ def _preamble(cjk: bool, uses_chemfig: bool = False) -> str:
     engine = _find_latex_engine() or ""
     on_windows_tex = _is_windows_exe(engine)
     parts = [
-        r"\documentclass[border=10pt]{standalone}",
+        r"\documentclass[border=20pt]{standalone}",
         r"\usepackage{amsmath}",
         r"\usepackage{tikz}",
         r"\usetikzlibrary{arrows.meta}",
@@ -307,7 +307,7 @@ def _compile_doc_to_png(latex_doc: str, dpi: int) -> Optional[bytes]:
         return _pdf_to_png_pdftoppm(pdf_path, dpi, _is_windows_exe(engine))
 
 
-def compile_tikz_to_png(code: str, title: str = "", dpi: int = 200) -> Optional[bytes]:
+def compile_tikz_to_png(code: str, title: str = "", dpi: int = 300) -> Optional[bytes]:
     """把 TikZ/chemfig 代码片段编译成 PNG。
 
     参数:
