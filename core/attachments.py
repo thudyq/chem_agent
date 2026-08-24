@@ -105,8 +105,18 @@ def build_attachments(answer: str, public_base: str,
 
     base = (public_base or "").rstrip("/")
     attachments = []
-    for i, code in enumerate(blocks, 1):
-        png = compile_tikz_to_png(code)
+    # 并行编译各块（LaTeX 子进程各自独立临时目录）：3 图并发，把串行 ~10s 压到 ~3~4s
+    from concurrent.futures import ThreadPoolExecutor
+    pngs = [None] * len(blocks)
+    if len(blocks) > 1:
+        with ThreadPoolExecutor(max_workers=min(len(blocks), 3)) as ex:
+            futs = {i: ex.submit(compile_tikz_to_png, code)
+                    for i, code in enumerate(blocks)}
+            for i, fut in futs.items():
+                pngs[i] = fut.result()
+    else:
+        pngs[0] = compile_tikz_to_png(blocks[0])
+    for i, (code, png) in enumerate(zip(blocks, pngs), 1):
         if not png:
             continue
         name = f"{uuid.uuid4().hex}.png"

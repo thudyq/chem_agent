@@ -457,7 +457,6 @@ def _sse_stream(question: str, history: list, cid: str, created: int,
         result_q.put(attachments)
 
     threading.Thread(target=work, daemon=True).start()
-    gen_len = 0
     last_flush = time.time()
     while True:
         try:
@@ -466,8 +465,8 @@ def _sse_stream(question: str, history: list, cid: str, created: int,
         except queue.Empty:
             pass
         # 消费 progress_q（防止队列满阻塞 process_question 的 on_piece 回调）；
-        # 不做"草稿增量作为 reasoning 帧转发"（清小搭对 reasoning 帧逐条追加，
-        # 草稿帧会无限叠加错乱），而是累计已生成字数，用进度提示替代"正在思考…"
+        # 不把草稿增量作为 reasoning 帧转发（清小搭对 reasoning 帧逐条追加，
+        # 草稿帧会无限叠加错乱），只发低频状态帧避免长时间只有 "..."。
         correction = False
         while True:
             try:
@@ -476,15 +475,11 @@ def _sse_stream(question: str, history: list, cid: str, created: int,
                 break
             if p is _CORRECTION_MARK:
                 correction = True
-            else:
-                gen_len += len(p)
         if correction:
             yield _sse_frame(cid, created, {"reasoning": "正在修正回答…"})
             last_flush = time.time()
         elif time.time() - last_flush >= _HEARTBEAT_INTERVAL:
-            msg = (f"正在生成化学回答… 已生成 {gen_len} 字"
-                   if gen_len else "正在思考…")
-            yield _sse_frame(cid, created, {"reasoning": msg})
+            yield _sse_frame(cid, created, {"reasoning": "正在思考并绘制化学图示…"})
             last_flush = time.time()
         else:
             time.sleep(0.2)
