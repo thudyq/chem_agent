@@ -412,8 +412,8 @@ def _sse_stream(question: str, history: list, cid: str, created: int,
                 public_base: str):
     """SSE 帧序列：role 帧 → 思考帧（固定提示 + 低频心跳 + P2 修正提示；不再
     转发草稿增量——清小搭等前端对 reasoning 帧逐条追加显示，草稿帧会造成
-    "正在生成… 草稿"无限叠加错乱）→（有图时）图示渲染提示 → content 增量
-    →（编译超 3s 心跳）→ stop 帧（usage + x_soda.attachments）→ [DONE]。
+    "正在生成… 草稿"无限叠加错乱）→ content 增量（文本里的 TikZ 已替换为
+    行内图片引用 ![化学图示-N](fileUrl)）→ stop 帧（usage）→ [DONE]。
 
     文本先行：process_question 一返回立即发 content 帧，附件 PNG 编译在
     work 线程与 content 发送并行、完成后挂 stop 帧——用户先读到完整文字
@@ -510,22 +510,10 @@ def _sse_stream(question: str, history: list, cid: str, created: int,
     for i in range(0, len(answer), step):
         yield _sse_frame(cid, created, {"content": answer[i:i + step]})
 
-    # 附件编译在 work 线程并行进行；超 3s 发心跳保活
-    att_flush = time.time()
-    while True:
-        try:
-            attachments = result_q.get_nowait()
-            break
-        except queue.Empty:
-            if time.time() - att_flush >= 3.0:
-                yield _sse_frame(cid, created, {"reasoning": "图示渲染中…"})
-                att_flush = time.time()
-            else:
-                time.sleep(0.2)
-
+    # 图已通过行内 markdown 引用（content 里的 ![化学图示-N](fileUrl)）展示，
+    # 且内容帧在编译完成后才发出（文件已落盘），无需等待/挂 x_soda。
     yield _sse_frame(cid, created, {}, finish="stop",
-                     usage=_usage(question, answer),
-                     x_soda={"attachments": attachments} if attachments else None)
+                     usage=_usage(question, answer))
     yield "data: [DONE]\n\n"
 
 
@@ -601,8 +589,8 @@ async def chat_completions(request: Request, authorization: str | None = Header(
         }],
         "usage": _usage(question, answer),
     }
-    if attachments:
-        payload["x_soda"] = {"attachments": attachments}
+    # 图已通过行内 markdown 引用（content 里的 ![化学图示-N](fileUrl)）展示，
+    # 不再挂 x_soda.attachments，避免文末再出现一排缩略图（20260826）。
     return JSONResponse(payload)
 
 
