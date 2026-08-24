@@ -20,8 +20,10 @@ fastapi                         # HTTP 服务框架
 uvicorn[standard]               # ASGI 服务器
 httpx                           # fastapi TestClient 依赖（测试用）
 
-# === LaTeX 编译链（TikZ → PNG 图片附件，api.py / streamlit_app.py）===
-# 注意：LaTeX 引擎是系统级依赖，pip 装不了，服务器上需另装：
-#   Debian/Ubuntu: sudo apt install texlive-xetex texlive-latex-extra texlive-lang-chinese poppler-utils
-#   Windows: 安装 MiKTeX（勾选 chemfig/mol2chemfig/ctex 宏包）
-PyMuPDF                         # PDF → PNG（pip 可装部分）
+# === LaTeX 编译链（TikZ → PNG 图片附件；缺此则回答只显示裸 TikZ、无图片）===
+# ★★ 必装系统依赖（pip 装不了）：LaTeX 引擎 + PDF→PNG 转换器
+#   服务器（Debian/Ubuntu 阿里云）：
+#     sudo apt install texlive-xetex texlive-latex-extra texlive-lang-chinese poppler-utils
+#   本地 Windows：安装 MiKTeX（需 tikz、amsmath、ctex 宏包；chemfig 仅 legacy
+#   chemfig 块才需要，可选项；mol2chemfig 已弃用、不要再装）
+PyMuPDF                         # PDF → PNG（pip 可装；优先于 pdftoppm，装了可免外部 pdftoppm）

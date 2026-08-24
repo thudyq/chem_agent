@@ -102,10 +102,23 @@ def _find_latex_engine() -> Optional[str]:
     return None
 
 
-def _pdf_to_png_pymupdf(pdf_path: str, dpi: int) -> Optional[bytes]:
+def _import_fitz():
+    """PyMuPDF 模块导入：pymupdf（>=1.28）优先，回退旧别名 fitz。"""
     try:
-        import fitz  # PyMuPDF
+        import pymupdf as fitz
+        return fitz
     except ImportError:
+        pass
+    try:
+        import fitz
+        return fitz
+    except ImportError:
+        return None
+
+
+def _pdf_to_png_pymupdf(pdf_path: str, dpi: int) -> Optional[bytes]:
+    fitz = _import_fitz()
+    if fitz is None:
         return None
     try:
         doc = fitz.open(pdf_path)
@@ -184,11 +197,7 @@ def _to_win_path(linux_path: str) -> str:
 
 @lru_cache(maxsize=1)
 def _have_pymupdf() -> bool:
-    try:
-        import fitz  # noqa: F401
-        return True
-    except ImportError:
-        return False
+    return _import_fitz() is not None
 
 
 def detect_backends() -> dict:
@@ -208,8 +217,14 @@ def detect_backends() -> dict:
 # 编译核心
 # ---------------------------------------------------------------------------
 
-def _preamble(cjk: bool) -> str:
-    """生成导言区。cjk=True 时加 ctex（Windows 用 fontset=windows）。"""
+def _preamble(cjk: bool, uses_chemfig: bool = False) -> str:
+    """生成导言区。cjk=True 时加 ctex（Windows 用 fontset=windows）。
+
+    uses_chemfig：代码块是否用 \\chemfig{...}/\\schemestart（本项目的结构式/
+    机理渲染器输出的是纯 tikzpicture，不需要 chemfig；只有 legacy chemfig
+    块才引入）。mol2chemfig 包已随 mol2chemfigPy3 删除，不再引用——否则
+    服务器 TeX 无该包时每次编译都失败（附件为空、文本留裸 TikZ）。
+    """
     engine = _find_latex_engine() or ""
     on_windows_tex = _is_windows_exe(engine)
     parts = [
@@ -217,9 +232,9 @@ def _preamble(cjk: bool) -> str:
         r"\usepackage{amsmath}",
         r"\usepackage{tikz}",
         r"\usetikzlibrary{arrows.meta}",
-        r"\usepackage{chemfig}",
-        r"\usepackage{mol2chemfig}",
     ]
+    if uses_chemfig:
+        parts.append(r"\usepackage{chemfig}")
     if cjk:
         if on_windows_tex:
             parts.append(r"\usepackage[fontset=windows]{ctex}")
@@ -293,10 +308,11 @@ def compile_tikz_to_png(code: str, title: str = "", dpi: int = 200) -> Optional[
     if not code or not code.strip():
         return None
     body = (f"\\textbf{{{title}}}\\par\n" if title else "") + code
+    uses_chemfig = "\\chemfig" in code or "\\schemestart" in code
 
     # 两级重试：CJK 导言区 → 纯英文导言区
     for cjk in (True, False):
-        doc = _preamble(cjk) + body + _POSTAMBLE
+        doc = _preamble(cjk, uses_chemfig) + body + _POSTAMBLE
         png = _compile_doc_to_png(doc, dpi)
         if png:
             return png
