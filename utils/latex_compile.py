@@ -85,7 +85,12 @@ def _engine_dirs() -> list[str]:
 
 @lru_cache(maxsize=1)
 def _find_latex_engine() -> Optional[str]:
-    """返回首个可启动的 LaTeX 引擎路径。优先 xelatex（CJK 友好）。"""
+    """返回首个可启动的 LaTeX 引擎路径。优先 xelatex（CJK 友好）。
+
+    不依赖 PATH 的兜底：systemd 服务环境 PATH 可能不含 /usr/bin，导致
+    shutil.which 找不到 xelatex——最后再试几个常见固定绝对路径（Linux/
+    macOS 的 texlive）与 MiKTeX 路径，保证服务进程也能编译。
+    """
     names = ["xelatex", "xelatex.exe", "pdflatex", "pdflatex.exe"]
     for n in names:
         p = shutil.which(n)
@@ -99,6 +104,14 @@ def _find_latex_engine() -> Optional[str]:
     for n in names:
         if _try_exec(n):
             return n
+    # PATH 兜底：常见绝对路径（服务进程 PATH 受限时仍能命中）
+    fixed = ["/usr/bin", "/usr/local/bin", "/opt/local/bin", "/opt/homebrew/bin",
+             "/bin", "/sbin"]
+    for d in fixed:
+        for n in names:
+            cand = os.path.join(d, n)
+            if _try_exec(cand):
+                return cand
     return None
 
 
