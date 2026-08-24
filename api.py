@@ -34,7 +34,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from app import process_question
-from core.attachments import build_attachments, extract_code_blocks, strip_code_blocks
+from core.attachments import build_attachments, replace_code_blocks_with_images
 from core.config import settings
 
 app = FastAPI(title="Chem_Agent", version="1.0.0")
@@ -444,14 +444,16 @@ def _sse_stream(question: str, history: list, cid: str, created: int,
         except Exception as e:  # 管线异常兜底为 stop 帧 + error 字段
             answer_q.put(e)
             return
-        answer_q.put(answer)
         _log_diagnostics(diag)
         try:
             attachments = build_attachments(answer or "", public_base) \
                 if answer else []
+            display = replace_code_blocks_with_images(
+                answer or "", [a["fileUrl"] for a in attachments])
         except Exception as e:  # 编译异常不拖垮已生成的文本回答
             print(f"[api] 附件编译异常，降级为无附件: {e}")
-            attachments = []
+            attachments, display = [], answer or ""
+        answer_q.put(display)
         result_q.put(attachments)
 
     threading.Thread(target=work, daemon=True).start()
@@ -503,14 +505,10 @@ def _sse_stream(question: str, history: list, cid: str, created: int,
     if correction:
         yield _sse_frame(cid, created, {"reasoning": "正在修正回答…"})
 
-    answer = answer or "（未能生成回答）"
-    if extract_code_blocks(answer):
-        yield _sse_frame(cid, created,
-                         {"reasoning": "正在渲染化学图示（LaTeX 编译，首次较慢）…"})
-    display = strip_code_blocks(answer)   # 内容不含裸 TikZ（图由附件承载）
+    answer = answer or "（未能生成回答）"   # answer_q 已是 display（含行内图片）
     step = 20
-    for i in range(0, len(display), step):
-        yield _sse_frame(cid, created, {"content": display[i:i + step]})
+    for i in range(0, len(answer), step):
+        yield _sse_frame(cid, created, {"content": answer[i:i + step]})
 
     # 附件编译在 work 线程并行进行；超 3s 发心跳保活
     att_flush = time.time()
@@ -590,13 +588,15 @@ async def chat_completions(request: Request, authorization: str | None = Header(
     except Exception as e:  # 编译异常不拖垮已生成的文本回答（与流式路径一致）
         print(f"[api] 附件编译异常，降级为无附件: {e}")
         attachments = []
+    content = replace_code_blocks_with_images(
+        answer, [a["fileUrl"] for a in attachments])
     payload = {
         "id": cid,
         "object": "chat.completion",
         "created": created,
         "choices": [{
             "index": 0,
-            "message": {"role": "assistant", "content": strip_code_blocks(answer)},
+            "message": {"role": "assistant", "content": content},
             "finish_reason": "stop",
         }],
         "usage": _usage(question, answer),

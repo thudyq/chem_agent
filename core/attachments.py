@@ -45,6 +45,28 @@ def strip_code_blocks(text: str) -> str:
     return _CODE_RE.sub("", text or "")
 
 
+def replace_code_blocks_with_images(text: str, urls: list) -> str:
+    """把文本中的 TikZ/chemfig 代码块替换为行内 markdown 图片引用。
+
+    urls 与代码块按顺序对应（块 i ↔ urls[i]，编译成功才有 url）；无对应 url
+    的块（编译失败）直接移除，不留裸 LaTeX。无代码块或 urls 为空时：有块则
+    全部移除（只要不留源码），无块则原样返回。用于让清小搭在正文内联显示
+    图片（20260826：平台把 attachments 渲染成文末缩略图，行内引用才可能内联）。
+    """
+    blocks = extract_code_blocks(text)
+    if not blocks:
+        return text or ""
+    display = text or ""
+    urls = urls or []
+    for i, code in enumerate(blocks):
+        if i < len(urls):
+            display = display.replace(
+                code, f"![化学图示-{i + 1}]({urls[i]})", 1)
+        else:
+            display = display.replace(code, "", 1)
+    return display
+
+
 def _cleanup_old_files(dir_path: Path, ttl: int) -> None:
     if ttl <= 0 or not dir_path.is_dir():
         return
