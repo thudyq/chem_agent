@@ -1246,9 +1246,9 @@ def test_mode_comp_stereo_in_reaction():
 def test_mode_comp_chair_pair_in_row():
     """row 布局椅式翻转对比：正常 + flip 两张椅式 + 可逆箭头。"""
     text = ("[COMPOSITE:row]"
-            "[STRUCT:BrC1CCCCC1,mode=chair,subs=1:ax,id=c1,label=直立键]"
+            "[STRUCT:BrC1CCCCC1,mode=chair,subs=0:ax,id=c1,label=直立键]"
             "[ARROW:type=reversible]"
-            "[STRUCT:BrC1CCCCC1,mode=chair,subs=flip,1:eq,id=c2,label=平伏键]"
+            "[STRUCT:BrC1CCCCC1,mode=chair,subs=flip,0:eq,id=c2,label=平伏键]"
             "[/COMPOSITE]")
     tags = parse_tags(text)
     out = render_composite(*tags[0].args)
@@ -1285,7 +1285,7 @@ def test_mode_comp_mixed_with_skeleton():
     text = ("[COMPOSITE:row]"
             "[STRUCT:c1ccccc1,id=ar,label=苯]"
             "[ARROW:type=single,Br2 / FeBr3]"
-            "[STRUCT:BrC1CCCCC1,mode=chair,subs=1:ax,id=c,label=椅式]"
+            "[STRUCT:BrC1CCCCC1,mode=chair,subs=0:ax,id=c,label=椅式]"
             "[/COMPOSITE]")
     out = render_composite(*parse_tags(text)[0].args)
     assert "渲染失败" not in out

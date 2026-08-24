@@ -948,8 +948,12 @@ def _check_newman_angle(angle: str) -> Tuple[bool, str]:
 
 def _check_chair_subs(smi: str, spec: str) -> Tuple[bool, str]:
     """CHAIR 取代基规格校验（mode=chair 专用）：SMILES 含环己烷六元碳环 +
-    环位 1~6 + ax/eq 格式 + 该环位有非环取代基（真实 rdkit 才查环，
-    fake mol 无 GetRingInfo 时降级跳过）。"""
+     取代基原子序号(SMILES 0 起):ax/eq 格式 + 该序号确为非环取代基、
+     且其唯一环碳邻居在环内 + 同一环碳上的多个取代基不能同为 ax/eq
+     （sp³ 环碳必为一 ax 一 eq）。
+
+     真实 rdkit 才查环；fake mol 无 GetRingInfo 时降级跳过。
+     """
     if _RDKIT_OK:
         mol = _parse_mol(smi)
         if mol is not None and hasattr(mol, "GetRingInfo"):
@@ -958,6 +962,8 @@ def _check_chair_subs(smi: str, spec: str) -> Tuple[bool, str]:
             if ring is None:
                 return False, f"SMILES 中未找到环己烷六元环「{smi}」"
             ring_set = set(ring)
+            n_atoms = mol.GetNumAtoms()
+            carbon_kinds = {}      # 环碳序号 → 已用 ax/eq（同碳同向检查）
             for tok in (spec or "").split(","):
                 tok = tok.strip()
                 if not tok:
@@ -967,17 +973,32 @@ def _check_chair_subs(smi: str, spec: str) -> Tuple[bool, str]:
                 m = re.fullmatch(
                     r"(\d+):(ax|eq|axial|equatorial)", tok.lower())
                 if not m:
-                    return False, (f"CHAIR 取代位格式错误「{tok}」（应为 位:ax/eq，"
-                                   f"环位 1~6 按环碳 SMILES 序号排序）")
-                pos = int(m.group(1))
-                if not 1 <= pos <= 6:
-                    return False, f"CHAIR 环位 {pos} 超出范围 1~6"
-                has_sub = any(
-                    nbr.GetIdx() not in ring_set
-                    for nbr in mol.GetAtomWithIdx(
-                        ring[pos - 1]).GetNeighbors())
-                if not has_sub:
-                    return False, f"CHAIR 环位 {pos} 无取代基可标注"
+                    return False, (f"CHAIR 取代基格式错误「{tok}」（应为 "
+                                   f"取代基原子序号:ax/eq，序号为 SMILES 0 起）")
+                idx = int(m.group(1))
+                kind = {"axial": "ax", "equatorial": "eq"}.get(
+                    m.group(2), m.group(2))
+                if not 0 <= idx < n_atoms:
+                    return False, f"CHAIR 取代基原子序号 {idx} 超出范围 0~{n_atoms - 1}"
+                atom = mol.GetAtomWithIdx(idx)
+                if atom.GetIdx() in ring_set:
+                    return False, (f"CHAIR 序号 {idx} 是环碳本身，不能作取代基"
+                                   f"（应引用直接连环的非环取代基原子）")
+                # 找该取代基所连环碳
+                ring_at = -1
+                for nbr in atom.GetNeighbors():
+                    if nbr.GetIdx() in ring_set:
+                        ring_at = nbr.GetIdx()
+                        break
+                if ring_at < 0:
+                    return False, (f"CHAIR 序号 {idx} 未直接连在环己烷环碳上"
+                                   f"（非本环取代基）")
+                # 同碳同向（sp³ 环碳必为一 ax 一 eq）
+                prev = carbon_kinds.get(ring_at)
+                if prev is not None and prev == kind:
+                    return False, (f"CHAIR 环碳 {ring_at} 上的取代基不能同为 "
+                                   f"{kind}（sp³ 碳必为一 ax 一 eq）")
+                carbon_kinds[ring_at] = kind
     return True, ""
 
 

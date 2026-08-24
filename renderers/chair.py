@@ -14,13 +14,19 @@ r"""renderers/chair.py — [CHAIR] 标记渲染器：环己烷椅式构象。
 
 标记格式：
     [CHAIR:SMILES]                纯椅式骨架
-    [CHAIR:SMILES,1:ax,2:eq]      取代基：环位(1-6):ax/eq（上下由顶点规则自动确定）
+    [CHAIR:SMILES,0:ax,2:eq]      取代基：取代基原子序号(SMILES 0 起):ax/eq
+                                  （序号指向直接连在环碳上的那个取代基原子，
+                                  上下/朝向由所连环碳的顶点规则自动确定；
+                                  同一环碳上的两个取代基（偕二取代）可各给一条，
+                                  如 [CHAIR:CC1(C)CCCCC1,0:ax,2:eq]——sp³ 环碳
+                                  上必为一 ax 一 eq）
     [CHAIR:SMILES,flip,...]       镜像画法（翻转对比第二张；与正常画法同为
                                   合法的椅式，仅朝向不同）
 示例：
-    [CHAIR:BrC1CCCCC1,1:ax]       溴代环己烷（1 位竖直键 Br）
-    [CHAIR:CC1CCCCC1,1:eq]        甲基环己烷（1 位平伏键 CH3，更稳定构象）
-    [CHAIR:CC1CCCCC1,flip,1:eq]   翻转对比第二张（镜像画法）
+    [CHAIR:BrC1CCCCC1,0:ax]       溴代环己烷（Br 的 SMILES 原子序号 0，竖直键）
+    [CHAIR:CC1CCCCC1,0:eq]        甲基环己烷（甲基 C 序号 0，平伏键，更稳定）
+    [CHAIR:CC1CCCCC1,flip,0:eq]   翻转对比第二张（镜像画法）
+    [CHAIR:BrC1(Br)CCCCC1,0:ax,2:eq]  1,1-二溴环己烷（两 Br 序号 0/2，一 ax 一 eq）
 """
 
 import math
@@ -79,21 +85,36 @@ def _equatorial_angle(pos: int, vx: float, vy: float, centroid,
     return _SIGMA if out_right else (180.0 - _SIGMA)
 
 
-def _substituent_label(mol, ring_idx: int, ring_set: set, flip: bool = False):
-    """环位原子的非环取代基标签（Br/CH3/OH 等）+ 该取代基原子。
+def _ring_carbon_of_substituent(mol, atom_idx: int, ring_set: set) -> int:
+    """取代基原子所连环碳的原子序号；未连环碳返回 -1。
+
+    从取代基原子出发找它在环中的邻居（该取代基只能是单键连到一个环碳
+    上）；环碳是同一结构里的另一个可能邻居。返回该环碳序号。
+    """
+    for nbr in mol.GetAtomWithIdx(atom_idx).GetNeighbors():
+        if nbr.GetIdx() in ring_set:
+            return nbr.GetIdx()
+    return -1
+
+
+def _substituent_label(mol, sub_idx: int, flip: bool = False):
+    """环上取代基原子（SMILES 序号 sub_idx）的标签。
 
     flip：键端在标签右侧时元素符号右移（OH→HO，Drawbacks 第 6 条），
     与 _label_flip_for 同口径（氯/溴等无 H 后缀不受影响）。
-    无取代基返回 ("", None)。
+    返回标签字符串；该原子是环碳本身则返回 ("", None)（校验层已拦截）。
     """
-    for nbr in mol.GetAtomWithIdx(ring_idx).GetNeighbors():
-        if nbr.GetIdx() not in ring_set:
-            return atom_main_label(nbr, flip=flip) or nbr.GetSymbol(), nbr
-    return "", None
+    atom = mol.GetAtomWithIdx(sub_idx)
+    if atom.GetAtomicNum() == 6 and atom.IsInRing():
+        return "", None
+    return atom_main_label(atom, flip=flip) or atom.GetSymbol(), atom
 
 
 def _parse_spec(spec: str) -> tuple:
-    """"flip,1:ax,2:eq" → (mirror, {1: "ax", 2: "eq"})；畸形项静默跳过（校验层已拦截）。"""
+    """"flip,0:ax,2:eq" → (mirror, {0: "ax", 2: "eq"})；畸形项静默跳过（校验层已拦截）。
+
+    键为取代基原子的 SMILES 序号（0 起），值域 ax/eq。
+    """
     mirror = False
     out = {}
     for tok in (spec or "").split(","):
@@ -144,9 +165,14 @@ def chair_scope_lines(smiles: str, spec: str = ""):
         x2, y2 = vs[(i + 1) % 6]
         lines.append(f"  \\draw ({x1:.2f},{y1:.2f}) -- ({x2:.2f},{y2:.2f});")
 
-    for pos, kind in subs.items():
-        if not 1 <= pos <= 6:
-            continue
+    for sub_idx, kind in subs.items():
+        # subs 键是取代基原子（SMILES 序号 0 起），经它找所连环碳定位顶点。
+        # 环碳顶点 = ring.index(环碳)，即环位 1~6（与旧"环位"编号等价——
+        # 之前是"按环碳序号排序的 1~6"，现在是"由取代基原子反查其环碳"）。
+        ring_at = _ring_carbon_of_substituent(mol, sub_idx, ring_set)
+        if ring_at < 0:
+            continue            # 校验层已拦截，渲染兜底跳过
+        pos = ring.index(ring_at) + 1          # 环位 1~6
         vx, vy = vs[pos - 1]
         up = axial_up_seq[(pos - 1) % 6]
         ang = (90.0 if up else -90.0) if kind == "ax" else \
@@ -159,15 +185,15 @@ def chair_scope_lines(smiles: str, spec: str = ""):
         # 元素符号朝向：环碳相对取代基原子在右侧且水平占主导 → 翻转（OH→HO）
         # （与 _label_flip_for 同口径；methylene/carbon 标签不翻转）
         flip = (vx - bx > 0.05 and abs(vx - bx) > abs(vy - by))
-        label, nbr = _substituent_label(mol, ring[pos - 1], ring_set, flip)
+        label, atom = _substituent_label(mol, sub_idx, flip)
         if not label:
-            continue            # 该环位无取代基（校验层已拦截，渲染兜底跳过）
+            continue            # 该引用非取代基（校验层已拦截，渲染兜底跳过）
         m = label_bond_margin(label)
         # 元素符号中心落在键线延长点上（ex,ey = 键终点再外移 m 的沿键方向点），
         # 标签节点再按符号偏移平移——键延伸到元素符号而非整条标签中点
         # （与 STRUCT/COMPOSITE 的 label_node_pos 同一口径）
         ex, ey = bx + math.cos(r) * m, by + math.sin(r) * m
-        sym = nbr.GetSymbol()
+        sym = atom.GetSymbol()
         sym = sym[0].upper() + sym[1:]
         nx, ny = ex - _label_symbol_shift_x(label, sym), ey
         lines.append(f"  \\draw ({vx:.2f},{vy:.2f}) -- ({bx:.2f},{by:.2f});")
@@ -198,11 +224,14 @@ def render_chair(smiles: str, spec: str = "") -> str:
 if __name__ == "__main__":
     print("[1] 纯椅式骨架: [CHAIR:C1CCCCC1]")
     print(render_chair("C1CCCCC1"))
-    print("\n[2] 溴代环己烷 1 位竖直键: [CHAIR:BrC1CCCCC1,1:ax]")
-    print(render_chair("BrC1CCCCC1", "1:ax"))
-    print("\n[3] 甲基环己烷 1 位平伏键: [CHAIR:CC1CCCCC1,1:eq]")
-    print(render_chair("CC1CCCCC1", "1:eq"))
+    print("\n[2] 溴代环己烷（Br 序号 0）竖直键: [CHAIR:BrC1CCCCC1,0:ax]")
+    print(render_chair("BrC1CCCCC1", "0:ax"))
+    print("\n[3] 甲基环己烷（甲基 C 序号 0）平伏键: [CHAIR:CC1CCCCC1,0:eq]")
+    print(render_chair("CC1CCCCC1", "0:eq"))
     print("\n[4] 翻转镜像骨架（对比第二张）: [CHAIR:C1CCCCC1,flip]")
     print(render_chair("C1CCCCC1", "flip"))
     print("\n[5] 非环己烷（应降级提示）:")
-    print(render_chair("CCO", "1:ax"))
+    print(render_chair("CCO", "0:ax"))
+    print("\n[6] 偕二取代（1,1-二溴，两 Br 序号 0/2，一 ax 一 eq）: "
+          "[CHAIR:BrC1(Br)CCCCC1,0:ax,2:eq]")
+    print(render_chair("BrC1(Br)CCCCC1", "0:ax,2:eq"))

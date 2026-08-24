@@ -192,9 +192,9 @@ def test_struct_mode_newman_passes():
 
 def test_struct_mode_chair_passes():
     """STRUCT mode=chair：subs 校验（与 [CHAIR] 等价）。"""
-    _, invalid = _validate("[STRUCT:BrC1CCCCC1, mode=chair, subs=1:ax]")
+    _, invalid = _validate("[STRUCT:BrC1CCCCC1, mode=chair, subs=0:ax]")
     assert len(invalid) == 0
-    _, invalid2 = _validate("[STRUCT:BrC1CCCCC1, mode=chair, subs=1:xx]")
+    _, invalid2 = _validate("[STRUCT:BrC1CCCCC1, mode=chair, subs=0:xx]")
     assert len(invalid2) == 1
     assert "格式错误" in invalid2[0].reason
 
@@ -269,13 +269,13 @@ def test_opaque_comp_reference_rejected():
     assert any("立体画法组件" in r.reason for r in invalid)
     # CHARGE 标注引用 chair 组件
     _, invalid2 = _validate(
-        "[COMPOSITE:row][STRUCT:BrC1CCCCC1, mode=chair, subs=1:ax, id=c]"
+        "[COMPOSITE:row][STRUCT:BrC1CCCCC1, mode=chair, subs=0:ax, id=c]"
         "[CHARGE:c|0:δ+][/COMPOSITE]")
     assert any("立体画法组件" in r.reason for r in invalid2)
     # 箭头附件（arrow 令牌）不允许立体画法组件
     _, invalid3 = _validate(
         "[COMPOSITE:reaction][STRUCT:CCO,id=a]"
-        "[STRUCT:BrC1CCCCC1, mode=chair, subs=1:ax, id=w, arrow]"
+        "[STRUCT:BrC1CCCCC1, mode=chair, subs=0:ax, id=w, arrow]"
         "[ARROW:type=single,sup=+w][STRUCT:CC=O,id=b][/COMPOSITE]")
     assert any("arrow 令牌" in r.reason for r in invalid3)
 

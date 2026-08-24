@@ -43,36 +43,58 @@ class TestParse:
         assert tags[0].attrs["mode"] == "chair"
 
     def test_parse_with_subs(self):
-        tags = parse_tags("[STRUCT:BrC1CCCCC1,mode=chair,subs=1:ax]")
+        tags = parse_tags("[STRUCT:BrC1CCCCC1,mode=chair,subs=0:ax]")
         assert tags[0].type == "STRUCT"
         assert tags[0].args == ["BrC1CCCCC1", None]
-        assert tags[0].attrs["subs"] == "1:ax"
+        assert tags[0].attrs["subs"] == "0:ax"
 
 
 class TestValidate:
     def test_valid(self, fake_rdkit):
-        _, invalid = _validate("[STRUCT:BrC1CCCCC1,mode=chair,subs=1:ax]")
+        _, invalid = _validate("[STRUCT:BrC1CCCCC1,mode=chair,subs=0:ax]")
         assert len(invalid) == 0
 
     def test_no_ring_rejected(self):
-        _, invalid = _validate("[STRUCT:CCO,mode=chair,subs=1:ax]")
+        _, invalid = _validate("[STRUCT:CCO,mode=chair,subs=0:ax]")
         assert len(invalid) == 1
         assert "六元环" in invalid[0].reason
 
     def test_bad_kind_rejected(self):
-        _, invalid = _validate("[STRUCT:BrC1CCCCC1,mode=chair,subs=1:xx]")
+        _, invalid = _validate("[STRUCT:BrC1CCCCC1,mode=chair,subs=0:xx]")
         assert len(invalid) == 1
         assert "格式错误" in invalid[0].reason
 
-    def test_pos_out_of_range_rejected(self):
+    def test_idx_out_of_range_rejected(self):
         _, invalid = _validate("[STRUCT:BrC1CCCCC1,mode=chair,subs=7:ax]")
         assert len(invalid) == 1
         assert "超出范围" in invalid[0].reason
 
-    def test_pos_without_substituent_rejected(self):
+    def test_geminal_ax_eq_passes(self):
+        """偕二取代一 ax 一 eq：合法。"""
+        _, invalid = _validate("[STRUCT:BrC1(Br)CCCCC1,mode=chair,subs=0:ax,2:eq]")
+        assert len(invalid) == 0
+
+    def test_geminal_same_direction_rejected(self):
+        """同一环碳上的两个取代基不能同为 ax（sp³ 必为一 ax 一 eq）。"""
+        _, invalid = _validate("[STRUCT:BrC1(Br)CCCCC1,mode=chair,subs=0:ax,2:ax]")
+        assert len(invalid) == 1
+        assert "不能同为 ax" in invalid[0].reason
+
+    def test_ring_carbon_itself_rejected(self):
+        """引用了环碳本身（非取代基原子）→ 拦截。"""
         _, invalid = _validate("[STRUCT:C1CCCCC1,mode=chair,subs=3:ax]")
         assert len(invalid) == 1
-        assert "无取代基" in invalid[0].reason
+        assert "是环碳本身" in invalid[0].reason
+
+    def test_substituent_not_on_ring_rejected(self):
+        """引用的取代基原子未直接连在环己烷环碳上 → 拦截。
+
+        CC(C)C1CCCCC1 里 isopropyl 的 CH 是序号 1（连锁环碳 3），但它的
+        两个甲基序号 0/2 只连 CH、不直接连环——引用 0 即"非本环取代基"。
+        """
+        _, invalid = _validate("[STRUCT:CC(C)C1CCCCC1,mode=chair,subs=0:ax]")
+        assert len(invalid) == 1
+        assert "未直接连在环己烷环碳上" in invalid[0].reason
 
 
 class TestRender:
@@ -82,7 +104,7 @@ class TestRender:
         assert len(re.findall(r"\\draw \(", out)) == 6  # 6 条骨架键
 
     def test_substituent_label(self):
-        out = render_chair("BrC1CCCCC1", "1:ax")
+        out = render_chair("BrC1CCCCC1", "0:ax")
         assert "{Br}" in out
 
     def test_invalid_smiles(self):
@@ -90,6 +112,31 @@ class TestRender:
 
     def test_not_cyclohexane(self):
         assert "渲染失败" in render_chair("CCO")
+
+    def test_geminal_two_substituents(self):
+        """偕二取代（20260827）：两个 Br（序号 0/2）都连环碳 1，一 ax 一 eq。
+
+        渲染骨架 6 键 + 2 条取代基键；两个 {Br} 标签，角度一竖直一平伏。
+        """
+        out = render_chair("BrC1(Br)CCCCC1", "0:ax,2:eq")
+        assert out.count("{Br}") == 2
+        bonds = re.findall(
+            r"\\draw \(([-\d.]+),([-\d.]+)\) -- \(([-\d.]+),([-\d.]+)\);", out)
+        assert len(bonds) == 8          # 6 骨架 + 2 取代基
+        # 从环碳 1（顶点 (0,0)）出发的两条取代基键——按键长区分（骨架 _L=1.5）
+        from renderers.chair import _SUB_LEN
+        sub_bonds = [b for b in bonds if abs(float(b[0])) < 0.01
+                     and abs(float(b[1])) < 0.01
+                     and abs(math.hypot(float(b[2]) - float(b[0]),
+                                        float(b[3]) - float(b[1]))
+                             - _SUB_LEN) < 0.02]
+        assert len(sub_bonds) == 2
+        angles = sorted(math.degrees(math.atan2(
+            float(b[3]) - float(b[1]), float(b[2]) - float(b[0]))) % 360.0
+            for b in sub_bonds)
+        assert 90.0 in (round(a, 1) for a in angles)   # ax 竖直
+        assert any(abs(a - 195.0) < 2.0 or abs(a - 165.0) < 2.0
+                   for a in angles)                    # eq 平伏（外指）
 
 
 class TestGeometry:
@@ -112,7 +159,7 @@ class TestGeometry:
 
     def test_axial_bonds_vertical(self):
         """axial 取代基键严格竖直（90°）。"""
-        out = render_chair("BrC1CCCCC1", "1:ax")
+        out = render_chair("BrC1CCCCC1", "0:ax")
         bonds = re.findall(
             r"\\draw \(([-\d.]+),([-\d.]+)\) -- \(([-\d.]+),([-\d.]+)\);", out)
         assert len(bonds) == 7          # 6 骨架 + 1 取代基
@@ -123,7 +170,7 @@ class TestGeometry:
 
     def test_equatorial_outward_and_parallel(self):
         """equatorial 键：与浅斜骨架键平行（±σ），水平分量指向环外。"""
-        out = render_chair("CC1CCCCC1", "1:eq")
+        out = render_chair("CC1CCCCC1", "0:eq")
         bonds = re.findall(
             r"\\draw \(([-\d.]+),([-\d.]+)\) -- \(([-\d.]+),([-\d.]+)\);", out)
         sub = bonds[-1]
@@ -141,7 +188,7 @@ class TestGeometry:
         （再外移 label_bond_margin(Br)=0.30）。
         """
         from renderers.chair import _SUB_LEN
-        out = render_chair("BrC1CCCCC1", "1:ax")
+        out = render_chair("BrC1CCCCC1", "0:ax")
         bonds = re.findall(
             r"\\draw \(([-\d.]+),([-\d.]+)\) -- \(([-\d.]+),([-\d.]+)\);", out)
         sub = bonds[-1]
@@ -182,16 +229,16 @@ class TestFlip:
         assert tags[0].attrs["subs"] == "flip"
 
     def test_flip_token_position_free(self):
-        tags = parse_tags("[STRUCT:CC1CCCCC1,mode=chair,subs=1:eq,flip]")
+        tags = parse_tags("[STRUCT:CC1CCCCC1,mode=chair,subs=0:eq,flip]")
         assert tags[0].type == "STRUCT"
-        assert tags[0].attrs["subs"] == "1:eq,flip"
+        assert tags[0].attrs["subs"] == "0:eq,flip"
 
     def test_flip_valid(self, fake_rdkit):
-        _, invalid = _validate("[STRUCT:BrC1CCCCC1,mode=chair,subs=flip,1:ax]")
+        _, invalid = _validate("[STRUCT:BrC1CCCCC1,mode=chair,subs=flip,0:ax]")
         assert len(invalid) == 0
 
     def test_flip_still_rejects_bad_kind(self):
-        _, invalid = _validate("[STRUCT:BrC1CCCCC1,mode=chair,subs=flip,1:xx]")
+        _, invalid = _validate("[STRUCT:BrC1CCCCC1,mode=chair,subs=flip,0:xx]")
         assert len(invalid) == 1
         assert "格式错误" in invalid[0].reason
 
@@ -218,7 +265,7 @@ class TestFlip:
 
     def test_flip_axial_down_at_pos1(self):
         """镜像画法 1 位竖直键朝下（正常画法朝上，交替翻转）。"""
-        out = render_chair("BrC1CCCCC1", "flip,1:ax")
+        out = render_chair("BrC1CCCCC1", "flip,0:ax")
         bonds = re.findall(
             r"\\draw \(([-\d.]+),([-\d.]+)\) -- \(([-\d.]+),([-\d.]+)\);", out)
         sub = bonds[-1]
@@ -228,7 +275,7 @@ class TestFlip:
 
     def test_flip_equatorial_outward_and_parallel(self):
         """镜像画法 eq 键仍外指（水平分量离环心）且与浅斜骨架平行。"""
-        out = render_chair("CC1CCCCC1", "flip,1:eq")
+        out = render_chair("CC1CCCCC1", "flip,0:eq")
         bonds = re.findall(
             r"\\draw \(([-\d.]+),([-\d.]+)\) -- \(([-\d.]+),([-\d.]+)\);", out)
         sub = bonds[-1]

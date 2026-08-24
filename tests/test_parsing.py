@@ -82,10 +82,10 @@ def test_struct_mode_named_params():
     assert t2.attrs["mode"] == "newman"
     assert t2.attrs["bond"] == "0-1"
     assert t2.attrs["angle"] == "60"
-    t3 = parse_tags("[STRUCT:BrC1CCCCC1, mode=chair, subs=1:ax]")[0]
+    t3 = parse_tags("[STRUCT:BrC1CCCCC1, mode=chair, subs=0:ax]")[0]
     assert t3.args[0] == "BrC1CCCCC1"
     assert t3.attrs["mode"] == "chair"
-    assert t3.attrs["subs"] == "1:ax"
+    assert t3.attrs["subs"] == "0:ax"
     # 缺省 mode = skeleton；与 label/id/at/pos 混用
     t4 = parse_tags("[STRUCT:CCl,label=底物,id=s0]")[0]
     assert t4.attrs["mode"] == "skeleton"
