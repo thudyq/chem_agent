@@ -6,11 +6,12 @@
 所需的条目（fileUrl/fileName/fileType/mimeType/fileSize）。
 
 附件为随机 UUID 文件名，供 /files/{name} 无鉴权下载（不可猜测）；
-清小搭收到响应后会立即转存到自己的 OSS，本地附件按 TTL 定期清理。
+清小搭对 /files 是热链、未必转存到自己的 OSS，图片在本地长期保留、仅在
+磁盘超配额（max_bytes/max_files）时才删最旧的——不按时间 TTL 硬删，
+否则历史对话的图会因文件被清而 404。
 """
 
 import re
-import time
 import uuid
 from pathlib import Path
 
@@ -67,41 +68,74 @@ def replace_code_blocks_with_images(text: str, urls: list) -> str:
     return display
 
 
-def _cleanup_old_files(dir_path: Path, ttl: int) -> None:
-    if ttl <= 0 or not dir_path.is_dir():
+def _prune_attachments(dir_path: Path, max_bytes: int, max_files: int) -> None:
+    """配额滚动删：目录超过 max_bytes 或 max_files 时删最旧的 PNG，直到达标。
+
+    不再按"超过 TTL 就删"——清小搭对 /files 是热链、未必转存到自己的 OSS，
+    图片必须在本地长期保留（否则历史对话的图会因文件被清而 404）；
+    只在磁盘/数量超配额时才回滚删最旧的，保证历史图长期可看、磁盘有上限。
+    max_bytes/max_files <= 0 表示该项不限（无限增长，需自行定期清理）。
+    """
+    if not dir_path.is_dir():
         return
-    cutoff = time.time() - ttl
-    for f in dir_path.glob("*.png"):
+    if max_bytes <= 0 and max_files <= 0:
+        return
+    pngs = [p for p in dir_path.glob("*.png")]
+    if not pngs:
+        return
+    total = sum(p.stat().st_size for p in pngs if p.is_file())
+    if _within_quota(total, len(pngs), max_bytes, max_files):
+        return
+    # 按 mtime 升序（最旧在前），逐个删直到两项都达标
+    for p in sorted(pngs, key=lambda x: x.stat().st_mtime):
         try:
-            if f.stat().st_mtime < cutoff:
-                f.unlink()
+            p.unlink()
+            pngs.remove(p)
+            total = sum(q.stat().st_size for q in pngs if q.is_file())
         except OSError:
-            pass
+            continue
+        if _within_quota(total, len(pngs), max_bytes, max_files):
+            break
+
+
+def _within_quota(total: int, count: int, max_bytes: int, max_files: int) -> bool:
+    """total/count 是否都在配额内（max_bytes/max_files <=0 表示该项不限）。"""
+    if max_bytes > 0 and total > max_bytes:
+        return False
+    if max_files > 0 and count > max_files:
+        return False
+    return True
 
 
 def build_attachments(answer: str, public_base: str,
                       dir_path: Path | None = None,
-                      ttl: int | None = None) -> list:
-    """编译回答中的 TikZ 代码为 PNG，返回 x_soda.attachments 条目列表。
+                      max_bytes: int | None = None,
+                      max_files: int | None = None) -> list:
+    """编译回答中的 TikZ 代码为 PNG，返回行内图片引用所需的 url 列表。
 
     参数:
         answer: process_question 的最终文本（含内联 TikZ 代码）。
         public_base: 服务公网地址（不含尾部 /），用于拼接 fileUrl。
         dir_path: 附件存放目录（默认 settings.service.attachment_dir）。
-        ttl: 附件保留秒数（默认 settings.service.attachment_ttl）。
+        max_bytes: 目录总字节上限，超出删最旧（默认 settings.service.
+            attachment_max_bytes）；0/负数=不限。
+        max_files: 目录最多文件数，超出删最旧（默认 attachment_max_files）；
+            0/负数=不限。
 
     返回:
-        attachments 列表；无代码块或全部编译失败返回空列表。
+        [{fileUrl, fileName, ...}, ...]；无代码块或全部编译失败返回空列表。
     """
     blocks = extract_code_blocks(answer)
     if not blocks:
         return []
     if dir_path is None:
         dir_path = settings.service.attachment_dir
-    if ttl is None:
-        ttl = settings.service.attachment_ttl
+    if max_bytes is None:
+        max_bytes = settings.service.attachment_max_bytes
+    if max_files is None:
+        max_files = settings.service.attachment_max_files
     dir_path.mkdir(parents=True, exist_ok=True)
-    _cleanup_old_files(dir_path, ttl)
+    _prune_attachments(dir_path, max_bytes, max_files)
 
     base = (public_base or "").rstrip("/")
     attachments = []

@@ -170,8 +170,12 @@ class ServiceConfig:
     接入清小搭向导时在「API 密钥」处填同一个值。
     public_base_url: 服务公网地址（环境变量 PUBLIC_BASE_URL，如
     https://your.host），用于拼接附件下载 URL；缺省用请求 Host 推导。
-    attachment_dir: 图片附件存放目录（清小搭拉取后可清理）。
-    attachment_ttl: 附件保留秒数（清小搭会立即转存到自己 OSS，默认 1 小时足够）。
+    attachment_dir: 图片附件存放目录。
+    attachment_max_bytes: 附件目录总字节上限，超过时删最旧图片
+    （默认 2GB；0/负数=不按大小限制）。清小搭对 /files 是热链、未必转存
+    到自己的 OSS，所以图片必须在我们这长期保留，只在磁盘超配额时才回滚删，
+    不能按时间 TTL 硬删——否则历史对话的图会因文件被清而 404。
+    attachment_max_files: 附件目录最多保留的图片数量（默认 50000；0/负数=不限）。
     """
 
     api_key: str = field(default_factory=lambda: _get_str("SERVICE_API_KEY"))
@@ -181,7 +185,8 @@ class ServiceConfig:
     attachment_dir: Path = field(
         default_factory=lambda: _PROJECT_ROOT / "data" / "attachments"
     )
-    attachment_ttl: int = 3600
+    attachment_max_bytes: int = 2 * 1024 * 1024 * 1024   # 2GB
+    attachment_max_files: int = 50000
 
     @property
     def is_configured(self) -> bool:

@@ -32,7 +32,7 @@ def test_build_attachments_writes_files(monkeypatch, tmp_path):
     """编译成功：写 PNG 文件 + 生成 4 必填 + fileSize 的条目。"""
     monkeypatch.setattr(att, "compile_tikz_to_png", lambda code: FAKE_PNG)
     result = att.build_attachments(ANSWER_WITH_TIKZ, "https://host",
-                                   dir_path=tmp_path, ttl=3600)
+                                   dir_path=tmp_path)
     assert len(result) == 1
     a = result[0]
     assert a["fileType"] == "image"
@@ -57,15 +57,36 @@ def test_build_attachments_compile_failure(monkeypatch, tmp_path):
                                  dir_path=tmp_path) == []
 
 
-def test_cleanup_old_files(monkeypatch, tmp_path):
-    """TTL 清理：过期文件删除，新文件保留。"""
-    old = tmp_path / "old.png"
-    old.write_bytes(b"x")
-    old_time = time.time() - 7200
-    import os
-    os.utime(old, (old_time, old_time))
+def test_prune_by_quota_files(monkeypatch, tmp_path):
+    """配额滚动：超出 max_files 时删最旧，保留最新。"""
     monkeypatch.setattr(att, "compile_tikz_to_png", lambda code: FAKE_PNG)
+    # 先造 3 张旧图（mtime 递增：old1 最旧，old3 最新）
+    for name in ("old1.png", "old2.png", "old3.png"):
+        p = tmp_path / name
+        p.write_bytes(FAKE_PNG)
+        import os
+        os.utime(p, (10, 10))
     result = att.build_attachments(ANSWER_WITH_TIKZ, "https://host",
-                                   dir_path=tmp_path, ttl=3600)
-    assert not old.exists()
+                                   dir_path=tmp_path, max_files=2)
     assert len(result) == 1
+    # 目录里只剩 2 张：最旧的 old1/old2 被删，old3 + 新生成留着
+    remaining = sorted(p.name for p in tmp_path.glob("*.png"))
+    assert remaining == ["old3.png", result[0]["fileUrl"].rsplit("/files/", 1)[-1]]
+
+
+def test_prune_by_quota_bytes(monkeypatch, tmp_path):
+    """超出 max_bytes 时删最旧，直到总大小达标。
+
+    注意：_prune_attachments 在新文件写入**之前**执行，只约束已有文件；
+    max_bytes 设得比已有 old 图还小，old 即被清。
+    """
+    monkeypatch.setattr(att, "compile_tikz_to_png", lambda code: FAKE_PNG)
+    old = tmp_path / "old.png"
+    old.write_bytes(b"\x89PNG" * 10)   # 40 字节
+    import os
+    os.utime(old, (10, 10))
+    result = att.build_attachments(ANSWER_WITH_TIKZ, "https://host",
+                                   dir_path=tmp_path,
+                                   max_bytes=len(FAKE_PNG))  # < 40 → 清 old
+    assert len(result) == 1
+    assert not old.exists()
