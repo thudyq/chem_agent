@@ -436,7 +436,7 @@ def test_autofix_endpoint_skips_llm_correction(monkeypatch):
                "[PLUS][STRUCT:O=[N+]([O-])[O-],id=no3]"
                "[ARROW:type=single][STRUCT:O=[N+]([O-])C1=CC=CC=C1,id=nb]"
                "[PLUS][STRUCT:O=[N+]([O-])O,id=hno3]"
-               "[MECHARROW:no3:2>sg:4,sg:3-6>sg:3][/COMPOSITE]")  # 3-6 应为 3-4
+               "[MECHARROW:no3:2>sg:4,sg:3-6>sg:3-9][/COMPOSITE]")  # 3-6 应为 3-4
     monkeypatch.setattr(
         "app.ask_llm", lambda *a, **k: calls.append(k) or f"机理：{bad_tag}")
     result = process_question("磺化脱质子", max_corrections=2)

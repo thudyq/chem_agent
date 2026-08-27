@@ -306,16 +306,26 @@ FAKE_ATTACHMENTS = [{
     "fileSize": 100,
 }]
 
+# 含 TikZ 代码块的回答（测试行内图片引用替换用）
+_TIKZ_ANSWER = ("苯的结构式如下：\n\\begin{tikzpicture}\\draw (0,0)--(1,0);"
+                "\\end{tikzpicture}\n分子式 C6H6。")
+
 
 def test_x_soda_attachments_non_stream(client, monkeypatch):
-    """有附件时非流式响应顶层带 x_soda.attachments；无附件时不带。"""
+    """20260826（a557787）起：图以行内 markdown 引用（![化学图示-N](fileUrl)）
+    随正文下发，不再挂 x_soda.attachments（平台会把 attachments 渲染成文末
+    缩略图，行内引用才可能内联）。正文不留裸 TikZ。"""
+    monkeypatch.setattr(api, "process_question",
+                        lambda *a, **k: _TIKZ_ANSWER)
     monkeypatch.setattr(api, "build_attachments",
                         lambda answer, base: FAKE_ATTACHMENTS)
     resp = client.post("/v1/chat/completions", json=_chat_payload(), headers=AUTH)
     assert resp.status_code == 200
     data = resp.json()
-    assert data["x_soda"]["attachments"][0]["fileType"] == "image"
-    assert data["x_soda"]["attachments"][0]["fileUrl"].startswith("https://")
+    assert "x_soda" not in data                          # 不再挂 x_soda
+    content = data["choices"][0]["message"]["content"]
+    assert f"![化学图示-1]({FAKE_ATTACHMENTS[0]['fileUrl']})" in content
+    assert "tikzpicture" not in content                  # 裸 LaTeX 不进正文
 
     monkeypatch.setattr(api, "build_attachments", lambda answer, base: [])
     resp = client.post("/v1/chat/completions", json=_chat_payload(), headers=AUTH)
@@ -323,7 +333,9 @@ def test_x_soda_attachments_non_stream(client, monkeypatch):
 
 
 def test_x_soda_attachments_stream(client, monkeypatch):
-    """流式：x_soda 挂在 stop 帧（与 usage 同帧），增量帧不带。"""
+    """流式：图以行内引用随 content 帧下发；stop 帧带 usage，全程无 x_soda。"""
+    monkeypatch.setattr(api, "process_question",
+                        lambda *a, **k: _TIKZ_ANSWER)
     monkeypatch.setattr(api, "build_attachments",
                         lambda answer, base: FAKE_ATTACHMENTS)
     resp = client.post("/v1/chat/completions",
@@ -332,10 +344,14 @@ def test_x_soda_attachments_stream(client, monkeypatch):
     assert done
     last = frames[-1]
     assert last["choices"][0]["finish_reason"] == "stop"
-    assert last["x_soda"]["attachments"][0]["mimeType"] == "image/png"
     assert "usage" in last
-    for f in frames[:-1]:
-        assert "x_soda" not in f
+    for f in frames:
+        assert "x_soda" not in f                         # 任何帧都不挂
+    content = "".join(
+        f["choices"][0]["delta"].get("content", "")
+        for f in frames if "content" in f["choices"][0]["delta"])
+    assert f"![化学图示-1]({FAKE_ATTACHMENTS[0]['fileUrl']})" in content
+    assert "tikzpicture" not in content
 
 
 def test_x_soda_attachments_stream_empty(client, monkeypatch):

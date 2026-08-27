@@ -1301,7 +1301,9 @@ def test_halogen_cation_eas_electrophile_allowed():
 
 def test_autofix_mech_bond_endpoint_unique_h():
     """P1：a-b 不成键 + 一端唯一显式 H 邻居 → 改写为该 X—H 键，
-    修复后整标记通过全部校验（含 4b 质子转移配对）。"""
+    修复后整标记通过全部校验（含 4b 质子转移配对与 EAS 方向校验）。
+    （20260827：终点从 sg:3 更正为闭环键 sg:3-9——σ 络合物脱质子的
+    C—H 电子落点是 sp3C—C+ 键，落回单原子已被 EAS 校验拦截）"""
     pytest.importorskip("rdkit")
     from core.tag_validator import autofix_mech_bond_endpoint
     text = ("[COMPOSITE:reaction]"
@@ -1309,14 +1311,14 @@ def test_autofix_mech_bond_endpoint_unique_h():
             "[PLUS][STRUCT:O=[N+]([O-])[O-],id=no3]"
             "[ARROW:type=single][STRUCT:O=[N+]([O-])C1=CC=CC=C1,id=nb]"
             "[PLUS][STRUCT:O=[N+]([O-])O,id=hno3]"
-            "[MECHARROW:no3:2>sg:4,sg:3-6>sg:3][/COMPOSITE]")
+            "[MECHARROW:no3:2>sg:4,sg:3-6>sg:3-9][/COMPOSITE]")
     tag = parse_tags(text)[0]
     _, bad = _validate(text)
     assert len(bad) == 1 and "没有成键" in bad[0].reason
     fix = autofix_mech_bond_endpoint(tag)
     assert fix is not None
     new_raw, note = fix
-    assert "sg:3-4>sg:3" in new_raw, note
+    assert "sg:3-4>sg:3-9" in new_raw, note
     _, bad2 = _validate(new_raw)
     assert not bad2, [r.reason for r in bad2]
 
@@ -1515,3 +1517,62 @@ def test_mecharrow_cross_step_rejected():
         "[ARROW:type=reversible][STRUCT:CC[OH2+],id=pro]"
         "[MECHARROW:etoh:2>h:0][/COMPOSITE]")
     assert not ok, [r.reason for r in ok]
+
+
+def test_eas_rearomatization_target():
+    """EAS σ 络合物脱质子方向校验（20260827，que_test_retry Q17 病例）。
+
+    σ 络合物脱质子恢复芳香性：C—H 键电子必须落向 sp3 碳与环上 C+ 之间
+    的键（形成 π 键）。病例：文字正确（"C—H 键回落苯环生成 π 键"）但
+    写成 sigma:1-2>sigma:1（落回单原子）+ sigma:7-1>sigma:7（从闭环键
+    断键）两根错误箭头，此前全部校验放行。
+    """
+    pytest.importorskip("rdkit")
+    # A：C—H 电子落回单个碳（que_test_retry Q17 病例）→ 拦截并建议闭环键
+    _, bad = _validate(
+        "[COMPOSITE:reaction]"
+        "[STRUCT:BrC([H])1C=CC=C[CH+]1,label=σ 络合物,id=sigma]"
+        "[ARROW:type=single]"
+        "[STRUCT:BrC1=CC=CC=C1,label=溴苯][PLUS][STRUCT:[H+],label=H+]"
+        "[MECHARROW:sigma:1-2>sigma:1]"
+        "[/COMPOSITE]")
+    assert len(bad) == 1 and "恢复芳香" in bad[0].reason \
+        and "sigma:1-7" in bad[0].reason
+    # B：从闭环键（sp3C—C+）出发断键 → 拦截（环并未打开）
+    _, bad2 = _validate(
+        "[COMPOSITE:reaction]"
+        "[STRUCT:BrC([H])1C=CC=C[CH+]1,label=σ 络合物,id=sigma]"
+        "[ARROW:type=single]"
+        "[STRUCT:BrC1=CC=CC=C1,label=溴苯][PLUS][STRUCT:[H+],label=H+]"
+        "[MECHARROW:sigma:7-1>sigma:7]"
+        "[/COMPOSITE]")
+    assert len(bad2) == 1 and "不能从它出发断键" in bad2[0].reason
+    # C：canonical 写法放行（硝化示例同款：C—H → sp3C—C+ 闭环键）
+    _, ok = _validate(
+        "[COMPOSITE:reaction]"
+        "[STRUCT:O=[N+]([O-])C([H])1C=CC=C[CH+]1,label=σ 络合物,id=sigma]"
+        "[ARROW:type=single]"
+        "[STRUCT:O=[N+]([O-])C1=CC=CC=C1,label=硝基苯][PLUS]"
+        "[STRUCT:[H+],label=H+]"
+        "[MECHARROW:sigma:3-4>sigma:3-9]"
+        "[/COMPOSITE]")
+    assert not ok, [r.reason for r in ok]
+    # D：饱和环碳正离子的氢迁移不拦（无环内双键，非 σ 络合物——
+    # C—H → C+ 原子是氢负迁移的合法画法，防误报）
+    _, ok2 = _validate(
+        "[COMPOSITE:reaction]"
+        "[STRUCT:[H]C1CCCC[CH+]1,label=环己基正离子,id=r0]"
+        "[ARROW:type=single]"
+        "[STRUCT:C1CCC[CH+]C1,label=迁移后,id=r1]"
+        "[MECHARROW:r0:1-0>r0:5]"
+        "[/COMPOSITE]")
+    assert not ok2, [r.reason for r in ok2]
+    # E：非环脱质子不拦（羟醛 α-H，电子落回碳是合法画法）
+    _, ok3 = _validate(
+        "[COMPOSITE:reaction]"
+        "[STRUCT:C([H])C=O,label=乙醛,id=ald][PLUS][STRUCT:[OH-],id=base]"
+        "[ARROW:type=single]"
+        "[STRUCT:[CH2-]C=O,label=烯醇负离子][PLUS][STRUCT:O,label=H2O]"
+        "[MECHARROW:base:0>ald:1][MECHARROW:ald:0-1>ald:0]"
+        "[/COMPOSITE]")
+    assert not ok3, [r.reason for r in ok3]

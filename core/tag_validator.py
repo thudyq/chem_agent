@@ -635,13 +635,24 @@ def _check_proton_transfer_pairing(mech_children: list, comp_mols: dict,
             heavy = _explicit_h_heavy(comp_mols.get(dst_id), int(dst_pt))
             if heavy is not None:
                 bond_pats = {f"{heavy}-{dst_pt}", f"{dst_pt}-{heavy}"}
+                # 配对终点合法集：落回重原子 X（羟醛式脱质子）；若 X 是
+                # EAS σ 络合物的 sp3 环碳，则落向 sp3C—C+ 键（恢复芳香
+                # π 键）同样是合法配对（20260827，与 EAS 方向校验一致）
+                allowed_dst = {str(heavy)}
+                sig = _sigma_complex_signature(comp_mols.get(dst_id))
+                if sig is not None and sig[0] == heavy:
+                    allowed_dst |= {f"{heavy}-{sig[1]}", f"{sig[1]}-{heavy}"}
                 if not any(s == dst_id and sp in bond_pats
-                           and d == dst_id and dp == str(heavy)
+                           and d == dst_id and dp in allowed_dst
                            for s, sp, d, dp in arrows):
+                    suggest = (f"{dst_id}:{heavy}-{dst_pt}>{dst_id}:"
+                               f"{heavy}-{sig[1]}"
+                               if sig is not None and sig[0] == heavy else
+                               f"{dst_id}:{heavy}-{dst_pt}>{dst_id}:{heavy}")
                     return (f"质子转移缺配对箭头：「{src_id}:{src_pt}>{dst_id}:"
                             f"{dst_pt}」的电子落向显式 H（{dst_id}:{dst_pt}），"
-                            f"还需画出 X—H 键电子落回 X 的配套箭头"
-                            f"（{dst_id}:{heavy}-{dst_pt}>{dst_id}:{heavy}）")
+                            f"还需画出 X—H 键电子回落的配套箭头"
+                            f"（{suggest}）")
         # Case B：起点为含显式 H 的键中点、终点恰为同组件重原子 → 脱质子
         if "-" in src_pt and dst_pt.isdigit() and dst_id == src_id:
             a, _, b = src_pt.partition("-")
@@ -666,6 +677,99 @@ def _check_proton_transfer_pairing(mech_children: list, comp_mols: dict,
                             f"（如 base:0>{src_id}:{h}）；若是自由脱质子"
                             f"（无碱参与），产物中应写出 [H+] 组件")
     return ""
+
+
+def _check_eas_rearomatization(mech_children: list, comp_mols: dict) -> str:
+    """EAS σ 络合物脱质子方向校验（20260827，que_test_retry Q17 病例）。
+
+    σ 络合物（环己二烯正离子）脱质子恢复芳香性时，C—H 键电子必须落向
+    "sp3 碳与环上 C+ 之间的键"（形成 π 键，canonical 写法
+    sigma:3-4>sigma:3-9）。que_test_retry Q17 实测漏网错误：LLM 写成
+    sigma:1-2>sigma:1（电子落回单个碳 = 碳负离子，不恢复芳香性）外加
+    sigma:7-1>sigma:7（从闭环键出发断键 = 环被拆开），文字正确图错误。
+
+    识别签名（保守，防误伤）：组分为六元碳环，含 ≥2 根环内双键
+    （去芳香化残存）、环上一个带显式 H 的 sp3 碳、环上一个形式 +1 碳。
+    饱和环碳正离子的氢迁移（C—H → C+ 原子是合法画法）无环内双键，
+    不满足签名，不拦。仅查组件内双电子箭头（鱼钩豁免）。
+    fake mol（无 GetRingInfo）跳过。
+    返回原因串（"" = 通过）。
+    """
+    for child in mech_children:
+        if not child.args or not child.args[0]:
+            continue
+        for spec in child.args[0].split(","):
+            spec = spec.strip()
+            if not spec or ">>" in spec:
+                continue
+            m = _MECH_ARROW_RE.match(spec)
+            if not m or m.group(6) is not None:
+                continue
+            src_id, src_pt = m.group(1), m.group(2)
+            dst_id, dst_pt = m.group(4), m.group(5)
+            if src_id != dst_id:
+                continue
+            sig = _sigma_complex_signature(comp_mols.get(src_id))
+            if sig is None:
+                continue
+            sp3c, cplus, h_idxs = sig
+            ch_bonds = {f"{sp3c}-{h}" for h in h_idxs} | \
+                       {f"{h}-{sp3c}" for h in h_idxs}
+            pi_bond = f"{sp3c}-{cplus}"
+            pi_bond_rev = f"{cplus}-{sp3c}"
+            if src_pt in ch_bonds and dst_pt not in (pi_bond, pi_bond_rev):
+                return (f"MECHARROW「{spec.strip()}」方向错误：EAS σ 络合物"
+                        f"脱质子时 C—H 键电子应落向 sp3 碳与环上 C+ 之间的键"
+                        f"（恢复芳香 π 键），应改为"
+                        f"「{src_id}:{src_pt}>{dst_id}:{pi_bond}」；"
+                        f"落在单个原子上 = 碳负离子，不恢复芳香性")
+            if src_pt in (pi_bond, pi_bond_rev):
+                return (f"MECHARROW「{spec.strip()}」方向错误：{pi_bond} 键是"
+                        f" C—H 电子的落点（形成 π 键恢复芳香性），"
+                        f"不能从它出发断键（环并未打开）")
+    return ""
+
+
+def _sigma_complex_signature(mol):
+    """EAS σ 络合物签名：(sp3 环碳, 环上 C+, [显式 H 序号...])；否则 None。
+
+    六元碳环 + ≥2 根环内双键 + 环上带显式 H 的全单键碳 + 环上形式 +1 碳
+    （二者须成键——闭环键）。fake mol 无环信息时返回 None。
+    """
+    ri_fn = getattr(mol, "GetRingInfo", None)
+    if mol is None or ri_fn is None:
+        return None
+    for ring in ri_fn().AtomRings():
+        if len(ring) != 6:
+            continue
+        atoms = [mol.GetAtomWithIdx(i) for i in ring]
+        if any(a.GetAtomicNum() != 6 for a in atoms):
+            continue
+        ring_set = set(ring)
+        n_double = sum(
+            1 for b in mol.GetBonds()
+            if b.GetBeginAtomIdx() in ring_set
+            and b.GetEndAtomIdx() in ring_set
+            and b.GetBondTypeAsDouble() == 2.0)
+        if n_double < 2:
+            continue
+        sp3c, h_idxs, cplus = None, [], None
+        for a in atoms:
+            if a.GetFormalCharge() == 1:
+                cplus = a.GetIdx()
+                continue
+            if a.GetFormalCharge() != 0:
+                continue
+            hs = [n.GetIdx() for n in a.GetNeighbors()
+                  if n.GetAtomicNum() == 1]
+            if hs and all(b.GetBondTypeAsDouble() == 1.0
+                          for b in a.GetBonds()):
+                sp3c, h_idxs = a.GetIdx(), hs
+        if sp3c is None or cplus is None:
+            continue
+        if mol.GetBondBetweenAtoms(sp3c, cplus) is not None:
+            return sp3c, cplus, h_idxs
+    return None
 
 
 def _check_sn2_attack_site(mech_children: list, comp_mols: dict) -> str:
@@ -2057,6 +2161,10 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
             return False, reason
         # SN2 进攻位点（4c）：终点必须是连离去基团的 α-碳
         reason = _check_sn2_attack_site(mech_children, comp_mols)
+        if reason:
+            return False, reason
+        # EAS σ 络合物脱质子方向（20260827）：C—H 电子落向 sp3C—C+ 键
+        reason = _check_eas_rearomatization(mech_children, comp_mols)
         if reason:
             return False, reason
         for ref, idxs in xh_usage.items():
