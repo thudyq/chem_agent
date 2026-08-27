@@ -1576,3 +1576,66 @@ def test_eas_rearomatization_target():
         "[MECHARROW:base:0>ald:1][MECHARROW:ald:0-1>ald:0]"
         "[/COMPOSITE]")
     assert not ok3, [r.reason for r in ok3]
+
+
+def test_chinese_label_consistency():
+    """中文系统命名 label ↔ SMILES 一致性（20260827，用户实测反馈：
+    "标注 2-丁醇画 2-丙醇"、"2-丁醇 SN1 中间体画成 5 碳碳正离子"）。
+    碳数精确比对；杂原子下限语义（羧酸 ≥2 O，其余同理）；取代基前缀
+    （羟基/氨基/巯基/硝基/卤素，含二/三/四倍数）计入；命名复杂者跳过。"""
+    pytest.importorskip("rdkit")
+    # A1：用户病例——label 2-丁醇（4C）画 2-丙醇（3C）→ 拦截
+    _, bad = _validate("[STRUCT:CC(C)O,label=2-丁醇]")
+    assert len(bad) == 1 and "应为 4 个碳" in bad[0].reason
+    # A2：用户病例——仲丁基碳正离子（4C）画成 5 碳碳正离子 → 拦截
+    _, bad = _validate("[STRUCT:CC[C+](C)C,label=仲丁基碳正离子]")
+    assert len(bad) == 1 and "应为 4 个碳" in bad[0].reason
+    # A3：label 与 SMILES 一致 → 放行
+    _, ok = _validate("[STRUCT:CC(O)CC,label=2-丁醇]")
+    assert not ok, [r.reason for r in ok]
+    # B1：羧酸至少 2 个 O——乙酸写成乙醇 → 拦截
+    _, bad = _validate("[STRUCT:CCO,label=乙酸]")
+    assert len(bad) == 1 and "至少含 2 个 O" in bad[0].reason
+    # B2：羟基取代基计入——羟基乙酸（O≥3）写成乙酸（2 O）→ 拦截
+    _, bad = _validate("[STRUCT:CC(=O)O,label=羟基乙酸]")
+    assert len(bad) == 1 and "至少含 3 个 O" in bad[0].reason
+    _, ok = _validate("[STRUCT:OCC(=O)O,label=羟基乙酸]")
+    assert not ok, [r.reason for r in ok]
+    # B3：卤素前缀——2-溴丁烷（4C+Br）写成溴乙烷 → 拦截；写对放行
+    _, bad = _validate("[STRUCT:CCBr,label=2-溴丁烷]")
+    assert len(bad) == 1 and "应为 4 个碳" in bad[0].reason
+    _, ok = _validate("[STRUCT:CCC(Br)C,label=2-溴丁烷]")
+    assert not ok, [r.reason for r in ok]
+    # B4：倍数前缀——二氯甲烷（Cl≥2）写成一氯甲烷 → 拦截
+    _, bad = _validate("[STRUCT:CCl,label=二氯甲烷]")
+    assert len(bad) == 1 and "至少含 2 个 Cl" in bad[0].reason
+    _, ok = _validate("[STRUCT:C(Cl)Cl,label=二氯甲烷]")
+    assert not ok, [r.reason for r in ok]
+    # C：烃类不含杂原子——丁烷画成丁醇 → 拦截
+    _, bad = _validate("[STRUCT:CCCCO,label=丁烷]")
+    assert len(bad) == 1 and "不应含杂原子" in bad[0].reason
+    # D1：带取代基的烃——2-甲基-2-丙醇（叔丁醇，4C）放行
+    _, ok = _validate("[STRUCT:CC(C)(C)O,label=2-甲基-2-丙醇]")
+    assert not ok, [r.reason for r in ok]
+    # D2：环状醇——环己醇（6C+O）放行
+    _, ok = _validate("[STRUCT:OC1CCCCC1,label=环己醇]")
+    assert not ok, [r.reason for r in ok]
+    # D3：氨酸后缀——丙氨酸（3C+N+2O）放行
+    _, ok = _validate("[STRUCT:CC(N)C(=O)O,label=丙氨酸]")
+    assert not ok, [r.reason for r in ok]
+    # E：命名复杂/角色词跳过不查（宁漏勿拦）——以下 label 即使 SMILES
+    # 不符也不拦：苯系（苯酚）、多基团（乙醚）、无碳数词（水/σ 络合物）、
+    # 混写英文（(R)-乳酸）、盐类（乙醇钠）
+    for label, smi in [("苯酚", "CCO"), ("乙醚", "CCO"), ("水", "CCO"),
+                       ("σ 络合物", "CCO"), ("(R)-乳酸", "CCO"),
+                       ("乙醇钠", "CCO"), ("中间体", "CCO")]:
+        _, ok = _validate(f"[STRUCT:{smi},label={label}]")
+        assert not ok, (label, [r.reason for r in ok])
+    # F：容器内组件同样生效
+    _, bad = _validate(
+        "[COMPOSITE:reaction][STRUCT:CC(C)O,label=2-丁醇,id=a]"
+        "[ARROW:type=single][STRUCT:CC(C)O,label=2-丙醇,id=b][/COMPOSITE]")
+    assert len(bad) == 1 and "应为 4 个碳" in bad[0].reason
+    # G：显式 H 不干扰计数（甲烷机理写法 [H] 占号但不计入约束）
+    _, ok = _validate("[STRUCT:C([H])([H])([H])[H],label=甲烷]")
+    assert not ok, [r.reason for r in ok]

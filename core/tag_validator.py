@@ -1165,6 +1165,148 @@ def _check_radical_label(mol, label: str) -> str:
     return ""
 
 
+# ---------------------------------------------------------------------------
+# 中文系统命名 label ↔ SMILES 一致性（20260827，用户实测反馈驱动：
+# "标注 2-丁醇但画的是 2-丙醇"、"2-丁醇 SN1 中间体画成 5 碳碳正离子"）
+# 设计原则（用户裁定）：杂原子要求一律"至少"语义（羧酸 ≥2 O，其余同理——
+# 同一物质可带多个官能团，只校下限）；取代基前缀官能团（羟基/氨基/巯基/
+# 硝基/氟氯溴碘，含二/三/四倍数）计入；宁漏勿拦——命名规则复杂的名称
+# （苯系/醚/酯/酐/盐类等）直接跳过不查。
+# ---------------------------------------------------------------------------
+
+_CN_CARBON_NUM = {"甲": 1, "乙": 2, "丙": 3, "丁": 4, "戊": 5,
+                  "己": 6, "庚": 7, "辛": 8, "壬": 9, "癸": 10}
+_CN_MULT = {"二": 2, "三": 3, "四": 4}
+# 主链后缀 → 每倍数单位的杂原子最低要求（下限语义）
+_CN_SUFFIX_HETERO = {
+    "醇": {"O": 1}, "醛": {"O": 1}, "酮": {"O": 1},
+    "羧酸": {"O": 2}, "氨酸": {"N": 1, "O": 2}, "酸": {"O": 2},
+    "胺": {"N": 1}, "腈": {"N": 1},
+}
+_CN_HYDROCARBON_SUFFIXES = ("烷", "烯", "炔")   # 无杂原子前缀时要求纯碳氢
+# 取代基前缀 → 每倍数单位的杂原子增量（不增碳；增碳的烷氧基/氰基等
+# 由跳过词排除）
+_CN_PREFIX_HETERO = {
+    "羟基": {"O": 1}, "氨基": {"N": 1}, "巯基": {"S": 1},
+    "硝基": {"N": 1, "O": 2},
+    "氟": {"F": 1}, "氯": {"Cl": 1}, "溴": {"Br": 1}, "碘": {"I": 1},
+}
+# 含以下词的名称命名规则复杂/不可只靠计数核对，直接跳过（宁漏勿拦）
+_CN_LABEL_SKIP = ("苯", "醚", "酯", "酐", "酰", "氰", "氧基", "卤",
+                  "钠", "钾", "锂", "镁", "钙", "盐", "糖", "肽", "脲",
+                  "肼", "腙", "肟", "膦", "硅", "硼")
+
+_CN_NUM_RE = "|".join(_CN_CARBON_NUM)
+_CN_SUFFIX_RE = ("羧酸|氨酸|酸|醇|醛|酮|胺|腈|烷|烯|炔")
+# 主链：碳数词 + 可选位次号/连字符（丁-2-醇、2-丁醇均可）+ 主后缀
+_CN_MAIN_RE = re.compile(
+    rf"({_CN_NUM_RE})[-‐‑—–\d,，、]*((?:二|三|四)?(?:{_CN_SUFFIX_RE}))")
+_CN_PREFIX_RE = re.compile(
+    rf"(二|三|四)?({'|'.join(_CN_PREFIX_HETERO)})")
+_CN_GROUP_RE = re.compile(rf"({_CN_NUM_RE})基")   # 烷基取代基/主基团
+
+
+def _chinese_name_constraints(label: str):
+    """中文系统命名 → 结构约束 dict；无法可靠解析返回 None（跳过不查）。
+
+    返回 {"C": 总碳数, "c_src": 碳数来源说明, "hetero_min": {元素: 下限},
+    "h_src": 杂原子要求说明, "hydrocarbon": 是否纯碳氢要求}。
+    总碳数 = 主链碳数词 + 各烷基取代基（甲基/乙基…）碳数之和；
+    主基团为 X基（仲丁基碳正离子等）时 X基 即主链。
+    """
+    if not label or re.search(r"[A-Za-z]", label):
+        return None   # 混写/含英文（(R)-乳酸等），不查
+    if any(w in label for w in _CN_LABEL_SKIP):
+        return None
+    m = _CN_MAIN_RE.search(label)
+    if m is not None:
+        c_total = _CN_CARBON_NUM[m.group(1)]
+        c_src = f"{m.group(1)}={c_total}"
+        suffix_txt = m.group(2)
+        # 主链已占用后，其余 X基 均为取代基（2-甲基-2-丙醇 → 甲基 +1）
+        sub_c = 0
+        for g in _CN_GROUP_RE.finditer(label):
+            if g.start() >= m.start() and g.start() < m.end():
+                continue
+            sub_c += _CN_CARBON_NUM[g.group(1)]
+        if sub_c:
+            c_total += sub_c
+            c_src += f"+取代基{sub_c}"
+    else:
+        # 主基团为 X基（仲丁基碳正离子/仲丁基等）：X基 即主链
+        g = _CN_GROUP_RE.search(label)
+        if g is None:
+            return None   # 无碳数词（水、硫酸、σ 络合物、角色词）——不查
+        c_total = _CN_CARBON_NUM[g.group(1)]
+        c_src = f"{g.group(1)}基={c_total}"
+        suffix_txt = ""
+    suffix = re.sub(r"^(二|三|四)", "", suffix_txt)
+    hetero_min = {}
+    h_src = []
+    if suffix in _CN_SUFFIX_HETERO:
+        mult = _CN_MULT.get(suffix_txt[:1], 1)
+        for sym, n in _CN_SUFFIX_HETERO[suffix].items():
+            hetero_min[sym] = hetero_min.get(sym, 0) + n * mult
+        h_src.append(f"{suffix_txt}（≥{n * mult} {sym}）"
+                     if len(_CN_SUFFIX_HETERO[suffix]) == 1 else suffix_txt)
+    n_prefix = 0
+    for p in _CN_PREFIX_RE.finditer(label):
+        mult = _CN_MULT.get(p.group(1) or "", 1)
+        for sym, n in _CN_PREFIX_HETERO[p.group(2)].items():
+            hetero_min[sym] = hetero_min.get(sym, 0) + n * mult
+        h_src.append(p.group(0))
+        n_prefix += 1
+    hydrocarbon = suffix in _CN_HYDROCARBON_SUFFIXES and n_prefix == 0
+    return {"C": c_total, "c_src": c_src, "hetero_min": hetero_min,
+            "h_src": "+".join(h_src), "hydrocarbon": hydrocarbon,
+            "suffix": suffix}
+
+
+# 参与计数的元素（显式 H 不计——机理写法常把 H 写实，label 不约束 H）
+_CN_Z_TO_SYM = {6: "C", 7: "N", 8: "O", 9: "F", 15: "P",
+                16: "S", 17: "Cl", 35: "Br", 53: "I"}
+
+
+def _check_chinese_label(mol, label: str) -> str:
+    """中文系统命名 label 与 SMILES 的一致性（碳数精确 + 杂原子下限）。
+
+    拦截三种不符：碳数不符（2-丁醇 vs 2-丙醇 / 中间体多碳）、杂原子不足
+    （羧酸少于 2 个 O）、烃类含杂原子。含 dummy 原子（R/Ph 等缩写）或
+    fake mol 时跳过。返回原因串（"" = 通过/不查）。
+    """
+    cons = _chinese_name_constraints(label)
+    if cons is None:
+        return ""
+    atoms_fn = getattr(mol, "GetAtoms", None)
+    if atoms_fn is None:
+        return ""
+    counts = {}
+    for a in atoms_fn():
+        z = getattr(a, "GetAtomicNum", lambda: -1)()
+        if z == 0:
+            return ""   # 含 R/Ph 等 dummy 占位——无法完整核对，跳过
+        if z == 1:
+            continue
+        sym = _CN_Z_TO_SYM.get(z) or getattr(a, "GetSymbol", lambda: "?")()
+        counts[sym] = counts.get(sym, 0) + 1
+    n_c = counts.get("C", 0)
+    if n_c != cons["C"]:
+        return (f"{_CHEM_PREFIX}label「{label}」与 SMILES 不一致——按系统"
+                f"命名应为 {cons['C']} 个碳（{cons['c_src']}），实际 {n_c} 个")
+    for sym, req in cons["hetero_min"].items():
+        actual = counts.get(sym, 0)
+        if actual < req:
+            return (f"{_CHEM_PREFIX}label「{label}」与 SMILES 不一致——"
+                    f"应至少含 {req} 个 {sym}（{cons['h_src']}），"
+                    f"实际 {actual} 个")
+    if cons["hydrocarbon"]:
+        hetero = [s for s in counts if s != "C"]
+        if hetero:
+            return (f"{_CHEM_PREFIX}label「{label}」为烃类（{cons['suffix']}），"
+                    f"不应含杂原子，实际含 {'、'.join(sorted(hetero))}")
+    return ""
+
+
 def _validate_struct_args(args: list, attrs: dict = None) -> Tuple[bool, str]:
     """校验单个 STRUCT 参数（顶层或容器内）：SMILES 非空 + label 长度 + 模式参数。
 
@@ -1217,6 +1359,11 @@ def _validate_struct_args(args: list, attrs: dict = None) -> Tuple[bool, str]:
             rad_reason = _check_radical_label(mol, label_text)
             if rad_reason:
                 return False, rad_reason
+            # 中文系统命名一致性（20260827）：label 为可靠中文系统名时，
+            # 碳数精确比对 + 杂原子下限比对（命名复杂的跳过不查）
+            cn_reason = _check_chinese_label(mol, label_text)
+            if cn_reason:
+                return False, cn_reason
     mode = attrs.get("mode", "skeleton")
     if mode not in _STRUCT_MODES:
         return False, (f"未知 STRUCT 模式「{mode}」，支持 "
