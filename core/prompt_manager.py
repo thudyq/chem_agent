@@ -7,6 +7,9 @@ _PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "system_prom
 _SMILES_INSTRUCTION_PATH = (
     Path(__file__).resolve().parent.parent / "prompts" / "Instruction-for-SMILES.md"
 )
+_MECH_ARROW_PROMPT_PATH = (
+    Path(__file__).resolve().parent.parent / "prompts" / "mech_arrow_prompt.txt"
+)
 
 
 def _load_instruction(path: Path) -> str:
@@ -19,6 +22,11 @@ def _load_instruction(path: Path) -> str:
 def load_smiles_instructions() -> str:
     """加载 SMILES 书写规范。"""
     return _load_instruction(_SMILES_INSTRUCTION_PATH)
+
+
+def load_mech_arrow_prompt() -> str:
+    """加载机理箭头手术式重写的专用系统提示（app.py 修正路径用）。"""
+    return _load_instruction(_MECH_ARROW_PROMPT_PATH)
 
 
 def load_system_prompt() -> str:

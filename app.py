@@ -9,10 +9,12 @@ import re
 
 from core.config import settings
 from core.llm_client import ask_llm
+from core.prompt_manager import load_mech_arrow_prompt
 from core.tag_parser import parse_tags
 from core.tag_injector import inject_tags_into_text
 from core.tag_validator import (
-    autofix_mech_bond_endpoint, degrade_text_friendly, validate_tags,
+    autofix_mech_bond_endpoint, build_component_atom_maps,
+    degrade_text_friendly, validate_tags,
 )
 from renderers.registry import RENDERER_REGISTRY, render_tag
 # 渲染器失败串的统一前缀（各渲染器内部约定："（XX渲染失败：原因）"）
@@ -239,6 +241,85 @@ _CLASS_LABELS = {"mech": "机理箭头", "balance": "守恒",
                  "smiles": "SMILES", "other": "其他"}
 
 
+# 手术式箭头重写（20260827 两阶段回放实验驱动）：纯机理箭头类失败
+# （编号/方向/配对）时，给 LLM"固定骨架 + 原子编号地图"单独补写箭头——
+# 查表代替数编号（实验 5 个箭头类案例 15/15 通过）；STRUCT 化学/守恒级
+# 错误骨架不可信，地图无意义（对照组实测），仍走原全量部分修正。
+_ARROW_FIXABLE_HINTS = ("MECHARROW", "箭头", "进攻位点", "鱼钩", "成键空白")
+# 拦截词须精确："SMILES" 单词会误伤端点错误消息（其指引文本含"在 SMILES
+# 中把该 H 写成显式 [H]"）——用完整短语「无效 SMILES」/「无效物种」
+_ARROW_FIXABLE_BLOCKERS = ("化学校验", "无效 SMILES", "无效物种", "label")
+
+_MECHARROW_TOKEN_RE = re.compile(r"[ \t]*\[MECHARROW[^\]]*\]")
+
+
+def _has_mecharrow(children) -> bool:
+    """子标记列表（含 BLOCK 共振块嵌套）中是否存在 MECHARROW。"""
+    if not isinstance(children, list):
+        return False
+    for c in children:
+        if c.type == "MECHARROW":
+            return True
+        if c.type == "BLOCK" and c.args and _has_mecharrow(c.args[0]):
+            return True
+    return False
+
+
+def _is_arrow_fixable(tag, err: str) -> bool:
+    """失败是否纯机理箭头类（可用原子地图手术式重写）。
+
+    排除 STRUCT/守恒/label 级错误（骨架不可信）；要求容器内确有
+    MECHARROW（缺配对的拦截也至少有一根已写出的箭头）。
+    """
+    if tag.type != "COMPOSITE":
+        return False
+    e = err or ""
+    if any(k in e for k in _ARROW_FIXABLE_BLOCKERS):
+        return False
+    if not any(k in e for k in _ARROW_FIXABLE_HINTS):
+        return False
+    return len(tag.args) >= 2 and _has_mecharrow(tag.args[1])
+
+
+def _rewrite_composite_arrows(user_question: str, full_text: str, tag,
+                              model=None, on_piece=None) -> str | None:
+    """手术式箭头重写：骨架 + 原子地图 + 上文叙述 → LLM 只补写 MECHARROW。
+
+    返回通过完整校验的新 COMPOSITE 原文；LLM 调用失败、输出无合法
+    COMPOSITE、未补箭头或重写块校验不过均返回 None（调用方回退常规
+    修正路径）。专用系统提示见 prompts/mech_arrow_prompt.txt（每根
+    箭头独立标记、碱夺 H 终点写 H 原子序号、无显式 H 先改写 STRUCT
+    ——均为 20260827 回放实验实测教训）。
+    """
+    maps = build_component_atom_maps(tag)
+    if not maps:
+        return None
+    skeleton = _MECHARROW_TOKEN_RE.sub("", tag.raw)
+    skeleton = re.sub(r"\n\s*\n", "\n", skeleton).strip()
+    parts = []
+    if user_question:
+        parts.append(f"原始用户问题：{user_question}")
+    start = getattr(tag, "start_pos", None)
+    if start is not None:
+        context = full_text[max(0, start - 300):start].strip()
+        if context:
+            parts.append(f"该图在回答中的上文叙述：\n{context}")
+    parts.append(f"骨架（照抄，仅补写 MECHARROW 行）：\n{skeleton}")
+    parts.append(f"组件原子编号地图：\n{maps}")
+    out = ask_llm("\n\n".join(parts),
+                  system_prompt=load_mech_arrow_prompt(),
+                  model=model, thinking="disabled", on_piece=on_piece)
+    if not out:
+        return None
+    candidates = [t for t in parse_tags(out) if t.type == "COMPOSITE"]
+    if not candidates or "[MECHARROW" not in candidates[0].raw:
+        return None
+    _, bad = validate_tags(candidates[:1])
+    if bad:
+        return None
+    return candidates[0].raw
+
+
 def _build_correction_prompt(user_question: str, original: str,
                              failures: list) -> str:
     """构造 P2 修正 prompt：失败标记清单（含上下文）+ 修正要求。
@@ -268,6 +349,13 @@ def _build_correction_prompt(user_question: str, original: str,
         ctx = _context_around(original, tag)
         if ctx:
             lines.append(f"  上下文：{ctx}")
+        # COMPOSITE 失败附组件原子编号地图：修正端点引用时照表查，
+        # 不让模型自己数编号（20260827 回放实验：编号错误占失败大头）
+        if tag.type == "COMPOSITE":
+            maps = build_component_atom_maps(tag)
+            if maps:
+                lines.append("  原子编号地图（引用端点照此查表，不要自己数）：")
+                lines.append(maps)
 
     # PubChem 兜底：失败标记的 label 是化合物名时，反查权威 SMILES 作为修正参考
     # （12s 硬超时：PubChem 慢/限流时放弃，不拖住修正主流程）
@@ -513,6 +601,7 @@ def _generate_with_corrections(user_question: str, model=None,
             return "（LLM 调用失败，请检查 .env 配置与网络）"
 
     prev_fps = None   # 上一轮失败 fingerprint（P3 逃生比对）
+    surgical_tried = set()  # 已尝试过手术式箭头重写的标记原文（每标记只试一次）
     for attempt in range(max_corrections + 1):
         # 2. 解析标记
         tags = parse_tags(full_response)
@@ -621,6 +710,31 @@ def _generate_with_corrections(user_question: str, model=None,
                 print(f"[process_question] 失败原因与上一轮完全相同，"
                       f"LLM 修正无进展——跳过剩余修正轮次，直接降级")
             else:
+                # 手术式箭头重写（20260827）：全部失败均为纯机理箭头类
+                # COMPOSITE 时，优先用"骨架 + 原子编号地图"让 LLM 只补写
+                # 箭头（查表代替数编号）；任一重写失败或存在非箭头类失败
+                # 时回退常规部分修正。每个失败标记只尝试一次手术重写。
+                if all(_is_arrow_fixable(t, e) for t, e in problems):
+                    surg_any = False
+                    for t, _e in problems:
+                        if t.raw in surgical_tried:
+                            continue
+                        surgical_tried.add(t.raw)
+                        if correction_callback is not None:
+                            correction_callback()
+                        new_raw = _rewrite_composite_arrows(
+                            user_question, full_response, t, model=model,
+                            on_piece=progress_callback)
+                        if new_raw and new_raw != t.raw \
+                                and t.raw in full_response:
+                            full_response = full_response.replace(
+                                t.raw, new_raw, 1)
+                            surg_any = True
+                            print("[process_question] 手术式箭头重写成功"
+                                  "（原子地图注入）")
+                    if surg_any:
+                        prev_fps = fps
+                        continue
                 if correction_callback is not None:
                     correction_callback()
                 correction = _build_correction_prompt(
@@ -661,6 +775,10 @@ def _generate_with_corrections(user_question: str, model=None,
 
 if __name__ == "__main__":
     import sys
+
+    # Windows GBK 控制台打印含 ⁺/⁻ 等字符的失败原因会 UnicodeEncodeError
+    # （与 metrics.py/composite.py 同款修复）
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
     question = sys.argv[1] if len(sys.argv) > 1 else "请画出苯的结构式，并说明它的分子式"
     print("=" * 60)

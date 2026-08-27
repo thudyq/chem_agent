@@ -1288,6 +1288,68 @@ def _atom_map_str(mol) -> str:
     return " ".join(f"{a.GetIdx()}={a.GetSymbol()}" for a in atoms_fn())
 
 
+def _component_map_block(child, seq: int, auto_id: str = None) -> str:
+    """单个 STRUCT 组件的编号地图文本块（build_component_atom_maps 用）。
+
+    child：STRUCT RenderTag（args[0]=SMILES，args[1]=label，attrs 含 id）；
+    seq：组件注册序号（自动编号 r{seq} 用）；auto_id：BLOCK 内组件的
+    自动编号（b{N}r{N}，与 _validate_composite 同口径）。
+    """
+    cid = child.attrs.get("id") or auto_id or f"r{seq}"
+    label = ""
+    if len(child.args) > 1 and child.args[1]:
+        label = str(child.args[1])
+    raw_smi = child.args[0].strip() if child.args and child.args[0] else ""
+    parsed_c = _parse_coeff(raw_smi)
+    bare = parsed_c[1] if parsed_c else raw_smi
+    head = f"组件 id={cid}" + (f"（label={label}）" if label else "")
+    # 化学式文本组件（KMnO4 等双轨制）：无原子可索引，不能作机理箭头端点
+    if bare and not _smiles_ok(bare) and _parse_plain_formula(bare):
+        return (f"{head}：化学式文本「{bare}」，无原子编号——"
+                f"不能作为机理箭头端点")
+    mol = _parse_mol(bare) if bare else None
+    if mol is None or getattr(mol, "GetAtoms", None) is None:
+        return f"{head}：SMILES「{bare}」无法解析"
+    atoms = "，".join(f"{a.GetIdx()}={a.GetSymbol()}" for a in mol.GetAtoms())
+    bonds = "、".join(f"{b.GetBeginAtomIdx()}-{b.GetEndAtomIdx()}"
+                      for b in mol.GetBonds()) or "（无键，单原子）"
+    hs = [a.GetIdx() for a in mol.GetAtoms() if a.GetAtomicNum() == 1]
+    h_note = (f"有（序号 {'、'.join(str(i) for i in hs)}）" if hs
+              else "无——若箭头需引用 X—H 键，须先把该组分 SMILES "
+                   "改写为显式 [H] 形式")
+    return (f"{head} SMILES：{bare}\n"
+            f"  原子地图：{atoms}\n"
+            f"  可引用的键：{bonds}\n"
+            f"  显式 H：{h_note}")
+
+
+def build_component_atom_maps(tag) -> str:
+    """COMPOSITE 各 STRUCT 组件的原子编号地图（手术式箭头重写用，
+    20260827 两阶段回放实验驱动）——让 LLM 查表引用端点，不再自己数编号。
+
+    与 _validate_composite 同口径注册组件：显式 id / 自动编号 r{N}，
+    BLOCK 共振块内组件自动编号 b{N}r{N}（N 为全局注册序号），SMILES 剥离
+    系数前缀（2CCO）后经 _parse_mol 保留显式 H 解析。
+    非 COMPOSITE、无组件或全部组件无法解析时返回 ""。
+    """
+    if getattr(tag, "type", None) != "COMPOSITE" or len(tag.args) < 2:
+        return ""
+    children = tag.args[1]
+    if not isinstance(children, list):
+        return ""
+    blocks = []
+    for child in children:
+        if child.type == "STRUCT":
+            blocks.append(_component_map_block(child, len(blocks)))
+        elif child.type == "BLOCK":
+            for bc in (child.args[0] if child.args else []):
+                if bc.type != "STRUCT":
+                    continue
+                n = len(blocks)
+                blocks.append(_component_map_block(bc, n, auto_id=f"b{n}r{n}"))
+    return "\n".join(b for b in blocks if b)
+
+
 def _validate_mech_arrow_pt(pt: str, n_atoms: int,
                             mol=None) -> str:
     """端点（原子序号 / a-b 键）合法性，返回原因串（""=合法）。
