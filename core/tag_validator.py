@@ -635,19 +635,22 @@ def _check_proton_transfer_pairing(mech_children: list, comp_mols: dict,
             heavy = _explicit_h_heavy(comp_mols.get(dst_id), int(dst_pt))
             if heavy is not None:
                 bond_pats = {f"{heavy}-{dst_pt}", f"{dst_pt}-{heavy}"}
-                # 配对终点合法集：落回重原子 X（羟醛式脱质子）；若 X 是
-                # EAS σ 络合物的 sp3 环碳，则落向 sp3C—C+ 键（恢复芳香
-                # π 键）同样是合法配对（20260827，与 EAS 方向校验一致）
+                # 配对终点合法集：落回重原子 X（羟醛式脱质子）；若 X 与形式
+                # +1 碳相邻（E1 碳正离子 / EAS σ 络合物，20260827 推广），
+                # 则落向 X—C+ 键（形成 π 键）同样是合法配对——与
+                # _check_elimination_pi_target / _check_eas_rearomatization
+                # 的终点要求保持一致，避免两规则矛盾
                 allowed_dst = {str(heavy)}
-                sig = _sigma_complex_signature(comp_mols.get(dst_id))
-                if sig is not None and sig[0] == heavy:
-                    allowed_dst |= {f"{heavy}-{sig[1]}", f"{sig[1]}-{heavy}"}
+                pi_bond = None
+                for _a, _b, _hs in _ch_cation_pairs(comp_mols.get(dst_id)):
+                    if _a == heavy:
+                        pi_bond = f"{heavy}-{_b}"
+                        allowed_dst |= {pi_bond, f"{_b}-{heavy}"}
                 if not any(s == dst_id and sp in bond_pats
                            and d == dst_id and dp in allowed_dst
                            for s, sp, d, dp in arrows):
-                    suggest = (f"{dst_id}:{heavy}-{dst_pt}>{dst_id}:"
-                               f"{heavy}-{sig[1]}"
-                               if sig is not None and sig[0] == heavy else
+                    suggest = (f"{dst_id}:{heavy}-{dst_pt}>{dst_id}:{pi_bond}"
+                               if pi_bond else
                                f"{dst_id}:{heavy}-{dst_pt}>{dst_id}:{heavy}")
                     return (f"质子转移缺配对箭头：「{src_id}:{src_pt}>{dst_id}:"
                             f"{dst_pt}」的电子落向显式 H（{dst_id}:{dst_pt}），"
@@ -727,6 +730,64 @@ def _check_eas_rearomatization(mech_children: list, comp_mols: dict) -> str:
                 return (f"MECHARROW「{spec.strip()}」方向错误：{pi_bond} 键是"
                         f" C—H 电子的落点（形成 π 键恢复芳香性），"
                         f"不能从它出发断键（环并未打开）")
+    return ""
+
+
+def _ch_cation_pairs(mol):
+    """C(H)—C+ 相邻对 [(a, b, [h...])]：a = 带显式 H 的碳，b = 与之成键的
+    形式 +1 碳——E1 碳正离子脱 β-H 与 EAS σ 络合物脱质子的共用签名
+    （C—H 电子形成 a—b 间 π 键）。fake mol（无 GetAtoms）返回 []。"""
+    atoms_fn = getattr(mol, "GetAtoms", None)
+    if mol is None or atoms_fn is None:
+        return []
+    pairs = []
+    for atom in atoms_fn():
+        if atom.GetAtomicNum() != 6 or atom.GetFormalCharge() != 0:
+            continue
+        hs = [n.GetIdx() for n in atom.GetNeighbors()
+              if n.GetAtomicNum() == 1]
+        if not hs:
+            continue
+        for n in atom.GetNeighbors():
+            if n.GetAtomicNum() == 6 and n.GetFormalCharge() == 1:
+                pairs.append((atom.GetIdx(), n.GetIdx(), hs))
+    return pairs
+
+
+def _check_elimination_pi_target(mech_children: list, comp_mols: dict) -> str:
+    """消除成 π 键的方向校验（20260827，EAS σ 规则向普通双键推广——
+    用户 E1 实测病例：叔丁基碳正离子脱 β-H 生成异丁烯，C—H 键电子
+    终点写成 C 原子，应为 C—C 键）。
+
+    C—H 键碳 a 与形式 +1 碳 b 相邻时（_ch_cation_pairs），C—H 键电子
+    形成的是 a—b 之间的 π 键，终点必须是键 a-b；落回原子 a 即拦截
+    （落回 = 碳负离子，双键没形成）。dst 为 b（1,2-氢迁移是合法画法）
+    或其它端点不拦——宁漏勿拦。环状 σ 络合物由
+    _check_eas_rearomatization 先行处理（更严：终点必须是闭环键）。
+    仅查组件内双电子箭头（鱼钩豁免）。返回原因串（"" = 通过）。
+    """
+    for child in mech_children:
+        if not child.args or not child.args[0]:
+            continue
+        for spec in child.args[0].split(","):
+            spec = spec.strip()
+            if not spec or ">>" in spec:
+                continue
+            m = _MECH_ARROW_RE.match(spec)
+            if not m or m.group(6) is not None:
+                continue
+            src_id, src_pt = m.group(1), m.group(2)
+            dst_id, dst_pt = m.group(4), m.group(5)
+            if src_id != dst_id or dst_pt != str(dst_pt) or "-" in dst_pt:
+                continue
+            for a, b, hs in _ch_cation_pairs(comp_mols.get(src_id)):
+                ch_bonds = {f"{a}-{h}" for h in hs} | {f"{h}-{a}" for h in hs}
+                if src_pt in ch_bonds and dst_pt == str(a):
+                    return (f"MECHARROW「{spec.strip()}」方向错误：C—H 键电子"
+                            f"形成的是 C{a}—C{b}（带正电）之间的 π 键"
+                            f"（消除生成双键），终点应是键 {a}-{b}——改为"
+                            f"「{src_id}:{src_pt}>{dst_id}:{a}-{b}」；"
+                            f"落回原子 {a} = 碳负离子，双键没形成")
     return ""
 
 
@@ -1523,8 +1584,15 @@ def _validate_energy(args: list) -> Tuple[bool, str]:
             float(v)
         except ValueError:
             return False, f"能量值「{v}」不是数字"
-    if len(values) < 2:
-        return False, "至少需要 2 个能量点"
+    if len(values) < 3:
+        return False, "至少需要 3 个能量点（反应物、过渡态、产物）"
+    if len(values) % 2 == 0:
+        # 势能面驻点必须为奇数个：两端是反应物/产物，中间是过渡态与
+        # 中间体交替（TS、中间体、TS…）。偶数个点说明漏标了过渡态或
+        # 中间体（如只给反应物+产物 2 点、或多步把某一步漏掉）。
+        return False, (f"能量点个数必须为奇数（当前 {len(values)} 个）——"
+                       f"请把中间体和过渡态分开标注，按"
+                       f"「反应物, 过渡态, 中间体, 过渡态, …, 产物」排列")
     return True, ""
 
 
@@ -2312,6 +2380,11 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
             return False, reason
         # EAS σ 络合物脱质子方向（20260827）：C—H 电子落向 sp3C—C+ 键
         reason = _check_eas_rearomatization(mech_children, comp_mols)
+        if reason:
+            return False, reason
+        # 消除成 π 键方向（20260827，EAS 规则向普通双键推广）：C(H)—C+
+        # 相邻时 C—H 电子终点必须是 C—C 键，不能落回 C 原子
+        reason = _check_elimination_pi_target(mech_children, comp_mols)
         if reason:
             return False, reason
         for ref, idxs in xh_usage.items():

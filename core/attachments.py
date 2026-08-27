@@ -68,13 +68,17 @@ def replace_code_blocks_with_images(text: str, urls: list) -> str:
     return display
 
 
-def _prune_attachments(dir_path: Path, max_bytes: int, max_files: int) -> None:
+def _prune_attachments(dir_path: Path, max_bytes: int, max_files: int,
+                       keep: frozenset = frozenset()) -> None:
     """配额滚动删：目录超过 max_bytes 或 max_files 时删最旧的 PNG，直到达标。
 
     不再按"超过 TTL 就删"——清小搭对 /files 是热链、未必转存到自己的 OSS，
     图片必须在本地长期保留（否则历史对话的图会因文件被清而 404）；
     只在磁盘/数量超配额时才回滚删最旧的，保证历史图长期可看、磁盘有上限。
     max_bytes/max_files <= 0 表示该项不限（无限增长，需自行定期清理）。
+    keep：受保护文件名集（本批新写入的图）——配额统计含全部文件，但 keep
+    中的文件不删（新图不被本次请求清掉）；非保护文件删完仍超配额则保持
+    现状（宁超额，不删新图）。
     """
     if not dir_path.is_dir():
         return
@@ -86,8 +90,10 @@ def _prune_attachments(dir_path: Path, max_bytes: int, max_files: int) -> None:
     total = sum(p.stat().st_size for p in pngs if p.is_file())
     if _within_quota(total, len(pngs), max_bytes, max_files):
         return
-    # 按 mtime 升序（最旧在前），逐个删直到两项都达标
+    # 按 mtime 升序（最旧在前），逐个删直到两项都达标；keep 保护的不删
     for p in sorted(pngs, key=lambda x: x.stat().st_mtime):
+        if p.name in keep:
+            continue
         try:
             p.unlink()
             pngs.remove(p)
@@ -135,7 +141,6 @@ def build_attachments(answer: str, public_base: str,
     if max_files is None:
         max_files = settings.service.attachment_max_files
     dir_path.mkdir(parents=True, exist_ok=True)
-    _prune_attachments(dir_path, max_bytes, max_files)
 
     base = (public_base or "").rstrip("/")
     attachments = []
@@ -150,11 +155,13 @@ def build_attachments(answer: str, public_base: str,
                 pngs[i] = fut.result()
     else:
         pngs[0] = compile_tikz_to_png(blocks[0])
+    written = []
     for i, (code, png) in enumerate(zip(blocks, pngs), 1):
         if not png:
             continue
         name = f"{uuid.uuid4().hex}.png"
         (dir_path / name).write_bytes(png)
+        written.append(name)
         attachments.append({
             "fileUrl": f"{base}/files/{name}",
             "fileName": f"化学图示-{i}.png",
@@ -162,4 +169,10 @@ def build_attachments(answer: str, public_base: str,
             "mimeType": _MIME_PNG,
             "fileSize": len(png),
         })
+    # 配额滚动在写入后执行（统计含本批新图，最终状态不超配额）；本批新图
+    # 列入 keep 保护——新图不被本次请求清掉（若在写入前清理，配额会被
+    # 本批突破：max_files=2 时 3 旧图只清到 2，写入后变 3）
+    if written:
+        _prune_attachments(dir_path, max_bytes, max_files,
+                           keep=frozenset(written))
     return attachments

@@ -1270,13 +1270,14 @@ def test_mode_comp_newman_in_row_and_energy():
     assert out.count("circle (0.50)") == 2           # 两个纽曼投影前碳圆
     assert "交叉式" in out and "重叠式" in out
 
-    text_e = ("[COMPOSITE:energy][ENERGY:0,12]"
+    text_e = ("[COMPOSITE:energy][ENERGY:0,50,10]"
               "[STRUCT:CC,mode=newman,bond=0-1,angle=0,id=e1,at=0,pos=below]"
               "[STRUCT:CC,mode=newman,bond=0-1,angle=60,id=e2,at=1,pos=above]"
+              "[STRUCT:CC,mode=newman,bond=0-1,angle=120,id=e3,at=2,pos=above]"
               "[/COMPOSITE]")
     out_e = render_composite(*parse_tags(text_e)[0].args)
     assert "渲染失败" not in out_e
-    assert out_e.count("circle (0.50)") == 2
+    assert out_e.count("circle (0.50)") == 3
     assert "scope" in out_e                          # 驻点 scope 平移绘制
 
 

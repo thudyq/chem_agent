@@ -148,7 +148,24 @@ def test_energy_bad_value_rejected():
 def test_energy_too_few_points_rejected():
     _, invalid = _validate("[ENERGY:5]")
     assert len(invalid) == 1
-    assert "至少需要 2" in invalid[0].reason
+    assert "至少需要 3" in invalid[0].reason
+
+
+def test_energy_even_points_rejected():
+    """势能面能量点必须为奇数（≥3）：反应物/产物两端 + 过渡态/中间体交替。"""
+    _, invalid = _validate("[ENERGY:0,108,-20,30]")   # 4 点（偶数）
+    assert len(invalid) == 1
+    assert "必须为奇数" in invalid[0].reason
+    assert "中间体和过渡态分开标注" in invalid[0].reason
+    # 2 点：触发"至少需要 3"（先于奇数检查）
+    _, invalid2 = _validate("[ENERGY:0,10]")
+    assert len(invalid2) == 1
+    assert "至少需要 3" in invalid2[0].reason
+    # 奇数个点放行
+    _, invalid3 = _validate("[ENERGY:0,108,-20]")
+    assert len(invalid3) == 0
+    _, invalid4 = _validate("[ENERGY:0,85,60,95,30]")   # 5 点
+    assert len(invalid4) == 0
 
 
 def test_composite_unknown_layout_rejected():
@@ -252,7 +269,7 @@ def test_composite_mode_restriction():
     assert "mode=newman" in invalid5[0].reason
     # energy 布局：newman 放行
     _, invalid6 = _validate(
-        "[COMPOSITE:energy][ENERGY:0,10]"
+        "[COMPOSITE:energy][ENERGY:0,50,10]"
         "[STRUCT:CC, mode=newman, bond=0-1, angle=60, id=w, at=0][/COMPOSITE]")
     assert len(invalid6) == 0
 
@@ -1639,3 +1656,52 @@ def test_chinese_label_consistency():
     # G：显式 H 不干扰计数（甲烷机理写法 [H] 占号但不计入约束）
     _, ok = _validate("[STRUCT:C([H])([H])([H])[H],label=甲烷]")
     assert not ok, [r.reason for r in ok]
+
+
+def test_elimination_pi_target():
+    """消除成 π 键方向校验（20260827，EAS σ 规则向普通双键推广——用户
+    E1 实测病例：叔丁基碳正离子脱 β-H 生成异丁烯，C—H 键电子终点写成
+    C 原子，应为 C—C 键）。签名：C（显式H)—C+ 相邻（开链碳正离子）。"""
+    pytest.importorskip("rdkit")
+    # A：用户病例——E1 脱质子的 C—H 电子落回 β-C 原子 → 拦截并建议
+    # Cβ—Cα+ 键（r0: C[C+](C)C([H])[H]：0=CH3、1=C+、2=CH3、3=CH2、4/5=H）
+    _, bad = _validate(
+        "[COMPOSITE:reaction]"
+        "[STRUCT:C[C+](C)C([H])[H],label=叔丁基碳正离子,id=r0][PLUS]"
+        "[STRUCT:[OH-],label=OH-,id=w]"
+        "[ARROW:type=single,快]"
+        "[STRUCT:C=C(C)C,label=异丁烯,id=p][PLUS][STRUCT:O,label=水]"
+        "[MECHARROW:w:0>r0:4][MECHARROW:r0:3-4>r0:3]"
+        "[/COMPOSITE]")
+    assert len(bad) == 1 and "π 键" in bad[0].reason \
+        and "r0:3-1" in bad[0].reason
+    # B：修正版放行（C—H 键 → Cβ—Cα+ 键）——配对规则 4b 同步认可
+    # 键终点（不报错"缺配对"），两规则一致
+    _, ok = _validate(
+        "[COMPOSITE:reaction]"
+        "[STRUCT:C[C+](C)C([H])[H],label=叔丁基碳正离子,id=r0][PLUS]"
+        "[STRUCT:[OH-],label=OH-,id=w]"
+        "[ARROW:type=single,快]"
+        "[STRUCT:C=C(C)C,label=异丁烯,id=p][PLUS][STRUCT:O,label=水]"
+        "[MECHARROW:w:0>r0:4][MECHARROW:r0:3-4>r0:1-3]"
+        "[/COMPOSITE]")
+    assert not ok, [r.reason for r in ok]
+    # C：1,2-氢迁移不拦（C—H 电子 → C+ 原子是氢负迁移的合法画法，
+    # 叔丁基重排简并、产物同结构）——dst=b（C+ 原子）不触发
+    _, ok = _validate(
+        "[COMPOSITE:reaction]"
+        "[STRUCT:C[C+](C)C([H])[H],label=碳正离子,id=r0]"
+        "[ARROW:type=single]"
+        "[STRUCT:C[C+](C)C([H])[H],label=重排后,id=p]"
+        "[MECHARROW:r0:3-4>r0:1]"
+        "[/COMPOSITE]")
+    assert not ok, [r.reason for r in ok]
+    # D：自由脱质子（无碱、产物写 [H+]）同样拦截落回原子
+    _, bad = _validate(
+        "[COMPOSITE:reaction]"
+        "[STRUCT:C[C+](C)C([H])[H],label=叔丁基碳正离子,id=r0]"
+        "[ARROW:type=single]"
+        "[STRUCT:C=C(C)C,label=异丁烯,id=p][PLUS][STRUCT:[H+],label=H+]"
+        "[MECHARROW:r0:3-4>r0:3]"
+        "[/COMPOSITE]")
+    assert len(bad) == 1 and "双键没形成" in bad[0].reason

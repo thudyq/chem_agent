@@ -58,27 +58,29 @@ def test_build_attachments_compile_failure(monkeypatch, tmp_path):
 
 
 def test_prune_by_quota_files(monkeypatch, tmp_path):
-    """配额滚动：超出 max_files 时删最旧，保留最新。"""
+    """配额滚动：超出 max_files 时删最旧，保留最新（含本批新图）。"""
     monkeypatch.setattr(att, "compile_tikz_to_png", lambda code: FAKE_PNG)
-    # 先造 3 张旧图（mtime 递增：old1 最旧，old3 最新）
-    for name in ("old1.png", "old2.png", "old3.png"):
+    # 先造 3 张旧图（mtime 递增：old1 最旧，old3 最新——必须错开，
+    # 相同 mtime 的删除顺序依赖文件系统 glob 序，不确定）
+    import os
+    for i, name in enumerate(("old1.png", "old2.png", "old3.png"), 1):
         p = tmp_path / name
         p.write_bytes(FAKE_PNG)
-        import os
-        os.utime(p, (10, 10))
+        os.utime(p, (i * 10, i * 10))
     result = att.build_attachments(ANSWER_WITH_TIKZ, "https://host",
                                    dir_path=tmp_path, max_files=2)
     assert len(result) == 1
     # 目录里只剩 2 张：最旧的 old1/old2 被删，old3 + 新生成留着
     remaining = sorted(p.name for p in tmp_path.glob("*.png"))
-    assert remaining == ["old3.png", result[0]["fileUrl"].rsplit("/files/", 1)[-1]]
+    assert remaining == sorted(
+        ["old3.png", result[0]["fileUrl"].rsplit("/files/", 1)[-1]])
 
 
 def test_prune_by_quota_bytes(monkeypatch, tmp_path):
     """超出 max_bytes 时删最旧，直到总大小达标。
 
-    注意：_prune_attachments 在新文件写入**之前**执行，只约束已有文件；
-    max_bytes 设得比已有 old 图还小，old 即被清。
+    注意：_prune_attachments 在新文件写入**之后**执行（本批新图列入 keep
+    保护不删）；max_bytes 设得比已有 old 图还小，old 即被清。
     """
     monkeypatch.setattr(att, "compile_tikz_to_png", lambda code: FAKE_PNG)
     old = tmp_path / "old.png"
