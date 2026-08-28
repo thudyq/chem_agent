@@ -545,3 +545,80 @@ def test_output_strips_hallucinated_md_images_stream(client, monkeypatch):
         for f in frames if "content" in f["choices"][0]["delta"])
     assert "2d4b8e9f" not in content and "files/" not in content
     assert "完" in content
+
+
+# ---------- 多轮对话标记恢复（20260828 方案 A：回答缓存） ----------
+
+from core import answer_cache
+
+
+def _two_turn_setup(monkeypatch):
+    """模拟两轮对话：第一轮 process_question 产出标记回答并登记缓存；
+    第二轮捕获送入管线的 history。返回捕获列表。"""
+    captured = []
+
+    def fake_pipeline(question, history=None, diagnostics=None,
+                      responses=None, **k):
+        captured.append({"q": question, "history": history})
+        if responses is not None:
+            responses.append("标记原文：[COMPOSITE:reaction]"
+                             "[STRUCT:CCO,id=a][/COMPOSITE] 完。")
+        return "第一轮渲染后回答文本。"
+
+    monkeypatch.setattr(api, "process_question", fake_pipeline)
+    return captured
+
+
+def test_history_restores_markup_from_cache(client, monkeypatch):
+    """第二轮历史命中缓存 → assistant 历史恢复为原始标记文本（LLM 可见
+    [COMPOSITE]），且图片 markdown/REASONING 不出现。"""
+    answer_cache.clear()
+    captured = _two_turn_setup(monkeypatch)
+    # 第一轮
+    resp = client.post("/v1/chat/completions", json=_chat_payload(),
+                       headers=AUTH)
+    content1 = resp.json()["choices"][0]["message"]["content"]
+    # 第二轮：把第一轮的回答原样放进历史（清小搭行为）
+    payload = {"messages": [
+        {"role": "user", "content": "第一轮问题"},
+        {"role": "assistant", "content": content1},
+        {"role": "user", "content": "追问一下"},
+    ]}
+    client.post("/v1/chat/completions", json=payload, headers=AUTH)
+    assert len(captured) == 2
+    hist = captured[1]["history"]
+    assert len(hist) == 2                       # user1 + assistant1
+    assert "[COMPOSITE:reaction]" in hist[1]["content"]   # 标记已恢复
+    assert "REASONING" not in hist[1]["content"]
+
+
+def test_history_cache_miss_falls_back_to_strip(client, monkeypatch):
+    """缓存未命中（重启/过期/非本服务回答）→ 回退现有剥离逻辑。"""
+    answer_cache.clear()
+    captured = _two_turn_setup(monkeypatch)
+    payload = {"messages": [
+        {"role": "user", "content": "第一轮问题"},
+        {"role": "assistant", "content":
+            "上轮回答 \\begin{tikzpicture}\\draw (0,0);\\end{tikzpicture} 完。"},
+        {"role": "user", "content": "追问"},
+    ]}
+    client.post("/v1/chat/completions", json=payload, headers=AUTH)
+    hist = captured[0]["history"]
+    assert "tikzpicture" not in hist[1]["content"]   # 剥离逻辑兜底
+    assert "[COMPOSITE" not in hist[1]["content"]    # 未命中不恢复
+
+
+def test_stream_registers_answer_cache(client, monkeypatch):
+    """流式路径同样登记缓存（拼接后的完整 display 为 key）。"""
+    answer_cache.clear()
+    captured = _two_turn_setup(monkeypatch)
+    resp = client.post("/v1/chat/completions",
+                       json=_chat_payload(stream=True), headers=AUTH)
+    frames, done = _parse_sse(resp.text)
+    assert done
+    content = "".join(
+        f["choices"][0]["delta"].get("content", "")
+        for f in frames if "content" in f["choices"][0]["delta"])
+    # 直接查缓存验证登记成功
+    assert answer_cache.lookup(content) is not None
+    assert "[COMPOSITE" in answer_cache.lookup(content)

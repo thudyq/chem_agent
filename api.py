@@ -35,6 +35,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from app import process_question
 from core.attachments import build_attachments, replace_code_blocks_with_images
+from core import answer_cache
 from core.config import settings
 
 app = FastAPI(title="Chem_Agent", version="1.0.0")
@@ -267,7 +268,11 @@ def _extract_history(messages: list, max_items: int = 10) -> list:
         else:
             continue
         if role == "assistant":
-            text = _strip_render_code(text)
+            # 命中回答缓存则恢复为原始标记文本（LLM 可看到上一轮的
+            # [COMPOSITE] 等标记——20260828 方案 A）；未命中（服务重启/
+            # 过期/非本服务回答）回退剥离渲染产物
+            restored = answer_cache.lookup(text)
+            text = restored if restored is not None else _strip_render_code(text)
         if text.strip():
             history.append({"role": role, "content": text.strip()})
     return history
@@ -451,12 +456,13 @@ def _sse_stream(question: str, history: list, cid: str, created: int,
 
     def work():
         diag = []
+        responses = []
         try:
             answer = process_question(
                 question, history=history,
                 progress_callback=progress_q.put,
                 correction_callback=lambda: _safe_put(_CORRECTION_MARK),
-                diagnostics=diag)
+                diagnostics=diag, responses=responses)
         except Exception as e:  # 管线异常兜底为 stop 帧 + error 字段
             answer_q.put(e)
             return
@@ -471,6 +477,10 @@ def _sse_stream(question: str, history: list, cid: str, created: int,
         except Exception as e:  # 编译异常不拖垮已生成的文本回答
             print(f"[api] 附件编译异常，降级为无附件: {e}")
             attachments, display = [], answer or ""
+        # 登记回答缓存（同非流式路径）：display 将被分帧发出，平台存储后
+        # 下轮历史原样带回，命中缓存即恢复为原始标记文本
+        if responses:
+            answer_cache.store(display, responses[-1])
         answer_q.put(display)
         result_q.put(attachments)
 
@@ -585,8 +595,10 @@ async def chat_completions(request: Request, authorization: str | None = Header(
         )
 
     diag = []
+    responses = []
     answer = process_question(question, history=history,
-                              diagnostics=diag) or "（未能生成回答）"
+                              diagnostics=diag, responses=responses) \
+        or "（未能生成回答）"
     answer = _strip_md_images(answer)
     _log_diagnostics(diag)
     try:
@@ -596,6 +608,10 @@ async def chat_completions(request: Request, authorization: str | None = Header(
         attachments = []
     content = replace_code_blocks_with_images(
         answer, [a["fileUrl"] if a else None for a in attachments])
+    # 登记回答缓存：下轮对话历史中该回答将被恢复为原始标记文本
+    # （responses[-1] = 最终采用的渲染前标记文本）
+    if responses:
+        answer_cache.store(content, responses[-1])
     payload = {
         "id": cid,
         "object": "chat.completion",
