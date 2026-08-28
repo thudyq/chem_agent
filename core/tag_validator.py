@@ -1271,7 +1271,8 @@ def _chinese_name_constraints(label: str):
     """中文系统命名 → 结构约束 dict；无法可靠解析返回 None（跳过不查）。
 
     返回 {"C": 总碳数, "c_src": 碳数来源说明, "hetero_min": {元素: 下限},
-    "h_src": 杂原子要求说明, "hydrocarbon": 是否纯碳氢要求}。
+    "h_src": 杂原子要求说明, "hydrocarbon": 是否纯碳氢要求,
+    "topo": 拓扑约束 dict 或 None}。
     总碳数 = 主链碳数词 + 各烷基取代基（甲基/乙基…）碳数之和；
     主基团为 X基（仲丁基碳正离子等）时 X基 即主链。
     """
@@ -1284,6 +1285,7 @@ def _chinese_name_constraints(label: str):
         c_total = _CN_CARBON_NUM[m.group(1)]
         c_src = f"{m.group(1)}={c_total}"
         suffix_txt = m.group(2)
+        main_start = m.start()
         # 主链已占用后，其余 X基 均为取代基（2-甲基-2-丙醇 → 甲基 +1）
         sub_c = 0
         for g in _CN_GROUP_RE.finditer(label):
@@ -1301,7 +1303,10 @@ def _chinese_name_constraints(label: str):
         c_total = _CN_CARBON_NUM[g.group(1)]
         c_src = f"{g.group(1)}基={c_total}"
         suffix_txt = ""
+        main_start = g.start()
+        sub_c = sum(1 for _ in _CN_GROUP_RE.finditer(label)) - 1
     suffix = re.sub(r"^(二|三|四)", "", suffix_txt)
+    suffix_mult = suffix_txt[:1] in _CN_MULT
     hetero_min = {}
     h_src = []
     if suffix in _CN_SUFFIX_HETERO:
@@ -1311,16 +1316,92 @@ def _chinese_name_constraints(label: str):
         h_src.append(f"{suffix_txt}（≥{n * mult} {sym}）"
                      if len(_CN_SUFFIX_HETERO[suffix]) == 1 else suffix_txt)
     n_prefix = 0
+    halo_in_head = None
     for p in _CN_PREFIX_RE.finditer(label):
         mult = _CN_MULT.get(p.group(1) or "", 1)
         for sym, n in _CN_PREFIX_HETERO[p.group(2)].items():
             hetero_min[sym] = hetero_min.get(sym, 0) + n * mult
         h_src.append(p.group(0))
         n_prefix += 1
+        if p.group(2) in ("氟", "氯", "溴", "碘") and p.start() < main_start:
+            halo_in_head = p.group(2)
     hydrocarbon = suffix in _CN_HYDROCARBON_SUFFIXES and n_prefix == 0
+    topo = _cn_topology(label, main_start, c_total, suffix,
+                        suffix_mult, has_substituent=sub_c > 0,
+                        halo_in_head=halo_in_head)
     return {"C": c_total, "c_src": c_src, "hetero_min": hetero_min,
             "h_src": "+".join(h_src), "hydrocarbon": hydrocarbon,
-            "suffix": suffix}
+            "suffix": suffix, "topo": topo}
+
+
+# 拓扑约束（20260828，仲丁基 vs 叔丁基实测病例）：前缀 正/仲/叔/异/新 或
+# 位次号编码了"官能团中心碳的碳邻居数"与"骨架分支特征"，可确定性校验
+_CN_HALO_SYM = {"氟": "F", "氯": "Cl", "溴": "Br", "碘": "I"}
+
+
+def _cn_topology(label: str, main_start: int, c_total: int, suffix: str,
+                 suffix_mult: bool, has_substituent: bool,
+                 halo_in_head: str | None):
+    """前缀/位次号 → 拓扑约束 dict 或 None（跳过）。
+
+    跳过条件（宁漏勿拦）：环状（环）、后缀带倍数（二醇）、多位次（1,2-）、
+    有烷基取代基（2-甲基-2-丙醇 的位次规则与分支冲突）、烯/炔（双键位次
+    的中心判定另算）。异/新只查骨架不查中心连接度——异丙醇的功能中心
+    就是分支点（2 度）、异丁基在末端（1 度），随链长而变。
+    """
+    if "环" in label or suffix_mult or has_substituent:
+        return None
+    if suffix in ("烯", "炔"):
+        return None
+    head = label[:main_start]   # 主碳数词之前的部分（前缀/位次/杂原子前缀）
+    locants = re.findall(r"\d+", head)
+    if len(locants) > 1:
+        return None
+    pm = re.search(r"(正|仲|叔|异|新)[-‐‑—–]*$", head)
+    prefix = pm.group(1) if pm else None
+    locant = int(locants[0]) if locants else None
+    if prefix is None and locant is None:
+        return None
+    if re.search(r"碳?正离子", label):
+        center_kind = "cation"
+    elif re.search(r"碳?负离子", label):
+        center_kind = "anion"
+    elif "自由基" in label:
+        center_kind = "radical"
+    elif suffix == "醇":
+        center_kind = "oh"
+    elif suffix == "胺":
+        center_kind = "nh"
+    elif halo_in_head:
+        center_kind = f"x:{_CN_HALO_SYM[halo_in_head]}"
+    else:
+        center_kind = None
+    cd = sk = None
+    if prefix == "仲":
+        cd, sk = 2, "unbranched"
+    elif prefix == "叔":
+        cd = 3                        # 骨架由中心连接度隐含（中心连 3 个甲基）
+    elif prefix == "正":
+        cd, sk = 1, "unbranched"
+    elif prefix == "异":
+        sk = "has3"
+    elif prefix == "新":
+        sk = "has4"
+    elif locant is not None:
+        if locant == 1 or locant == c_total:
+            cd, sk = 1, "unbranched"
+        elif 1 < locant < c_total:
+            cd, sk = 2, "unbranched"
+        else:
+            return None               # 位次超出碳数——归碳数检查管（已拦）
+    if cd is not None and center_kind is None:
+        return None                   # 有中心要求但识别不出中心（bare 基等）
+    if cd is None and sk is None:
+        return None
+    src = f"{prefix}（{ {'正': 'n', '仲': 'sec', '叔': 'tert', '异': 'iso',
+                          '新': 'neo'}[prefix] }）" if prefix else f"{locant} 位"
+    return {"center_kind": center_kind, "center_degree": cd,
+            "skeleton": sk, "src": src}
 
 
 # 参与计数的元素（显式 H 不计——机理写法常把 H 写实，label 不约束 H）
@@ -1365,6 +1446,92 @@ def _check_chinese_label(mol, label: str) -> str:
         if hetero:
             return (f"{_CHEM_PREFIX}label「{label}」为烃类（{cons['suffix']}），"
                     f"不应含杂原子，实际含 {'、'.join(sorted(hetero))}")
+    # 类型一致性（20260828，区分 基/碳正离子/碳负离子）：label 声明的中心
+    # 类型必须在 SMILES 里存在（仲丁基碳正离子画成自由基这类错误）
+    if re.search(r"碳?正离子", label) and not any(
+            a.GetAtomicNum() == 6 and a.GetFormalCharge() == 1
+            for a in atoms_fn()):
+        return (f"{_CHEM_PREFIX}label 标「碳正离子」但 SMILES 中没有带 +1 "
+                f"电荷的碳——碳正离子写 [CH+]（注意与自由基 [CH3]、"
+                f"碳负离子 [CH2-] 区分）")
+    if re.search(r"碳?负离子", label) and not any(
+            a.GetAtomicNum() == 6 and a.GetFormalCharge() == -1
+            for a in atoms_fn()):
+        return (f"{_CHEM_PREFIX}label 标「碳负离子」但 SMILES 中没有带 -1 "
+                f"电荷的碳——碳负离子写 [CH2-]（注意与碳正离子 [CH+]、"
+                f"自由基 [CH3] 区分）")
+    topo = cons.get("topo")
+    if topo:
+        return _check_cn_topology(mol, topo, label)
+    return ""
+
+
+def _cn_find_center(mol, kind: str):
+    """官能团中心碳（唯一候选才返回；多个候选返回 None 跳过——
+    多官能团情形拓扑不定）。"""
+    atoms = list(mol.GetAtoms())
+    if kind == "cation":
+        cands = [a for a in atoms
+                 if a.GetAtomicNum() == 6 and a.GetFormalCharge() == 1]
+    elif kind == "anion":
+        cands = [a for a in atoms
+                 if a.GetAtomicNum() == 6 and a.GetFormalCharge() == -1]
+    elif kind == "radical":
+        cands = [a for a in atoms
+                 if a.GetAtomicNum() == 6
+                 and getattr(a, "GetNumRadicalElectrons", lambda: 0)() > 0]
+    else:
+        # 醇（C—OH）/ 胺（C—N）/ 卤代（C—X）：杂原子的唯一碳邻居即中心
+        z = {"oh": 8, "nh": 7}.get(kind) or \
+            {"F": 9, "Cl": 17, "Br": 35, "I": 53}.get((kind or "x:")[2:])
+        cands = []
+        for h in atoms:
+            if h.GetAtomicNum() != z:
+                continue
+            cn = [n for n in h.GetNeighbors() if n.GetAtomicNum() == 6]
+            # 醇/胺要求杂原子带 H（排除醚氧/叔胺氮这类非端基）
+            if len(cn) == 1 and ((kind or "").startswith("x:")
+                                 or getattr(h, "GetTotalNumHs",
+                                            lambda: 0)() >= 1):
+                cands.append(cn[0])
+    return cands[0] if len(cands) == 1 else None
+
+
+def _check_cn_topology(mol, topo: dict, label: str) -> str:
+    """拓扑一致性：骨架分支特征 + 官能团中心碳的碳邻居数。
+
+    返回原因串（"" = 通过）。"""
+    cdeg = {}
+    for a in mol.GetAtoms():
+        if a.GetAtomicNum() == 6:
+            cdeg[a.GetIdx()] = sum(1 for n in a.GetNeighbors()
+                                   if n.GetAtomicNum() == 6)
+    sk = topo["skeleton"]
+    if sk == "unbranched" and cdeg and max(cdeg.values()) > 2:
+        return (f"{_CHEM_PREFIX}label「{label}」与 SMILES 不一致——"
+                f"{topo['src']}应为直链骨架（无分支），你写的有碳连了 "
+                f"{max(cdeg.values())} 个碳（分支骨架——"
+                f"注意 仲（sec）是直链、叔（tert）才有分支）")
+    if sk == "has3" and 3 not in cdeg.values():
+        return (f"{_CHEM_PREFIX}label「{label}」与 SMILES 不一致——"
+                f"异（iso）骨架应有一个连 3 个碳的分支点，你写的是直链")
+    if sk == "has4" and cdeg and 4 not in cdeg.values():
+        return (f"{_CHEM_PREFIX}label「{label}」与 SMILES 不一致——"
+                f"新（neo）骨架应有一个连 4 个碳的季碳，你写的没有")
+    cd = topo["center_degree"]
+    if cd is None:
+        return ""
+    center = _cn_find_center(mol, topo["center_kind"])
+    if center is None:
+        return ""   # 中心不唯一/找不到——跳过中心检查（骨架已查）
+    deg = cdeg.get(center.GetIdx(), 0)
+    if deg != cd:
+        hint = {"仲": "（连 3 个碳是叔 tert 骨架——仲/叔写反了）",
+                "叔": "（连 2 个碳是仲 sec 骨架——叔/仲写反了）"}.get(
+            topo["src"][:1], "")
+        return (f"{_CHEM_PREFIX}label「{label}」与 SMILES 不一致——"
+                f"{topo['src']}的中心碳应连 {cd} 个碳，"
+                f"你写的中心碳连了 {deg} 个{hint}")
     return ""
 
 

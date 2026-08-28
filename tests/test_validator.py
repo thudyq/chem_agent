@@ -1726,3 +1726,79 @@ def test_elimination_pi_target():
         "[MECHARROW:r0:3-4>r0:3]"
         "[/COMPOSITE]")
     assert len(bad) == 1 and "双键没形成" in bad[0].reason
+
+
+def test_chinese_label_topology():
+    """中文命名拓扑一致性（20260828，仲丁基 vs 叔丁基实测病例）：
+    前缀 正/仲/叔/异/新 与位次号编码"官能团中心碳的碳邻居数 + 骨架
+    分支特征"；并区分 自由基/碳正离子/碳负离子 三类中心。"""
+    pytest.importorskip("rdkit")
+    # A1：用户病例——仲丁基碳正离子画成叔丁基骨架（C[C+](C)C，中心连
+    # 3 个碳且有分支）→ 拦截
+    _, bad = _validate("[STRUCT:C[C+](C)C,label=仲丁基碳正离子]")
+    assert len(bad) == 1 and "仲" in bad[0].reason and "直链骨架" in bad[0].reason
+    # A2：位次号版（2-丁基碳正离子）同样拦截
+    _, bad = _validate("[STRUCT:C[C+](C)C,label=2-丁基碳正离子]")
+    assert len(bad) == 1 and "直链骨架" in bad[0].reason
+    # A3：正确写法放行（仲丁基/2-丁基：直链、中心连 2 个碳）
+    _, ok = _validate("[STRUCT:CC[CH+]C,label=仲丁基碳正离子]")
+    assert not ok, [r.reason for r in ok]
+    _, ok = _validate("[STRUCT:CC[CH+]C,label=2-丁基碳正离子]")
+    assert not ok, [r.reason for r in ok]
+    # A4：反向——叔丁基碳正离子画成仲丁基 → 拦截
+    _, bad = _validate("[STRUCT:CC[CH+]C,label=叔丁基碳正离子]")
+    assert len(bad) == 1 and "应连 3 个碳" in bad[0].reason
+    _, ok = _validate("[STRUCT:C[C+](C)C,label=叔丁基碳正离子]")
+    assert not ok, [r.reason for r in ok]
+    # B1：醇类——仲丁醇（中心连 2 碳）放行；叔骨架充仲 → 拦截；
+    # 叔丁醇放行；直链充正丁醇 → 拦截
+    _, ok = _validate("[STRUCT:CC(O)CC,label=仲丁醇]")
+    assert not ok, [r.reason for r in ok]
+    _, bad = _validate("[STRUCT:CC(C)(C)O,label=仲丁醇]")
+    assert len(bad) == 1 and "直链骨架" in bad[0].reason
+    _, ok = _validate("[STRUCT:CC(C)(C)O,label=叔丁醇]")
+    assert not ok, [r.reason for r in ok]
+    _, bad = _validate("[STRUCT:CC(C)CO,label=正丁醇]")
+    assert len(bad) == 1 and "直链骨架" in bad[0].reason
+    _, ok = _validate("[STRUCT:CCCCO,label=正丁醇]")
+    assert not ok, [r.reason for r in ok]
+    # B2：异/新只查骨架——异丁醇（有 3 度分支点）放行，直链充异 → 拦截；
+    # 新戊醇（有季碳）放行
+    _, ok = _validate("[STRUCT:CC(C)CO,label=异丁醇]")
+    assert not ok, [r.reason for r in ok]
+    _, bad = _validate("[STRUCT:CCCCO,label=异丁醇]")
+    assert len(bad) == 1 and "分支点" in bad[0].reason
+    _, ok = _validate("[STRUCT:CC(C)(C)CO,label=新戊醇]")
+    assert not ok, [r.reason for r in ok]
+    # C1：自由基——仲丁基自由基（CC[CH]C）放行；叔骨架充仲 → 拦截
+    _, ok = _validate("[STRUCT:CC[CH]C,label=仲丁基自由基]")
+    assert not ok, [r.reason for r in ok]
+    _, bad = _validate("[STRUCT:C[C](C)C,label=仲丁基自由基]")
+    assert len(bad) == 1 and "直链骨架" in bad[0].reason
+    # C2：碳负离子——仲丁基碳负离子放行
+    _, ok = _validate("[STRUCT:CC[CH-]C,label=仲丁基碳负离子]")
+    assert not ok, [r.reason for r in ok]
+    # C3：类型区分——label 碳正离子画成自由基 → 拦截；碳负离子无负
+    # 电荷 → 拦截（"基"/"碳正离子"/"碳负离子"不是一回事）
+    _, bad = _validate("[STRUCT:CC[C]C,label=丁基碳正离子]")
+    assert len(bad) == 1 and "没有带 +1 电荷的碳" in bad[0].reason
+    _, bad = _validate("[STRUCT:CCCC,label=丁基碳负离子]")
+    assert len(bad) == 1 and "没有带 -1 电荷的碳" in bad[0].reason
+    # D1：卤代位次——2-溴丁烷的 Br 应在中间碳（连 2 碳）；写成 1-溴丁烷
+    # （末端）→ 拦截；写对放行
+    _, bad = _validate("[STRUCT:CCCCBr,label=2-溴丁烷]")
+    assert len(bad) == 1 and "应连 2 个碳" in bad[0].reason
+    _, ok = _validate("[STRUCT:CCC(Br)C,label=2-溴丁烷]")
+    assert not ok, [r.reason for r in ok]
+    # D2：无前缀/位次的裸名称不查拓扑（宁漏勿拦）——"丁基碳正离子"只查
+    # 类型不查连接度（叔丁基骨架也放行，命名本身有歧义）
+    _, ok = _validate("[STRUCT:C[C+](C)C,label=丁基碳正离子]")
+    assert not ok, [r.reason for r in ok]
+    # D3：跳过面——带取代基（2-甲基-2-丙醇=叔丁醇）、环状（环己醇）、
+    # 后缀倍数（1,2-丁二醇）不做拓扑检查
+    _, ok = _validate("[STRUCT:CC(C)(C)O,label=2-甲基-2-丙醇]")
+    assert not ok, [r.reason for r in ok]
+    _, ok = _validate("[STRUCT:OC1CCCCC1,label=环己醇]")
+    assert not ok, [r.reason for r in ok]
+    _, ok = _validate("[STRUCT:OCC(O)CC,label=1,2-丁二醇]")
+    assert not ok, [r.reason for r in ok]
