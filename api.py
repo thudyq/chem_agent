@@ -201,18 +201,34 @@ def _log_diagnostics(diag: list) -> None:
 _TIKZ_RE = re.compile(r"\\begin\{tikzpicture\}.*?\\end\{tikzpicture\}",
                       re.DOTALL)
 _CHEMFIG_RE = re.compile(r"\\chemfig\{[^}]*\}")
+_MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)\s]*\)")
 
 
 def _strip_render_code(text: str) -> str:
-    """剥离 assistant 历史消息中的渲染代码（TikZ/chemfig），只留纯文本。
+    """剥离 assistant 历史消息中的渲染产物（TikZ/chemfig/图片 markdown）。
 
     多轮对话时，assistant 历史消息是我们返回的**渲染后**文本（含 TikZ 代码）。
     这些代码不能回传给 LLM（会污染上下文、浪费 token），需剥离。
+    20260828：行内图片 markdown（![化学图示-N](fileUrl)）一并剥离——保留
+    会让 LLM 在下轮模仿手写图片链接（编造不存在的 fileUrl，前端 404 空白，
+    que_test_retry 实测：同一对话第二轮图片全丢、URL 为递增规律假 uuid）。
     """
     text = _TIKZ_RE.sub("", text)
     text = _CHEMFIG_RE.sub("", text)
+    text = _MD_IMAGE_RE.sub("[化学图示]", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
+
+
+def _strip_md_images(text: str) -> str:
+    """剥离 LLM 输出中手写的 markdown 图片链接（![...](...)）。
+
+    真实图片只经附件通道注入（build_attachments 编译 + 随后
+    replace_code_blocks_with_images 替换）；原始输出中出现的图片链接只可能
+    是 LLM 模仿历史消息编造的假链接（文件不存在，前端 404 空白）——删除。
+    """
+    text = _MD_IMAGE_RE.sub("", text or "")
+    return re.sub(r"\n{3,}", "\n\n", text)
 
 
 def _extract_history(messages: list, max_items: int = 10) -> list:
@@ -444,6 +460,7 @@ def _sse_stream(question: str, history: list, cid: str, created: int,
         except Exception as e:  # 管线异常兜底为 stop 帧 + error 字段
             answer_q.put(e)
             return
+        answer = _strip_md_images(answer)
         _log_diagnostics(diag)
         try:
             attachments = build_attachments(answer or "", public_base) \
@@ -570,6 +587,7 @@ async def chat_completions(request: Request, authorization: str | None = Header(
     diag = []
     answer = process_question(question, history=history,
                               diagnostics=diag) or "（未能生成回答）"
+    answer = _strip_md_images(answer)
     _log_diagnostics(diag)
     try:
         attachments = build_attachments(answer, public_base)

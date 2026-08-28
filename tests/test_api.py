@@ -483,3 +483,65 @@ def test_validate_download_url_dns(monkeypatch):
         raise OSError("DNS 解析失败")
     monkeypatch.setattr(api.socket, "getaddrinfo", boom)
     assert not api._validate_download_url("http://unknown.invalid/x")
+
+
+# ---------- 多轮对话图片丢失（20260828）：手写图片链接的剥离 ----------
+
+_FAKE_MD_IMAGE = ("![化学图示-1](https://60.205.181.60/files/"
+                  "2d4b8e9f0a5e4d2f9a1b3c6d7e8f9a0b.png)")
+
+
+def test_strip_render_code_removes_md_images():
+    """历史侧：assistant 历史中的行内图片 markdown 被剥离为 [化学图示]
+    占位——不剥离则 LLM 下轮模仿手写假链接（文件不存在，前端 404）。"""
+    text = f"决速步。\n\n{_FAKE_MD_IMAGE}\n\n碳正离子是平面的。"
+    out = api._strip_render_code(text)
+    assert "files/" not in out and "2d4b8e9f" not in out
+    assert "![" not in out                       # 不再有可模仿的图片语法
+    assert "[化学图示]" in out                    # 保留叙述占位
+    assert "碳正离子是平面的" in out
+
+
+def test_extract_history_strips_md_images():
+    """_extract_history：assistant 历史消息的图片 markdown 被剥离；
+    user 消息不动。"""
+    msgs = [
+        {"role": "user", "content": "介绍 SN1 机理"},
+        {"role": "assistant", "content": f"分两步：\n\n{_FAKE_MD_IMAGE}"},
+        {"role": "user", "content": "和 SN2 对比呢"},
+    ]
+    history = api._extract_history(msgs)
+    assert len(history) == 2
+    assert "files/" not in history[1]["content"]
+    assert "[化学图示]" in history[1]["content"]
+
+
+def test_output_strips_hallucinated_md_images_non_stream(client, monkeypatch):
+    """输出侧兜底：LLM 输出里手写的假图片链接被删除；真实 TikZ 仍编译
+    为行内图片（附件通道不受影响）。"""
+    answer = (f"看这里：\n\n{_FAKE_MD_IMAGE}\n\n"
+              "\\begin{tikzpicture}\\draw (0,0)--(1,0);\\end{tikzpicture}\n完。")
+    monkeypatch.setattr(api, "process_question", lambda *a, **k: answer)
+    monkeypatch.setattr(api, "build_attachments",
+                        lambda a, b: FAKE_ATTACHMENTS)
+    resp = client.post("/v1/chat/completions", json=_chat_payload(),
+                       headers=AUTH)
+    content = resp.json()["choices"][0]["message"]["content"]
+    assert "2d4b8e9f" not in content             # 假链接已删
+    assert f"![化学图示-1]({FAKE_ATTACHMENTS[0]['fileUrl']})" in content  # 真图在内
+    assert "看这里" in content and "完" in content
+
+
+def test_output_strips_hallucinated_md_images_stream(client, monkeypatch):
+    """流式同样剥离手写假图片链接。"""
+    monkeypatch.setattr(api, "process_question", lambda *a, **k:
+                        f"图示：\n\n{_FAKE_MD_IMAGE}\n\n完。")
+    resp = client.post("/v1/chat/completions",
+                       json=_chat_payload(stream=True), headers=AUTH)
+    frames, done = _parse_sse(resp.text)
+    assert done
+    content = "".join(
+        f["choices"][0]["delta"].get("content", "")
+        for f in frames if "content" in f["choices"][0]["delta"])
+    assert "2d4b8e9f" not in content and "files/" not in content
+    assert "完" in content
