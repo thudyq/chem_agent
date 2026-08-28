@@ -49,22 +49,33 @@ def strip_code_blocks(text: str) -> str:
 def replace_code_blocks_with_images(text: str, urls: list) -> str:
     """把文本中的 TikZ/chemfig 代码块替换为行内 markdown 图片引用。
 
-    urls 与代码块按顺序对应（块 i ↔ urls[i]，编译成功才有 url）；无对应 url
-    的块（编译失败）直接移除，不留裸 LaTeX。无代码块或 urls 为空时：有块则
-    全部移除（只要不留源码），无块则原样返回。用于让清小搭在正文内联显示
-    图片（20260826：平台把 attachments 渲染成文末缩略图，行内引用才可能内联）。
+    urls 与代码块**按原始顺序一一对应**（长度 == 代码块数，由
+    build_attachments 保证）；元素为可用 url 的块 → ![化学图示-N](url)，
+    元素为空/None 的块（编译失败）→ 该位置原地替换为友好提示
+    "（图示未能渲染）"，**不会把后面的块往前挤**——否则多块时部分编译
+    失败会让图片与编号错位、且真实成功图被误删（20260827 修复：曾因
+    只按"成功块序号"填 url，导致中间失败块被赋予下一张图的 url、后面的
+    成功图被挤掉）。无代码块时原样返回；urls 少于块数（异常兜底）时，
+    多余块按失败处理。
+
+    用于让清小搭在正文内联显示图片（20260826：平台把 attachments 渲染成
+    文末缩略图，行内引用才可能内联）。
     """
     blocks = extract_code_blocks(text)
     if not blocks:
         return text or ""
     display = text or ""
-    urls = urls or []
+    urls = urls or [None] * len(blocks)
+    # 补齐到块数（异常兜底：urls 短于块数时，缺的按编译失败处理）
+    if len(urls) < len(blocks):
+        urls = urls + [None] * (len(blocks) - len(urls))
     for i, code in enumerate(blocks):
-        if i < len(urls):
+        url = urls[i]
+        if url:
             display = display.replace(
-                code, f"![化学图示-{i + 1}]({urls[i]})", 1)
+                code, f"![化学图示-{i + 1}]({url})", 1)
         else:
-            display = display.replace(code, "", 1)
+            display = display.replace(code, "(图示未能渲染)", 1)
     return display
 
 
@@ -129,7 +140,12 @@ def build_attachments(answer: str, public_base: str,
             0/负数=不限。
 
     返回:
-        [{fileUrl, fileName, ...}, ...]；无代码块或全部编译失败返回空列表。
+        与正文代码块**一一对应**的列表（长度 == 块数，含按原始顺序的
+        {fileUrl,...} 或 None（该块编译失败，无图））。供调用方用
+        `[a["fileUrl"] if a else None for a in attachments]` 传给
+        replace_code_blocks_with_images，保证图片与编号不错位、
+        失败块不影响后续块。无代码块或全部编译失败时长度为块数（元素为
+        None）或空（无块）。
     """
     blocks = extract_code_blocks(answer)
     if not blocks:
@@ -143,7 +159,8 @@ def build_attachments(answer: str, public_base: str,
     dir_path.mkdir(parents=True, exist_ok=True)
 
     base = (public_base or "").rstrip("/")
-    attachments = []
+    # 与 blocks 对齐；成功块 {fileUrl,...}，失败块 None（占位，保持位置对应）
+    attachments = [None] * len(blocks)
     # 并行编译各块（LaTeX 子进程各自独立临时目录）：3 图并发，把串行 ~10s 压到 ~3~4s
     from concurrent.futures import ThreadPoolExecutor
     pngs = [None] * len(blocks)
@@ -152,23 +169,31 @@ def build_attachments(answer: str, public_base: str,
             futs = {i: ex.submit(compile_tikz_to_png, code)
                     for i, code in enumerate(blocks)}
             for i, fut in futs.items():
-                pngs[i] = fut.result()
+                try:
+                    pngs[i] = fut.result()
+                except Exception as e:  # 单块编译异常不拖垮整轮（其余块照常）
+                    print(f"[attachments] 图 {i + 1} 编译异常，作失败块: {e}")
+                    pngs[i] = None
     else:
-        pngs[0] = compile_tikz_to_png(blocks[0])
+        try:
+            pngs[0] = compile_tikz_to_png(blocks[0])
+        except Exception as e:
+            print(f"[attachments] 图 1 编译异常，作失败块: {e}")
+            pngs[0] = None
     written = []
-    for i, (code, png) in enumerate(zip(blocks, pngs), 1):
+    for i, (code, png) in enumerate(zip(blocks, pngs)):
         if not png:
             continue
         name = f"{uuid.uuid4().hex}.png"
         (dir_path / name).write_bytes(png)
         written.append(name)
-        attachments.append({
+        attachments[i] = {
             "fileUrl": f"{base}/files/{name}",
-            "fileName": f"化学图示-{i}.png",
+            "fileName": f"化学图示-{i + 1}.png",
             "fileType": _FILE_TYPE_IMAGE,
             "mimeType": _MIME_PNG,
             "fileSize": len(png),
-        })
+        }
     # 配额滚动在写入后执行（统计含本批新图，最终状态不超配额）；本批新图
     # 列入 keep 保护——新图不被本次请求清掉（若在写入前清理，配额会被
     # 本批突破：max_files=2 时 3 旧图只清到 2，写入后变 3）

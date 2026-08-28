@@ -449,7 +449,8 @@ def _sse_stream(question: str, history: list, cid: str, created: int,
             attachments = build_attachments(answer or "", public_base) \
                 if answer else []
             display = replace_code_blocks_with_images(
-                answer or "", [a["fileUrl"] for a in attachments])
+                answer or "",
+                [a["fileUrl"] if a else None for a in attachments])
         except Exception as e:  # 编译异常不拖垮已生成的文本回答
             print(f"[api] 附件编译异常，降级为无附件: {e}")
             attachments, display = [], answer or ""
@@ -576,7 +577,7 @@ async def chat_completions(request: Request, authorization: str | None = Header(
         print(f"[api] 附件编译异常，降级为无附件: {e}")
         attachments = []
     content = replace_code_blocks_with_images(
-        answer, [a["fileUrl"] for a in attachments])
+        answer, [a["fileUrl"] if a else None for a in attachments])
     payload = {
         "id": cid,
         "object": "chat.completion",
