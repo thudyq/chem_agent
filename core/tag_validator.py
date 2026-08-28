@@ -2059,11 +2059,16 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
     if not comps and not has_block and layout_name != "row":
         return False, "容器内缺少 [STRUCT] 组件"
 
-    # energy 布局：每个 STRUCT 必须有 at= 且不越界
+    # energy 布局：每个 STRUCT 必须有 at= 且不越界；ENERGY 点序列复用
+    # _validate_energy（≥3 点 + 奇数个——COMPOSITE 内嵌 ENERGY 原先不递归
+    # validate_tag，奇数校验漏掉；20260828 补上，与顶层 ENERGY 一致）
     if layout_name == "energy":
         energy_child = next((c for c in children if c.type == "ENERGY"), None)
         if energy_child is None or not energy_child.args or not energy_child.args[0]:
             return False, "energy 布局需要 [ENERGY:点序列] 组件"
+        ok_e, reason_e = _validate_energy(energy_child.args)
+        if not ok_e:
+            return False, reason_e
         n_points = len([v for v in energy_child.args[0].split(",") if v.strip()])
         for cid, info in comps.items():
             if info["at"] is None:

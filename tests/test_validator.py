@@ -168,6 +168,27 @@ def test_energy_even_points_rejected():
     assert len(invalid4) == 0
 
 
+def test_composite_energy_payload_odd_points_rejected():
+    """COMPOSITE energy 内嵌 [ENERGY] 同样走奇数校验（20260828 补：
+    原先 _validate_composite 不递归校验子 ENERGY，奇数个点校验漏掉，
+    与顶层 [ENERGY] 不一致）。"""
+    # 4 点（偶数）→ 拦截
+    _, invalid = _validate(
+        "[COMPOSITE:energy][ENERGY:0,108,-20,30]"
+        "[STRUCT:CCl,label=反应物,at=0][STRUCT:CO,label=过渡态,at=1]"
+        "[STRUCT:CC,label=中间体,at=2][STRUCT:CCO,label=产物,at=3]"
+        "[/COMPOSITE]")
+    assert len(invalid) == 1
+    assert "必须为奇数" in invalid[0].reason
+    # 5 点（奇数）→ 放行
+    _, ok = _validate(
+        "[COMPOSITE:energy][ENERGY:0,85,60,95,30]"
+        "[STRUCT:CCl,label=反应物,at=0][STRUCT:CO,label=过渡态,at=1]"
+        "[STRUCT:CC,label=中间体,at=2][STRUCT:CCO,label=过渡态2,at=3]"
+        "[STRUCT:CCC,label=产物,at=4][/COMPOSITE]")
+    assert len(ok) == 0
+
+
 def test_composite_unknown_layout_rejected():
     _, invalid = _validate("[COMPOSITE:foo][STRUCT:CCl][/COMPOSITE]")
     assert len(invalid) == 1
