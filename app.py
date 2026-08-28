@@ -9,12 +9,12 @@ import re
 
 from core.config import settings
 from core.llm_client import ask_llm
-from core.prompt_manager import load_mech_arrow_prompt
+from core.prompt_manager import load_mech_arrow_prompt, load_struct_rewrite_prompt
 from core.tag_parser import parse_tags
 from core.tag_injector import inject_tags_into_text
 from core.tag_validator import (
     autofix_mech_bond_endpoint, build_component_atom_maps,
-    degrade_text_friendly, validate_tags,
+    degrade_text_friendly, iter_struct_components, validate_tags,
 )
 from renderers.registry import RENDERER_REGISTRY, render_tag
 # 渲染器失败串的统一前缀（各渲染器内部约定："（XX渲染失败：原因）"）
@@ -318,6 +318,95 @@ def _rewrite_composite_arrows(user_question: str, full_text: str, tag,
     if bad:
         return None
     return candidates[0].raw
+
+
+# 手术式结构重写（20260828，与箭头重写同一思想）：SMILES/label 级错误走
+# "去锚定微任务"——只给名称/约束/上下文、不给错误答案（回放实验：带错误
+# 答案的修正反复振荡，fresh 生成 15/15）。守恒等多物种错误不在此列
+# （那不是单个 SMILES 写错，是物种取舍问题）。
+_STRUCT_FIXABLE_HINTS = ("无效 SMILES", "与 SMILES 不一致",
+                         "label 标注", "label 含")
+_STRUCT_COMPONENT_ERR_RE = re.compile(r"^组件 ([^:：]+)[:：]\s*(.*)$",
+                                      re.DOTALL)
+_COEFF_PREFIX_RE = re.compile(r"^(\d+(?:/\d+)?)(?=[A-Za-z\[])")
+
+
+def _is_struct_fixable(tag, err: str) -> bool:
+    """失败是否单个物种的 SMILES/label 级错误（可用微任务重写）。
+
+    顶层 STRUCT 直接看原因；COMPOSITE 则要求错误定位到具体组件
+    （"组件 cid: …"格式）且该组件的问题是 SMILES/label 类。
+    """
+    e = err or ""
+    if tag.type == "STRUCT":
+        return any(k in e for k in _STRUCT_FIXABLE_HINTS)
+    if tag.type == "COMPOSITE":
+        m = _STRUCT_COMPONENT_ERR_RE.match(e)
+        return bool(m) and any(k in m.group(2) for k in _STRUCT_FIXABLE_HINTS)
+    return False
+
+
+def _rewrite_struct_smiles(user_question: str, full_text: str, tag, err: str,
+                           model=None, on_piece=None) -> str | None:
+    """手术式结构重写：为写错的物种重新生成 [STRUCT] 标记。
+
+    微任务只给 名称/label + 错误约束 + 上文叙述——**不含错误 SMILES**
+    （「…」引用一律抹除，防止锚定）。重写产物保留原组件的 id/mode/系数
+    等全部属性（组件可能被 MECHARROW/HBOND 引用），label 以 LLM 新给的
+    为准（处理"SMILES 对、label 写错"的镜像病例）。重写后整个标记（顶层
+    STRUCT 或 COMPOSITE）须通过完整校验才采纳，否则返回 None 回退常规
+    修正路径。
+    """
+    if tag.type == "STRUCT":
+        cid, child = None, tag
+    elif tag.type == "COMPOSITE" and len(tag.args) >= 2:
+        m = _STRUCT_COMPONENT_ERR_RE.match(err or "")
+        if not m:
+            return None
+        cid = m.group(1).strip()
+        child = next((ch for c, ch in iter_struct_components(tag.args[1])
+                      if c == cid), None)
+        if child is None:
+            return None
+    else:
+        return None
+    label = child.args[1] if len(child.args) > 1 else None
+    # 错误原因中的「…」引用的是错误 SMILES——去锚定，不展示给 LLM
+    reason = re.sub(r"「[^」]*」", "「…」", err or "")
+    parts = [f"原始用户问题：{user_question}"]
+    start = getattr(tag, "start_pos", None)
+    if start is not None:
+        context = full_text[max(0, start - 300):start].strip()
+        if context:
+            parts.append(f"该图在回答中的上文叙述：\n{context}")
+    parts.append(f"需要重写的物种名称/标签：{label or cid or '（未标注）'}")
+    parts.append(f"上次写错的原因（不要重犯同样的错误）：\n{reason}")
+    out = ask_llm("\n\n".join(parts),
+                  system_prompt=load_struct_rewrite_prompt(),
+                  model=model, thinking="disabled", on_piece=on_piece)
+    if not out:
+        return None
+    cands = [t for t in parse_tags(out) if t.type == "STRUCT"]
+    if not cands or not cands[0].args or not cands[0].args[0]:
+        return None
+    new_smi = cands[0].args[0].strip()
+    new_label = (cands[0].args[1] if len(cands[0].args) > 1 else None)
+    # 保留原写法（系数/属性/label 位置）：只替换 SMILES 主体
+    old_smi = (child.args[0] or "").strip()
+    coeff = ""
+    m = _COEFF_PREFIX_RE.match(old_smi)
+    if m:
+        coeff = m.group(1)
+        old_smi = old_smi[m.end():]
+    new_raw = child.raw.replace(old_smi, coeff + new_smi, 1)
+    if new_label and label and new_label != str(label):
+        new_raw = new_raw.replace(f"label={label}", f"label={new_label}", 1)
+    if tag.type == "COMPOSITE":
+        new_raw = tag.raw.replace(child.raw, new_raw, 1)
+    _, bad = validate_tags(parse_tags(new_raw))
+    if bad:
+        return None
+    return new_raw
 
 
 def _build_correction_prompt(user_question: str, original: str,
@@ -710,31 +799,39 @@ def _generate_with_corrections(user_question: str, model=None,
                 print(f"[process_question] 失败原因与上一轮完全相同，"
                       f"LLM 修正无进展——跳过剩余修正轮次，直接降级")
             else:
-                # 手术式箭头重写（20260827）：全部失败均为纯机理箭头类
-                # COMPOSITE 时，优先用"骨架 + 原子编号地图"让 LLM 只补写
-                # 箭头（查表代替数编号）；任一重写失败或存在非箭头类失败
-                # 时回退常规部分修正。每个失败标记只尝试一次手术重写。
-                if all(_is_arrow_fixable(t, e) for t, e in problems):
-                    surg_any = False
-                    for t, _e in problems:
-                        if t.raw in surgical_tried:
-                            continue
-                        surgical_tried.add(t.raw)
-                        if correction_callback is not None:
-                            correction_callback()
+                # 手术式重写（20260827 箭头 / 20260828 结构）：逐失败标记
+                # 分流——纯机理箭头错走"骨架+原子地图"重写，SMILES/label 级
+                # 错走"去锚定微任务"重写；均不依赖错误答案原文。任一成功即
+                # 重解析重校验；不在手术范围的（守恒/格式等）或重写失败的
+                # 留给下方常规部分修正。每个失败标记只尝试一次手术重写。
+                surg_any = False
+                for t, e in problems:
+                    if t.raw in surgical_tried:
+                        continue
+                    if _is_arrow_fixable(t, e):
+                        kind = "箭头/地图"
+                    elif _is_struct_fixable(t, e):
+                        kind = "结构/去锚定"
+                    else:
+                        continue
+                    surgical_tried.add(t.raw)
+                    if correction_callback is not None:
+                        correction_callback()
+                    if kind == "箭头/地图":
                         new_raw = _rewrite_composite_arrows(
                             user_question, full_response, t, model=model,
                             on_piece=progress_callback)
-                        if new_raw and new_raw != t.raw \
-                                and t.raw in full_response:
-                            full_response = full_response.replace(
-                                t.raw, new_raw, 1)
-                            surg_any = True
-                            print("[process_question] 手术式箭头重写成功"
-                                  "（原子地图注入）")
-                    if surg_any:
-                        prev_fps = fps
-                        continue
+                    else:
+                        new_raw = _rewrite_struct_smiles(
+                            user_question, full_response, t, e, model=model,
+                            on_piece=progress_callback)
+                    if new_raw and new_raw != t.raw and t.raw in full_response:
+                        full_response = full_response.replace(t.raw, new_raw, 1)
+                        surg_any = True
+                        print(f"[process_question] 手术式重写成功（{kind}）")
+                if surg_any:
+                    prev_fps = fps
+                    continue
                 if correction_callback is not None:
                     correction_callback()
                 correction = _build_correction_prompt(

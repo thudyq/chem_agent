@@ -81,7 +81,9 @@ def test_correction_exhausted_degrades(fake_rdkit, fake_renderers,
     monkeypatch.setattr(
         "app.ask_llm", lambda *a, **k: calls.append(a[0] if a else None) or "苯是 [STRUCT:XYZABC]。")
     result = process_question("画苯", max_corrections=1)
-    assert len(calls) == 2, "最多修正一次，不应无限重试"
+    # 20260828 起 SMILES 级错误先试一次手术式结构重写（去锚定微任务），
+    # 失败再走常规修正：主生成 + 手术 + 常规 = 3 次，均失败 → 降级
+    assert len(calls) == 3, "手术重写 + 最多一次常规修正，不应无限重试"
     assert "图示无法渲染" in result
 
 
@@ -115,7 +117,7 @@ def test_diagnostics_include_final_round_unresolved(fake_rdkit,
         lambda *a, **k: calls.append(a[0] if a else None) or "苯是 [STRUCT:XYZABC]。")
     diag = []
     result = process_question("画苯", max_corrections=1, diagnostics=diag)
-    assert len(calls) == 2
+    assert len(calls) == 3                       # 主生成 + 手术重写 + 常规修正
     assert len(diag) == 2                       # 两轮失败都被记录（含最后一次）
     assert [d["round"] for d in diag] == [0, 1]
     assert all(d["resolved"] is False for d in diag)
@@ -309,17 +311,20 @@ def test_route_upgrade_then_correction(fake_rdkit, fake_renderers,
     calls = []
     answers = [
         "苯是 [STRUCT:XYZABC]。",      # flash 首跑失败
-        "[STRUCT:XYZABC]",              # pro 第 1 次修正原样重犯（同 fingerprint）
+        "（手术重写失败：无有效标记）",   # pro 手术式结构重写尝试（仍坏）
+        "[STRUCT:XYZABC]",              # pro 常规修正原样重犯（同 fingerprint）
     ]
     monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
     monkeypatch.setattr(
         "app.ask_llm", lambda *a, **k: calls.append(k) or answers.pop(0))
     result = process_question("画苯", max_corrections=2)
-    # P3：修正后失败原因与上轮完全相同 → 跳过剩余修正轮次（20260821）
-    assert len(calls) == 2
+    # P3：修正后失败原因与上轮完全相同 → 跳过剩余修正轮次（20260821）；
+    # 20260828 起 SMILES 级错误在常规修正前先试一次手术重写
+    assert len(calls) == 3
     assert calls[0].get("model") is None
     assert calls[1].get("model") == "deepseek-v4-pro"
-    assert calls[1].get("thinking") == "disabled"   # 修正调用关思考
+    assert calls[2].get("model") == "deepseek-v4-pro"
+    assert calls[2].get("thinking") == "disabled"   # 修正调用关思考
     assert "RENDERED" not in result                  # 未救回 → 降级文本
 
 

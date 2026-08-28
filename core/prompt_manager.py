@@ -10,6 +10,9 @@ _SMILES_INSTRUCTION_PATH = (
 _MECH_ARROW_PROMPT_PATH = (
     Path(__file__).resolve().parent.parent / "prompts" / "mech_arrow_prompt.txt"
 )
+_STRUCT_REWRITE_PROMPT_PATH = (
+    Path(__file__).resolve().parent.parent / "prompts" / "struct_rewrite_prompt.txt"
+)
 
 
 def _load_instruction(path: Path) -> str:
@@ -27,6 +30,15 @@ def load_smiles_instructions() -> str:
 def load_mech_arrow_prompt() -> str:
     """加载机理箭头手术式重写的专用系统提示（app.py 修正路径用）。"""
     return _load_instruction(_MECH_ARROW_PROMPT_PATH)
+
+
+def load_struct_rewrite_prompt() -> str:
+    """加载结构手术式重写的专用系统提示（含 SMILES 书写规范附录）。"""
+    base = _load_instruction(_STRUCT_REWRITE_PROMPT_PATH)
+    smiles_spec = load_smiles_instructions()
+    if base and smiles_spec:
+        return base + "\n\n" + smiles_spec
+    return base or smiles_spec
 
 
 def load_system_prompt() -> str:

@@ -1607,14 +1607,30 @@ def _atom_map_str(mol) -> str:
     return " ".join(f"{a.GetIdx()}={a.GetSymbol()}" for a in atoms_fn())
 
 
-def _component_map_block(child, seq: int, auto_id: str = None) -> str:
+def iter_struct_components(children):
+    """遍历 COMPOSITE 子标记中的 STRUCT 组件（含 BLOCK 嵌套），产出
+    (cid, child)——自动编号口径与 _validate_composite 一致（显式 id /
+    r{N} / BLOCK 内 b{N}r{N}）。地图生成与手术式重写共用。"""
+    if not isinstance(children, list):
+        return
+    n = 0
+    for child in children:
+        if child.type == "STRUCT":
+            yield child.attrs.get("id") or f"r{n}", child
+            n += 1
+        elif child.type == "BLOCK":
+            for bc in (child.args[0] if child.args else []):
+                if bc.type == "STRUCT":
+                    yield bc.attrs.get("id") or f"b{n}r{n}", bc
+                    n += 1
+
+
+def _component_map_block(child, cid: str) -> str:
     """单个 STRUCT 组件的编号地图文本块（build_component_atom_maps 用）。
 
-    child：STRUCT RenderTag（args[0]=SMILES，args[1]=label，attrs 含 id）；
-    seq：组件注册序号（自动编号 r{seq} 用）；auto_id：BLOCK 内组件的
-    自动编号（b{N}r{N}，与 _validate_composite 同口径）。
+    child：STRUCT RenderTag（args[0]=SMILES，args[1]=label）；
+    cid：组件 id（由 iter_struct_components 按校验器口径给出）。
     """
-    cid = child.attrs.get("id") or auto_id or f"r{seq}"
     label = ""
     if len(child.args) > 1 and child.args[1]:
         label = str(child.args[1])
@@ -1656,16 +1672,8 @@ def build_component_atom_maps(tag) -> str:
     children = tag.args[1]
     if not isinstance(children, list):
         return ""
-    blocks = []
-    for child in children:
-        if child.type == "STRUCT":
-            blocks.append(_component_map_block(child, len(blocks)))
-        elif child.type == "BLOCK":
-            for bc in (child.args[0] if child.args else []):
-                if bc.type != "STRUCT":
-                    continue
-                n = len(blocks)
-                blocks.append(_component_map_block(bc, n, auto_id=f"b{n}r{n}"))
+    blocks = [_component_map_block(child, cid)
+              for cid, child in iter_struct_components(children)]
     return "\n".join(b for b in blocks if b)
 
 
