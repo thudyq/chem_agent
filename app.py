@@ -282,7 +282,8 @@ def _is_arrow_fixable(tag, err: str) -> bool:
 
 
 def _rewrite_composite_arrows(user_question: str, full_text: str, tag,
-                              model=None, on_piece=None) -> str | None:
+                              err: str = "", model=None,
+                              on_piece=None) -> str | None:
     """手术式箭头重写：骨架 + 原子地图 + 上文叙述 → LLM 只补写 MECHARROW。
 
     返回通过完整校验的新 COMPOSITE 原文；LLM 调用失败、输出无合法
@@ -290,6 +291,10 @@ def _rewrite_composite_arrows(user_question: str, full_text: str, tag,
     修正路径）。专用系统提示见 prompts/mech_arrow_prompt.txt（每根
     箭头独立标记、碱夺 H 终点写 H 原子序号、无显式 H 先改写 STRUCT
     ——均为 20260827 回放实验实测教训）。
+
+    err：本轮校验失败原因。电子流模拟类失败（含"电子流模拟"）时把模拟
+    结论注入 prompt（P2）——模拟消息不含错误箭头原文（不锚定），且
+    携带推得的实际结构/超价定位，是最强的重写引导。
     """
     maps = build_component_atom_maps(tag)
     if not maps:
@@ -304,6 +309,8 @@ def _rewrite_composite_arrows(user_question: str, full_text: str, tag,
         context = full_text[max(0, start - 300):start].strip()
         if context:
             parts.append(f"该图在回答中的上文叙述：\n{context}")
+    if err and "电子流模拟" in err:
+        parts.append(f"上次这组箭头的电子流模拟结论（针对性避免）：\n{err}")
     parts.append(f"骨架（照抄，仅补写 MECHARROW 行）：\n{skeleton}")
     parts.append(f"组件原子编号地图：\n{maps}")
     out = ask_llm("\n\n".join(parts),
@@ -464,6 +471,11 @@ def _build_correction_prompt(user_question: str, original: str,
             "机理箭头修正：按原因中给出的建议端点直接改写（「应直接改写为"
             "「x-y」」），不要自己猜编号；提示无显式 H 时，先把该 H 写成显式 "
             "[H]（参与编号）再按原子地图引用。")
+        if any("电子流模拟" in err for _, err in failures):
+            reqs.append(
+                "电子流模拟不一致：声明产物本身已通过守恒与价态检查，优先"
+                "重画机理箭头使其能从反应物推出声明产物；原因中含模拟推得"
+                "的实际结构（预期产物），若确认箭头无误，则把产物改为该结构。")
     if "balance" in classes:
         reqs.append(
             "守恒修正：按给出的元素/电荷差值补物种或调系数（2CCO、1/2O2）；"
@@ -819,7 +831,7 @@ def _generate_with_corrections(user_question: str, model=None,
                         correction_callback()
                     if kind == "箭头/地图":
                         new_raw = _rewrite_composite_arrows(
-                            user_question, full_response, t, model=model,
+                            user_question, full_response, t, e, model=model,
                             on_piece=progress_callback)
                     else:
                         new_raw = _rewrite_struct_smiles(

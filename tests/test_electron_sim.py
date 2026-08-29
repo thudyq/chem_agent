@@ -176,3 +176,15 @@ def test_skips_no_arrow_and_formula_components():
         "[ARROW:type=single][STRUCT:CC(=O)O,label=乙酸][/COMPOSITE]")
     # 无机理箭头——守恒可能拦（本例不守恒会被拦，但绝不会因模拟器拦）
     assert not any("电子流模拟" in r.reason for r in bad)
+
+
+def test_impossible_message_uses_local_refs():
+    """超价等"不可能"报错用 组件:局部序号（nu:0），LLM 可直接定位——
+    不用大图全局序号或 RDKit 碎片内序号（P2 修正 prompt 依赖可读定位）。"""
+    pytest.importorskip("rdkit")
+    reason = _run([("ar", "C1=CC=CC=C1"), ("nu", "[N+](=O)=O")],
+                  ["ar:0-1>nu:0"],
+                  [("sg", "O=[N+]([O-])C([H])1C=CC=C[CH+]1")])
+    assert "不成立" in reason
+    assert "nu:0" in reason            # 组件:局部序号定位（N 五键超价）
+    assert "atom #" not in reason      # 不裸用 RDKit 碎片内序号

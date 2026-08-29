@@ -76,6 +76,16 @@ class _Sim:
     def _gi(self, cid, pt):
         return self.offsets[cid] + int(pt)
 
+    def _loc(self, gi):
+        """全局序号 → 组件引用形式（cid:局部序号）——错误消息给 LLM 用，
+        全局序号无法定位。"""
+        for cid, off in self.offsets.items():
+            nxt = [o for c, o in self.offsets.items() if o > off]
+            hi = min(nxt) if nxt else self.rw.GetNumAtoms()
+            if off <= gi < hi:
+                return f"{cid}:{gi - off}"
+        return str(gi)
+
     def _bond(self, cid, pt):
         a, _, b = pt.partition("-")
         return self.rw.GetBondBetweenAtoms(self._gi(cid, a), self._gi(cid, b))
@@ -269,7 +279,7 @@ class _Sim:
             if a.GetAtomicNum() in (5, 6, 7, 8, 9) \
                     and bonds + self.pairs[gi] > 4:
                 self.impossible = self.impossible or (
-                    f"原子 {gi}（{a.GetSymbol()}）超八隅体"
+                    f"原子 {self._loc(gi)}（{a.GetSymbol()}）超八隅体"
                     f"（{bonds} 键级 + {self.pairs[gi]} 孤对——"
                     f"进攻/成键后缺配套的断键箭头）")
 
@@ -355,7 +365,9 @@ def simulate(cids_mols, mech_children) -> list:
         if sim.impossible is None:
             sim.finalize()
             frags, err = sim.fragment()
-            results.append((frags, err or sim.impossible, sim.trace))
+            # 引擎自身的原因（含 cid:局部序号定位）优先于 RDKit 的消毒报错
+            #（后者只有碎片内序号，LLM 无法定位到组件）
+            results.append((frags, sim.impossible or err, sim.trace))
         else:
             results.append((None, sim.impossible, sim.trace))
     return results
@@ -438,8 +450,8 @@ def verify_step(left, mech_children, right) -> tuple:
     if mismatch_info is None:
         # 所有变体都不可能——箭头在化学上不成立（确定的错侧判定）
         reason = next((r for _, r, _ in results if r), "无法构成合法结构")
-        return (f"MECHARROW 电子流模拟：按这些箭头推导{reason}——"
-                f"箭头在化学上不成立，请重画机理箭头"), traces
+        return (f"MECHARROW 电子流模拟：按这些箭头推导会得到化学上不成立的"
+                f"结构（{reason}）——箭头画错，请重画机理箭头"), traces
     frags, missing = mismatch_info
     pred_desc = _smiles_of(frags)
     miss_desc = "、".join(missing)

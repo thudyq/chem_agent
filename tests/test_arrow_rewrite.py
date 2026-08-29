@@ -267,3 +267,68 @@ def test_rewrite_rejects_invalid_llm_output():
                                          _BAD_PROTONATION, tag) is None
     finally:
         app_mod.ask_llm = orig_ask
+
+
+# ---------- P2：电子流模拟结论注入手术重写（20260828） ----------
+
+# 均裂两根鱼钩都归同一原子（模式规则不查，模拟器兜底拦截）
+_SIM_FAIL = (
+    "[COMPOSITE:reaction]"
+    "[STRUCT:ClCl,label=Cl2,id=cl2]"
+    "[ARROW:type=single,hν]"
+    "[STRUCT:[Cl],label=Cl·,id=cl1][PLUS][STRUCT:[Cl],label=Cl·,id=cl2b]"
+    "[MECHARROW:cl2:0-1>>cl2:0][MECHARROW:cl2:0-1>>cl2:0]"
+    "[/COMPOSITE]"
+)
+_FIXED_HOMOLYSIS = _SIM_FAIL.replace(
+    "[MECHARROW:cl2:0-1>>cl2:0][MECHARROW:cl2:0-1>>cl2:0]",
+    "[MECHARROW:cl2:0-1>>cl2:0][MECHARROW:cl2:0-1>>cl2:1]")
+
+
+def test_surgical_includes_sim_conclusion(monkeypatch):
+    """电子流模拟失败 → 手术重写 prompt 注入模拟结论（含推得的实际
+    结构与未推出的声明产物），引导 LLM 针对性修正。"""
+    pytest.importorskip("rdkit")
+    calls = []
+    monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
+    monkeypatch.setattr("app.ask_llm", _dispatch({
+        "main": f"氯气在光照下均裂：\n\n{_SIM_FAIL}",
+        "surgical": _FIXED_HOMOLYSIS,
+        "correction": "（不应被调用）",
+    }, calls))
+    result = process_question("氯气在光照下的裂解机理", max_corrections=1)
+    assert len(calls) == 2                          # 主生成 + 手术重写
+    surg = calls[1]
+    assert surg["sp"] == load_mech_arrow_prompt()
+    assert "电子流模拟" in surg["q"]                 # 模拟结论注入（P2）
+    assert "不成立" in surg["q"]                      # 含模拟失败原因（双自由基超价）
+    assert "tikzpicture" in result                   # 重写后渲染成功
+
+
+def test_surgical_no_sim_section_for_pattern_errors(monkeypatch):
+    """对照：非模拟类箭头错误（跨步）不注入模拟结论段落。"""
+    pytest.importorskip("rdkit")
+    calls = []
+    monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
+    monkeypatch.setattr("app.ask_llm", _dispatch({
+        "main": _BAD_PROTONATION,
+        "surgical": _FIXED_PROTONATION,
+        "correction": "（不应被调用）",
+    }, calls))
+    process_question("乙醇被质子酸质子化的过程", max_corrections=1)
+    assert len(calls) == 2
+    assert "电子流模拟" not in calls[1]["q"]          # 无模拟结论段落
+
+
+def test_correction_prompt_sim_guidance():
+    """常规修正 prompt：电子流模拟类失败附定向修正指引（优先改箭头，
+    预期产物可参考模拟推得结构）。"""
+    pytest.importorskip("rdkit")
+    from core.tag_parser import parse_tags
+    from core.tag_validator import validate_tag
+    tag = parse_tags(_SIM_FAIL)[0]
+    vr = validate_tag(tag)
+    assert not vr.ok and "电子流模拟" in vr.reason
+    prompt = _build_correction_prompt("氯气光解", _SIM_FAIL, [(tag, vr.reason)])
+    assert "优先" in prompt and "推出声明产物" in prompt
+    assert "预期产物" in prompt
