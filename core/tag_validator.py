@@ -1193,6 +1193,24 @@ def _check_radical_charge_conflict(mol) -> str:
     return ""
 
 
+def check_protonated_label(mol, label: str) -> str:
+    """（20260821，Q4 连续基线失败）label 标「质子化」但 SMILES 中没有
+    带正电的杂原子——典型的 CCOCC 配"质子化乙醚"错写。质子化醇/醚/羰基
+    的杂原子带 +1。「去质子化/脱质子化」不含「质子化」标注语义，不触发。
+    返回原因串（"" = 通过/不涉及）。replay 工具复用。"""
+    atoms_fn = getattr(mol, "GetAtoms", None)
+    if not label or atoms_fn is None:
+        return ""
+    if not re.search(r"(?<!去)(?<!脱)质子化", label):
+        return ""
+    if any(a.GetFormalCharge() > 0 and a.GetAtomicNum() in (7, 8, 16)
+           for a in atoms_fn()):
+        return ""
+    return (f"label 标注「质子化」但 SMILES 中没有带正电的杂原子——"
+            f"质子化醇/醚/羰基的杂原子带 +1：质子化醇 CC[OH2+]、"
+            f"质子化醚 CC[OH+]CC、质子化羰基 CC=[OH+]，请按正确写法重写")
+
+
 def _check_radical_label(mol, label: str) -> str:
     """（20260826）label 含「自由基」→ SMILES 必须有且仅有一个原子带
     恰好 1 个自由基单电子。
@@ -1572,16 +1590,9 @@ def _validate_struct_args(args: list, attrs: dict = None) -> Tuple[bool, str]:
             # 氧鎓一致性（20260821，Q4 连续基线失败）：label 标「质子化」
             # 但 SMILES 无带正电杂原子——典型的 CCOCC 配"质子化乙醚"错写
             label_text = args[1] if len(args) > 1 else ""
-            atoms_fn = getattr(mol, "GetAtoms", None)
-            if label_text and atoms_fn is not None \
-                    and re.search(r"(?<!去)(?<!脱)质子化", label_text) \
-                    and not any(a.GetFormalCharge() > 0
-                                and a.GetAtomicNum() in (7, 8, 16)
-                                for a in atoms_fn()):
-                return False, (f"label 标注「质子化」但 SMILES 中没有带正电的"
-                               f"杂原子——质子化醇/醚/羰基的杂原子带 +1："
-                               f"质子化醇 CC[OH2+]、质子化醚 CC[OH+]CC、"
-                               f"质子化羰基 CC=[OH+]，请按正确写法重写")
+            pro_reason = check_protonated_label(mol, label_text)
+            if pro_reason:
+                return False, pro_reason
             # 自由基一致性（20260826）：label 含「自由基」→ SMILES 必须有且
             # 仅有一个原子带恰好 1 个自由基单电子
             rad_reason = _check_radical_label(mol, label_text)
