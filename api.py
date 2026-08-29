@@ -35,7 +35,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from app import process_question
 from core.attachments import build_attachments, replace_code_blocks_with_images
-from core import answer_cache
+from core import answer_cache, diaglog
 from core.config import settings
 
 app = FastAPI(title="Chem_Agent", version="1.0.0")
@@ -468,6 +468,9 @@ def _sse_stream(question: str, history: list, cid: str, created: int,
             return
         answer = _strip_md_images(answer)
         _log_diagnostics(diag)
+        # 完整诊断落盘（同非流式路径，JSONL 完整记录供离线 replay）
+        diaglog.log_request(question, cid, diag,
+                            responses[-1] if responses else None)
         try:
             attachments = build_attachments(answer or "", public_base) \
                 if answer else []
@@ -601,6 +604,10 @@ async def chat_completions(request: Request, authorization: str | None = Header(
         or "（未能生成回答）"
     answer = _strip_md_images(answer)
     _log_diagnostics(diag)
+    # 完整诊断落盘（JSONL，journald 摘要之外的完整记录——长 COMPOSITE
+    # 的完整原文/原因在日志打印中被截断，落盘供离线 replay 精确重放）
+    diaglog.log_request(question, cid, diag,
+                        responses[-1] if responses else None)
     try:
         attachments = build_attachments(answer, public_base)
     except Exception as e:  # 编译异常不拖垮已生成的文本回答（与流式路径一致）
