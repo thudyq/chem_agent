@@ -30,10 +30,11 @@ from renderers.registry import RENDERER_REGISTRY, render_tag
 _RENDER_ERROR_PREFIX = "（"
 
 
-def _composite_trace(tag) -> list:
-    """COMPOSITE 语义规则逐项判定（复用校验器的独立检查函数，只读不改）。"""
+def _composite_trace(tag) -> tuple:
+    """COMPOSITE 语义规则逐项判定（复用校验器的独立检查函数，只读不改）。
+    返回 (检查项列表, 电子流模拟操作日志)。"""
     if not _RDKIT_OK:
-        return [("语义规则", "SKIP（RDKit 不可用，跳过）")]
+        return [("语义规则", "SKIP（RDKit 不可用，跳过）")], []
     children = tag.args[1] if len(tag.args) > 1 else []
     comps, comp_mols, mech = {}, {}, []
     for cid, child in iter_struct_components(children):
@@ -63,7 +64,12 @@ def _composite_trace(tag) -> list:
     if layout == "reaction":
         checks.append(("reaction 守恒",
                        _check_reaction_sequence(children, comps)))
-    return checks
+    # 电子流模拟（P1）：机理箭头能否推出声明产物；失败时附操作日志
+    from core.electron_sim import verify_composite_electron_flow
+    sim_reason, sim_trace = verify_composite_electron_flow(
+        children, comps, comp_mols)
+    checks.append(("电子流模拟", sim_reason))
+    return checks, sim_trace
 
 
 def _struct_trace(tag) -> list:
@@ -112,7 +118,12 @@ def replay(text: str, full: bool = False) -> int:
             print(f"判定: ✗ 拦截 — {vr.reason}")
         if tag.type == "COMPOSITE":
             print("  语义规则 trace:")
-            _print_trace(_composite_trace(tag))
+            checks, sim_trace = _composite_trace(tag)
+            _print_trace(checks)
+            if sim_trace:
+                print("  电子流操作日志:")
+                for t in sim_trace:
+                    print(f"    | {t}")
         elif tag.type == "STRUCT":
             print("  标签检查 trace:")
             _print_trace(_struct_trace(tag))

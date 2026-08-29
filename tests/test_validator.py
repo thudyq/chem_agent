@@ -557,10 +557,14 @@ def test_bond_ref_gives_neighbor_hint():
 
 
 def test_composite_mecharrow_existing_bond_passes():
-    """a-b 端点引用真实存在的键（乙醛 0-1）放行。"""
+    """a-b 端点引用真实存在的键放行。（20260828：夹具换成化学完整的
+    羟醛去质子——原 `ald:0>ald:0-1`（原子→键、无配套）在电子流模拟器
+    下不成立；新夹具的 ald:0-1（C—H 键中点）同样覆盖"键真实存在"路径）"""
     pytest.importorskip("rdkit")
-    text = ("[COMPOSITE:reaction][STRUCT:CC=O,id=ald][ARROW:type=single]"
-            "[STRUCT:CCO,id=p0][MECHARROW:ald:0>ald:0-1][/COMPOSITE]")
+    text = ("[COMPOSITE:reaction][STRUCT:C([H])C=O,id=ald][PLUS]"
+            "[STRUCT:[OH-],id=base][ARROW:type=single]"
+            "[STRUCT:[CH2-]C=O,id=en][PLUS][STRUCT:O,id=w]"
+            "[MECHARROW:base:0>ald:1][MECHARROW:ald:0-1>ald:0][/COMPOSITE]")
     _, invalid = _validate(text)
     assert len(invalid) == 0
 
@@ -891,28 +895,35 @@ class TestMechArrowExplicitH:
     """
 
     def test_explicit_h_endpoint_passes(self):
-        """ch4:1（显式 H 原子序号）引用 → 放行。"""
+        """ch4:1（显式 H 原子序号）在成键空白位被引用 → 放行。
+        （20260828：箭头更新为 prompt 示例 8 的规范完整写法——原夹具的
+        H 原子作鱼钩源（ch4:1>>）在电子流模拟器下不成立，H 上没有
+        可给的单电子；C—H 键的一个电子应以键中点（ch4:0-1）为源）"""
         pytest.importorskip("rdkit")
         text = ("[COMPOSITE:reaction]"
                 "[STRUCT:[Cl],id=cl,label=Cl·][PLUS]"
                 "[STRUCT:C([H])([H])([H])[H],id=ch4,label=CH4]"
                 "[ARROW:type=single]"
                 "[STRUCT:Cl,id=hcl,label=HCl][PLUS][STRUCT:[CH3],id=me,label=·CH3]"
-                "[MECHARROW:cl:0>>cl:0+ch4:0]"
-                "[MECHARROW:ch4:1>>cl:0+ch4:0]"
-                "[MECHARROW:ch4:1>>ch4:0]"
+                "[MECHARROW:cl:0>>cl:0+ch4:1]"
+                "[MECHARROW:ch4:0-1>>cl:0+ch4:1]"
+                "[MECHARROW:ch4:0-1>>ch4:0]"
                 "[/COMPOSITE]")
         _, invalid = _validate(text)
         assert len(invalid) == 0
 
     def test_explicit_h_bond_break_passes(self):
-        """C–H 键断键（ch4:0-1 键中点）→ 放行（键真实存在）。"""
+        """C–H 键断键（ch4:0-1 键中点）→ 放行（键真实存在）。
+        （20260828：补全夺氢的完整三鱼钩——单个均裂鱼钩在电子流模拟器
+        下推不出声明产物；写法与 prompt 示例 8 一致）"""
         pytest.importorskip("rdkit")
         text = ("[COMPOSITE:reaction]"
                 "[STRUCT:[Cl],id=cl,label=Cl·][PLUS]"
                 "[STRUCT:C([H])([H])([H])[H],id=ch4,label=CH4]"
                 "[ARROW:type=single]"
                 "[STRUCT:Cl,id=hcl,label=HCl][PLUS][STRUCT:[CH3],id=me,label=·CH3]"
+                "[MECHARROW:cl:0>>cl:0+ch4:1]"
+                "[MECHARROW:ch4:0-1>>cl:0+ch4:1]"
                 "[MECHARROW:ch4:0-1>>ch4:0]"
                 "[/COMPOSITE]")
         _, invalid = _validate(text)
@@ -1036,15 +1047,17 @@ def test_benzene_style_consistency_warning():
     from core.tag_validator import get_last_warnings
 
     # 场景1：苯用凯库勒A，硝基苯用凯库勒B → 警告
+    # （20260828：箭头补全为完整机理——π 进攻需配 N=O 补偿，脱质子源应为
+    # C—H 键中点 sigma:3-4 而非 H 原子 sigma:4；电子流模拟器要求完整配对）
     text = (
         "[COMPOSITE:reaction][STRUCT:C1C=CC=CC=1,label=苯,id=ar]"
         "[PLUS][STRUCT:[N+](=O)=O,label=NO2+,id=nu]"
         "[ARROW:type=single][STRUCT:O=[N+]([O-])C([H])1C=CC=C[CH+]1,label=σ 络合物,id=sigma]"
-        "[MECHARROW:ar:0-5>nu:0][/COMPOSITE]"
+        "[MECHARROW:ar:0-5>nu:0][MECHARROW:nu:0-1>nu:1][/COMPOSITE]"
         "\n"
         "[COMPOSITE:reaction][STRUCT:O=[N+]([O-])C([H])1C=CC=C[CH+]1,label=σ 络合物,id=sigma]"
         "[ARROW:type=single][STRUCT:O=[N+]([O-])C1=CC=CC=C1,label=硝基苯][PLUS][STRUCT:[H+],label=H+]"
-        "[MECHARROW:sigma:4>sigma:3-9][/COMPOSITE]"
+        "[MECHARROW:sigma:3-4>sigma:3-9][/COMPOSITE]"
     )
     _, invalid = _validate(text)
     assert len(invalid) == 0  # 不拦截
@@ -1288,10 +1301,12 @@ def test_sn2_attack_site():
         "[MECHARROW:nu:0>sub:0][/COMPOSITE]")
     assert any("进攻位点" in r.reason and "sub:1" in r.reason for r in bad)
     # B：攻 α-C（1 号，连 OH2+）→ 放行（质子化乙醇 + 氢氧根 → 乙醇 + 水）
+    # （20260828：电子流模拟器上线后，进攻箭头必须配套断键箭头——只画进攻
+    # 不画离去会得到超价碳，属不完整机理；补全 sub:1-2>sub:2）
     _, ok = _validate(
         "[COMPOSITE:reaction][STRUCT:CC[OH2+],id=sub][PLUS][STRUCT:[OH-],id=nu]"
         "[ARROW:type=single][STRUCT:CCO,id=p][PLUS][STRUCT:O,id=w]"
-        "[MECHARROW:nu:0>sub:1][/COMPOSITE]")
+        "[MECHARROW:nu:0>sub:1][MECHARROW:sub:1-2>sub:2][/COMPOSITE]")
     assert not ok, [r.reason for r in ok]
     # B2：卤素底物攻 α-C（示例 3 SN2）→ 放行
     _, ok2 = _validate(
@@ -1299,11 +1314,12 @@ def test_sn2_attack_site():
         "[ARROW:type=single][STRUCT:CO][PLUS][STRUCT:[Cl-]]"
         "[MECHARROW:nu:0>r0:0][MECHARROW:r0:0-1>r0:1][/COMPOSITE]")
     assert not ok2, [r.reason for r in ok2]
-    # C：终点组件含双键（如 BrC=C）→ 不查（共轭/羰基模式豁免）
+    # C：终点组件含双键（羰基加成：乙醛水合）→ 进攻位点规则不查（豁免），
+    # 电子流完整（进攻 + π 转移补偿）→ 放行
     _, ok3 = _validate(
-        "[COMPOSITE:reaction][STRUCT:BrC=C,id=v][PLUS][STRUCT:[OH-],id=nu]"
-        "[ARROW:type=single][STRUCT:C=CO,id=p][PLUS][STRUCT:[Br-],id=br]"
-        "[MECHARROW:nu:0>v:2][/COMPOSITE]")
+        "[COMPOSITE:reaction][STRUCT:CC=O,id=ald][PLUS][STRUCT:[OH-],id=nu]"
+        "[ARROW:type=single][STRUCT:CC(O)[O-],id=p]"
+        "[MECHARROW:nu:0>ald:1][MECHARROW:ald:1-2>ald:2][/COMPOSITE]")
     assert not ok3, [r.reason for r in ok3]
     # D：终点组件无离去基团（碳正离子被水进攻，SN1 第二步）→ 不查
     _, ok4 = _validate(
@@ -1397,13 +1413,15 @@ def test_polar_arrow_target_full_octet_cation():
         "[MECHARROW:nu:2>pe:1][MECHARROW:pe:1-2>pe:2][/COMPOSITE]")
     assert not bad2, [r.reason for r in bad2]
     # 不误伤：水进攻碳正离子 / 苯 π 进攻 NO2+ / 苯 π 进攻 [Br+]
+    # （20260828：π 进攻补 N=O 补偿箭头——缺补偿则 N 超价，电子流模拟器
+    # 判不可能；Br+ 是三周期亲电体，可成键扩八隅，无需补偿）
     for t in ("[COMPOSITE:reaction][STRUCT:C[C+](C)C,id=c][PLUS][STRUCT:O,id=w]"
               "[ARROW:type=single][STRUCT:CC(C)(C)[OH2+],id=o]"
               "[MECHARROW:w:0>c:1][/COMPOSITE]",
               "[COMPOSITE:reaction][STRUCT:C1=CC=CC=C1,id=bz][PLUS]"
               "[STRUCT:O=[N+](=O),id=no2][ARROW:type=single]"
               "[STRUCT:O=[N+]([O-])C([H])1C=CC=C[CH+]1,id=sg]"
-              "[MECHARROW:bz:0-1>no2:1][/COMPOSITE]",
+              "[MECHARROW:bz:0-1>no2:1][MECHARROW:no2:0-1>no2:0][/COMPOSITE]",
               "[COMPOSITE:reaction][STRUCT:C1=CC=CC=C1,id=bz][PLUS]"
               "[STRUCT:[Br+],id=brp][ARROW:type=single]"
               "[STRUCT:BrC1([H])C=CC=C[CH+]1,id=sg]"
@@ -1426,18 +1444,21 @@ def test_pi_attack_target_not_neutral_oxygen():
     assert len(bad) == 1, [r.reason for r in bad]
     assert "中性氧" in bad[0].reason and "so3:1" in bad[0].reason, bad[0].reason
     # 正确磺化（π→S，S=O→O 补偿，同分子重排）放行
+    # （20260828：补偿箭头更正为 so3:1-2>so3:2——π 对必须流向**该键自身**
+    # 的氧（1-2 键的 2 号 O）；原夹具 so3:0-1>so3:2 把 0-1 键的电子写给
+    # 2 号 O（张冠李戴），电子流模拟器会因此成出 O—O/S—O 怪键）
     _, ok = _validate(
         "[COMPOSITE:reaction][STRUCT:C1=CC=CC=C1,id=ar][PLUS]"
         "[STRUCT:O=S(=O)=O,id=so3][ARROW:type=single]"
         "[STRUCT:O=S([O-])(=O)C([H])1C=CC=C[CH+]1,id=sigma]"
-        "[MECHARROW:ar:0-1>so3:1][MECHARROW:so3:0-1>so3:2][/COMPOSITE]")
+        "[MECHARROW:ar:0-1>so3:1][MECHARROW:so3:1-2>so3:2][/COMPOSITE]")
     assert not ok, [r.reason for r in ok]
-    # 正确硝化（π→N）放行
+    # 正确硝化（π→N + N=O π→O 补偿）放行
     _, ok2 = _validate(
         "[COMPOSITE:reaction][STRUCT:C1=CC=CC=C1,id=ar][PLUS]"
         "[STRUCT:[N+](=O)=O,id=nu][ARROW:type=single]"
         "[STRUCT:O=[N+]([O-])C([H])1C=CC=C[CH+]1,id=sigma]"
-        "[MECHARROW:ar:0-1>nu:0][MECHARROW:nu:0-1>nu:2][/COMPOSITE]")
+        "[MECHARROW:ar:0-1>nu:0][MECHARROW:nu:0-1>nu:1][/COMPOSITE]")
     assert not ok2, [r.reason for r in ok2]
     # SN2 孤对 → 碳 放行
     _, ok3 = _validate(
@@ -1597,12 +1618,15 @@ def test_eas_rearomatization_target():
     assert not ok, [r.reason for r in ok]
     # D：饱和环碳正离子的氢迁移不拦（无环内双键，非 σ 络合物——
     # C—H → C+ 原子是氢负迁移的合法画法，防误报）
+    # （20260828 更正夹具：r0 为 [H]C1CCCC[CH+]1（H 在 1 号、C+ 在 6 号、
+    # 相邻），氢迁移箭头 r0:1-0>r0:6、产物正离子搬到 1 号——原夹具指向
+    # 5 号普通环碳且产物正离子未搬家，化学上不成立）
     _, ok2 = _validate(
         "[COMPOSITE:reaction]"
         "[STRUCT:[H]C1CCCC[CH+]1,label=环己基正离子,id=r0]"
         "[ARROW:type=single]"
-        "[STRUCT:C1CCC[CH+]C1,label=迁移后,id=r1]"
-        "[MECHARROW:r0:1-0>r0:5]"
+        "[STRUCT:[CH+]1CCCCC1,label=迁移后,id=r1]"
+        "[MECHARROW:r0:1-0>r0:6]"
         "[/COMPOSITE]")
     assert not ok2, [r.reason for r in ok2]
     # E：非环脱质子不拦（羟醛 α-H，电子落回碳是合法画法）
@@ -1707,14 +1731,17 @@ def test_elimination_pi_target():
         "[MECHARROW:w:0>r0:4][MECHARROW:r0:3-4>r0:1-3]"
         "[/COMPOSITE]")
     assert not ok, [r.reason for r in ok]
-    # C：1,2-氢迁移不拦（C—H 电子 → C+ 原子是氢负迁移的合法画法，
-    # 叔丁基重排简并、产物同结构）——dst=b（C+ 原子）不触发
+    # C：1,2-氢迁移不拦（C—H 电子 → C+ 原子是氢负迁移的合法画法——
+    # 正丙基正离子 → 异丙基正离子；H 带着电子对搬到相邻 C+ 上）。
+    # （20260828 更正夹具：原"叔丁基简并重排"写法化学错误——叔丁基的氢
+    # 迁移产物是异丁基正离子（伯碳），并非同物；且原箭头指向 C1 未形成
+    # H 迁移。新夹具为正丙基→异丙基的标准 1,2-氢迁移）
     _, ok = _validate(
         "[COMPOSITE:reaction]"
-        "[STRUCT:C[C+](C)C([H])[H],label=碳正离子,id=r0]"
+        "[STRUCT:CC([H])[CH2+],label=正丙基碳正离子,id=r0]"
         "[ARROW:type=single]"
-        "[STRUCT:C[C+](C)C([H])[H],label=重排后,id=p]"
-        "[MECHARROW:r0:3-4>r0:1]"
+        "[STRUCT:C[CH+]C,label=异丙基碳正离子,id=p]"
+        "[MECHARROW:r0:1-2>r0:3]"
         "[/COMPOSITE]")
     assert not ok, [r.reason for r in ok]
     # D：自由脱质子（无碱、产物写 [H+]）同样拦截落回原子

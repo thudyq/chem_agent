@@ -1402,7 +1402,7 @@ def _cn_topology(label: str, main_start: int, c_total: int, suffix: str,
     elif prefix == "正":
         cd, sk = 1, "unbranched"
     elif prefix == "异":
-        sk = "has3"
+        sk = "iso"
     elif prefix == "新":
         sk = "has4"
     elif locant is not None:
@@ -1530,9 +1530,16 @@ def _check_cn_topology(mol, topo: dict, label: str) -> str:
                 f"{topo['src']}应为直链骨架（无分支），你写的有碳连了 "
                 f"{max(cdeg.values())} 个碳（分支骨架——"
                 f"注意 仲（sec）是直链、叔（tert）才有分支）")
-    if sk == "has3" and 3 not in cdeg.values():
+    if sk == "iso" and not any(
+            sum(1 for n in a.GetNeighbors()
+                if n.GetAtomicNum() == 6
+                and cdeg.get(n.GetIdx()) == 1
+                and all(nn.GetAtomicNum() == 6
+                        for nn in n.GetNeighbors())) == 2
+            for a in mol.GetAtoms() if a.GetAtomicNum() == 6):
         return (f"{_CHEM_PREFIX}label「{label}」与 SMILES 不一致——"
-                f"异（iso）骨架应有一个连 3 个碳的分支点，你写的是直链")
+                f"异（iso）骨架应有一个碳恰好连两个甲基（偕二甲基分支点），"
+                f"你写的没有")
     if sk == "has4" and cdeg and 4 not in cdeg.values():
         return (f"{_CHEM_PREFIX}label「{label}」与 SMILES 不一致——"
                 f"新（neo）骨架应有一个连 4 个碳的季碳，你写的没有")
@@ -2588,6 +2595,15 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
             reason = _check_reaction_sequence(children, comps)
             if reason:
                 return False, reason
+        # 电子流模拟（P1，20260828）：机理箭头能否推出声明产物——自洽性
+        # 深层兜底（σ 络合物分子式错、跳中间体、方向反等守恒拦不住的
+        # 错误类）。错侧判定：模拟产物不合法 → 箭头必错；不一致 → 默认
+        # 信产物修箭头（产物已过守恒/价态/label 独立检查）
+        from core.electron_sim import verify_composite_electron_flow
+        sim_reason, _trace = verify_composite_electron_flow(
+            children, comps, comp_mols)
+        if sim_reason:
+            return False, sim_reason
     return True, ""
 
 
