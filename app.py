@@ -281,6 +281,32 @@ def _is_arrow_fixable(tag, err: str) -> bool:
     return len(tag.args) >= 2 and _has_mecharrow(tag.args[1])
 
 
+def _try_diff_autofix(tag):
+    """图 diff 反推箭头（确定性，免 LLM）；重校验通过才返回新原文。"""
+    from core.electron_sim import fix_arrows_by_diff
+    fix = fix_arrows_by_diff(tag)
+    if fix is None:
+        return None
+    _, bad = validate_tags(parse_tags(fix[0]))
+    if bad:
+        return None
+    print(f"[process_question] {fix[1]}")
+    return fix[0]
+
+
+def _try_product_flip(tag):
+    """错侧翻转：产物改为电子流模拟推得结构；重校验通过才返回新原文。"""
+    from core.electron_sim import flip_products_to_simulated
+    flip = flip_products_to_simulated(tag)
+    if flip is None:
+        return None
+    _, bad = validate_tags(parse_tags(flip[0]))
+    if bad:
+        return None
+    print(f"[process_question] {flip[1]}")
+    return flip[0]
+
+
 def _rewrite_composite_arrows(user_question: str, full_text: str, tag,
                               err: str = "", model=None,
                               on_piece=None) -> str | None:
@@ -827,13 +853,24 @@ def _generate_with_corrections(user_question: str, model=None,
                     else:
                         continue
                     surgical_tried.add(t.raw)
-                    if correction_callback is not None:
-                        correction_callback()
                     if kind == "箭头/地图":
-                        new_raw = _rewrite_composite_arrows(
-                            user_question, full_response, t, e, model=model,
-                            on_piece=progress_callback)
+                        # 错侧判定证据序（§16.3）：①确定性 diff 反推（箭头类
+                        # 失败 = 产物已过独立检查、可信，免 LLM）→ ②手术重写
+                        # （带模拟结论）→ ③仅当失败是"模拟不一致"且修箭头不
+                        # 收敛才翻转产物（Q17 类被模式规则拦截的产物是对的，
+                        # 不可翻转——翻转门只认模拟口径）
+                        new_raw = _try_diff_autofix(t)
+                        if new_raw is None:
+                            if correction_callback is not None:
+                                correction_callback()
+                            new_raw = _rewrite_composite_arrows(
+                                user_question, full_response, t, e,
+                                model=model, on_piece=progress_callback)
+                        if new_raw is None and "电子流模拟" in e:
+                            new_raw = _try_product_flip(t)
                     else:
+                        if correction_callback is not None:
+                            correction_callback()
                         new_raw = _rewrite_struct_smiles(
                             user_question, full_response, t, e, model=model,
                             on_piece=progress_callback)

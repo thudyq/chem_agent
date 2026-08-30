@@ -332,3 +332,60 @@ def test_correction_prompt_sim_guidance():
     prompt = _build_correction_prompt("氯气光解", _SIM_FAIL, [(tag, vr.reason)])
     assert "优先" in prompt and "推出声明产物" in prompt
     assert "预期产物" in prompt
+
+
+# ---------- P1.5 管线集成：diff 反推 / 错侧翻转的证据序 ----------
+
+_Q17_WRONG = (
+    "脱质子恢复芳香性：\n\n"
+    "[COMPOSITE:reaction]\n"
+    "[STRUCT:BrC([H])1C=CC=C[CH+]1,label=σ 络合物,id=sigma]\n"
+    "[ARROW:type=single]\n"
+    "[STRUCT:BrC1=CC=CC=C1,label=溴苯][PLUS][STRUCT:[H+],label=H+]\n"
+    "[MECHARROW:sigma:1-2>sigma:1][MECHARROW:sigma:7-1>sigma:7]\n"
+    "[/COMPOSITE]"
+)
+
+_CORPUS_FLIP = (
+    "第二步：亲核取代：\n\n"
+    "[COMPOSITE:reaction]\n"
+    "[STRUCT:CC[OH2+],label=质子化乙醇,id=pro][PLUS][STRUCT:CCO,label=乙醇,id=nu]\n"
+    "[ARROW:type=single]\n"
+    "[STRUCT:CCOCC,label=乙醚][PLUS][STRUCT:O,label=水][PLUS][STRUCT:[H+],label=H+]\n"
+    "[MECHARROW:nu:2>pro:1][MECHARROW:pro:1-2>pro:2]\n"
+    "[/COMPOSITE]"
+)
+
+
+def test_pipeline_diff_autofix_without_llm(monkeypatch):
+    """模拟不一致 → 图 diff 反推确定性修复（零额外 LLM 调用）——
+    修正循环只有主生成一次调用。"""
+    pytest.importorskip("rdkit")
+    calls = []
+    monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
+    monkeypatch.setattr(
+        "app.ask_llm", lambda *a, **k: calls.append(k) or _Q17_WRONG)
+    result = process_question("苯的溴代机理", max_corrections=1)
+    assert len(calls) == 1                       # 反推免 LLM 修正调用
+    assert "tikzpicture" in result               # 修复后渲染成功
+    assert "无法渲染" not in result
+
+
+def test_pipeline_flip_after_surgical_fails(monkeypatch):
+    """模拟不一致 + 反推不适用（多物种合并）+ 手术重写失败 → 翻转产物
+    （乙醚+H+ 合并为模拟推得的质子化乙醚），箭头不动。"""
+    pytest.importorskip("rdkit")
+    calls = []
+
+    def fake_ask(q, system_prompt=None, **k):
+        calls.append({"q": q, "sp": system_prompt})
+        if system_prompt == load_mech_arrow_prompt():
+            return "我改不动这组箭头。"          # 手术重写失败
+        return _CORPUS_FLIP
+
+    monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
+    monkeypatch.setattr("app.ask_llm", fake_ask)
+    result = process_question("乙醇生成乙醚的机理", max_corrections=1)
+    assert len(calls) == 2                       # 主生成 + 手术（翻转免 LLM）
+    assert "tikzpicture" in result
+    assert "无法渲染" not in result

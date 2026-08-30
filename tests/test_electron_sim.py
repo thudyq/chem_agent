@@ -188,3 +188,140 @@ def test_impossible_message_uses_local_refs():
     assert "不成立" in reason
     assert "nu:0" in reason            # 组件:局部序号定位（N 五键超价）
     assert "atom #" not in reason      # 不裸用 RDKit 碎片内序号
+
+
+# ---------- P1.5：图 diff 反推箭头 + 错侧自动翻转 ----------
+
+
+def _fix_arrows(text):
+    from core.electron_sim import fix_arrows_by_diff
+    return fix_arrows_by_diff(parse_tags(text)[0])
+
+
+def _flip(text):
+    from core.electron_sim import flip_products_to_simulated
+    return flip_products_to_simulated(parse_tags(text)[0])
+
+
+def test_diff_autofix_q17():
+    """Q17 病例：错误箭头 → 反推 sigma:1-2>sigma:1-7（脱质子落闭环键），
+    免 LLM，重校验通过。"""
+    pytest.importorskip("rdkit")
+    fix = _fix_arrows(
+        "[COMPOSITE:reaction]"
+        "[STRUCT:BrC([H])1C=CC=C[CH+]1,label=σ 络合物,id=sigma]"
+        "[ARROW:type=single]"
+        "[STRUCT:BrC1=CC=CC=C1,label=溴苯][PLUS][STRUCT:[H+],label=H+]"
+        "[MECHARROW:sigma:1-2>sigma:1][MECHARROW:sigma:7-1>sigma:7]"
+        "[/COMPOSITE]")
+    assert fix is not None
+    assert "[MECHARROW:sigma:1-2>sigma:1-7]" in fix[0]
+    assert "sigma:1-2>sigma:1]" not in fix[0]     # 旧箭头整组作废
+    _, bad = validate_tags(parse_tags(fix[0]))
+    assert not bad, [r.reason for r in bad]
+
+
+def test_diff_autofix_proton_transfer_with_base():
+    """带碱质子转移（羟醛去质子）：diff 推出 碱孤对→H原子 + 键电子回落
+    的配对双箭头（dst 是 H 原子本身，不是键中点）。"""
+    pytest.importorskip("rdkit")
+    fix = _fix_arrows(
+        "[COMPOSITE:reaction]"
+        "[STRUCT:C([H])C=O,label=乙醛,id=ald][PLUS][STRUCT:[OH-],id=base]"
+        "[ARROW:type=single]"
+        "[STRUCT:[CH2-]C=O,label=烯醇负离子][PLUS][STRUCT:O,label=H2O]"
+        "[MECHARROW:base:0>ald:99][MECHARROW:ald:0-1>ald:0][/COMPOSITE]")
+    assert fix is not None
+    assert "[MECHARROW:base:0>ald:1]" in fix[0]        # 碱孤对 → H 原子
+    assert "[MECHARROW:ald:0-1>ald:0]" in fix[0]       # 键电子落回 α-C
+    _, bad = validate_tags(parse_tags(fix[0]))
+    assert not bad, [r.reason for r in bad]
+
+
+def test_diff_autofix_e1_with_base():
+    """带碱 E1 去质子（叔丁基正离子→异丁烯）：显式 H 在 3 号甲基而产物
+    CH2= 写在 0 号——同符号群置换映射（脱氢位点须落在显式 H 上）。"""
+    pytest.importorskip("rdkit")
+    fix = _fix_arrows(
+        "[COMPOSITE:reaction]"
+        "[STRUCT:C[C+](C)C([H])[H],label=叔丁基碳正离子,id=r0][PLUS]"
+        "[STRUCT:O,label=水,id=w]"
+        "[ARROW:type=single,快]"
+        "[STRUCT:C=C(C)C,label=异丁烯,id=p][PLUS][STRUCT:[OH3+],label=H3O+]"
+        "[MECHARROW:w:0>r0:9][/COMPOSITE]")
+    assert fix is not None
+    assert "[MECHARROW:w:0>r0:5]" in fix[0]            # 碱孤对 → 显式 H
+    assert "[MECHARROW:r0:3-5>r0:3-1]" in fix[0]       # C—H 电子 → C—C π 键
+    _, bad = validate_tags(parse_tags(fix[0]))
+    assert not bad, [r.reason for r in bad]
+
+
+def test_diff_autofix_heterolysis():
+    """异裂离去：C—Br 断键电子归 Br（端点自动修复同结果，diff 路径独立
+    验证——离去基团识别不依赖"唯一候选"启发式）。"""
+    pytest.importorskip("rdkit")
+    fix = _fix_arrows(
+        "[COMPOSITE:reaction][STRUCT:CC(C)(C)Br,label=叔丁基溴,id=r0]"
+        "[ARROW:type=single,慢][STRUCT:C[C+](C)C,label=叔丁基碳正离子,id=cat]"
+        "[PLUS][STRUCT:[Br-],label=Br-,id=br]"
+        "[MECHARROW:r0:3-4>r0:4][/COMPOSITE]")
+    assert fix is not None and "r0:1-4>r0:4" in fix[0]
+
+
+def test_diff_autofix_resonance_block():
+    """BLOCK 共振块内 π 移位链：错误箭头 → 反推三条邻位配对的双键转移。"""
+    pytest.importorskip("rdkit")
+    fix = _fix_arrows(
+        "[COMPOSITE:reaction][BLOCK]"
+        "[STRUCT:C1=CC=CC=C1,id=k1,label=式 I][ARROW:type=resonance]"
+        "[STRUCT:C1C=CC=CC=1,id=k2,label=式 II]"
+        "[MECHARROW:k1:0-1>k1:2-3][MECHARROW:k1:4-5>k1:0-5]"
+        "[/BLOCK][/COMPOSITE]")
+    assert fix is not None
+    assert "k1:0-1>k1:0-5" in fix[0]
+    _, bad = validate_tags(parse_tags(fix[0]))
+    assert not bad, [r.reason for r in bad]
+
+
+def test_diff_autofix_none_when_underivable():
+    """多物种合并/拆分（SN2 进攻：两反应物合一产物）无法干净 diff →
+    None（归手术重写路径），不硬猜。"""
+    pytest.importorskip("rdkit")
+    fix = _fix_arrows(
+        "[COMPOSITE:reaction][STRUCT:CCl,id=r0][PLUS][STRUCT:[OH-],id=nu]"
+        "[ARROW:type=single][STRUCT:CO,id=p][PLUS][STRUCT:[Cl-],id=l]"
+        "[MECHARROW:nu:0>r0:0][MECHARROW:r0:0-1>r0:1][/COMPOSITE]")
+    assert fix is None
+
+
+def test_flip_missing_intermediate():
+    """错侧翻转：corpus 真实病例（que_test8 5.png——产物写成乙醚+水+H+，
+    箭头推出质子化乙醚+水）→ 产物改为模拟推得（乙醚+H+ 合并为
+    质子化乙醚），箭头不动，重校验通过。"""
+    pytest.importorskip("rdkit")
+    fix = _flip(
+        "[COMPOSITE:reaction]"
+        "[STRUCT:CC[OH2+],label=质子化乙醇,id=pro][PLUS]"
+        "[STRUCT:CCO,label=乙醇,id=nu]"
+        "[ARROW:type=single]"
+        "[STRUCT:CCOCC,label=乙醚][PLUS][STRUCT:O,label=水][PLUS]"
+        "[STRUCT:[H+],label=H+]"
+        "[MECHARROW:nu:2>pro:1][MECHARROW:pro:1-2>pro:2][/COMPOSITE]")
+    assert fix is not None
+    assert "CC[OH+]CC" in fix[0]                       # 质子化乙醚（模拟推得）
+    assert "[H+]" not in fix[0]                         # 游离 H+ 被合并删除
+    _, bad = validate_tags(parse_tags(fix[0]))
+    assert not bad, [r.reason for r in bad]
+
+
+def test_flip_not_for_impossible_arrows():
+    """箭头化学上不成立（H 原子无单电子可给）→ 错在箭头不在产物，
+    不翻转（返回 None）。"""
+    pytest.importorskip("rdkit")
+    fix = _flip(
+        "[COMPOSITE:reaction]"
+        "[STRUCT:[Cl],id=cl,label=Cl·][PLUS][STRUCT:C([H]),id=ch4,label=CH4]"
+        "[ARROW:type=single]"
+        "[STRUCT:Cl,id=hcl,label=HCl][PLUS][STRUCT:[CH3],id=me,label=·CH3]"
+        "[MECHARROW:ch4:1>>cl:0+ch4:1][/COMPOSITE]")
+    assert fix is None
