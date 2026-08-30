@@ -148,8 +148,13 @@ def parse_smiles(smiles: str):
 
 
 def validate_smiles(smiles: str) -> bool:
-    """校验 SMILES 是否合法。合法返回 True，否则 False。"""
-    return parse_smiles(smiles) is not None
+    """校验 SMILES 是否合法。合法返回 True，否则 False。
+
+    屏蔽 RDKit 的 Parse Error 警告刷屏（校验本就是"尝试解析"，非法输入的
+    stderr 报错无诊断价值，且会在批量校验/识图对比时刷屏）。
+    """
+    with mute_rdkit_warnings(include_error=True):
+        return parse_smiles(smiles) is not None
 
 
 def mol_to_formula(smiles: str) -> str:

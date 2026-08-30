@@ -69,10 +69,17 @@ def _structure_smiles_ok(content: str, ctype: str) -> bool:
     s = (content or "").strip()
     if not s:
         return True
-    # 显式 SMILES: 声明（token 到逗号/分号/空白为止）
-    claim = re.search(r"SMILES\s*[:：]\s*([^\s,，;；]+)", s)
+    # 显式 SMILES: 声明——token 只取纯 SMILES 字符，碰到中文/括号/句逗即止，
+    # 否则会把"c1ccccc1（等价写法：C1=CC=CC=C1）。"整串拿去解析而误判非法
+    # （模型其实已给出合法 SMILES，只是带了注释，应视为正确并放行）。
+    # 允许的 SMILES 字符：字母数字 + 成键/环/立体/电荷/配位等符号。
+    claim = re.search(r"SMILES\s*[:：]\s*([^\s，。；、()（）【】\[\]{}]*[\w=\-+#@/[\]()*%\.\\]+)", s)
     if claim:
-        return _is_valid_smiles(claim.group(1))
+        tok = claim.group(1).strip().rstrip("，。；、()（）")
+        if tok and not re.search(r"[\u4e00-\u9fff]", tok):
+            return _is_valid_smiles(tok)
+        # 声明里混了中文（描述性）→ 不做硬判，放行
+        return True
     # 无显式声明：单一、无汉字、无空格的化学串 → 当裸 SMILES 校验
     if not re.search(r"[\u4e00-\u9fff]", s) and not re.search(r"\s", s):
         return _is_valid_smiles(s)
