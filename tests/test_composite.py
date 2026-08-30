@@ -262,6 +262,10 @@ def test_format_chem_text():
     assert format_chem_text("NH4+") == "NH$_4$$^{+}$"
     assert format_chem_text("OH$^-$") == "OH$^-$"
     assert format_chem_text("") == ""
+    # Drawbacks bug：中文化学名含位次号、"1-" 位于行尾（说明是名称碎片）时，
+    # 不得把位次号误判为电荷上标；纯化学式尾部电荷仍应转为上标。
+    assert format_chem_text("3-溴-1-") == "3-溴-1-"
+    assert format_chem_text("3-溴-1-甲基环己烯") == "3-溴-1-甲基环己烯"
     # 加热符号（Drawbacks 第 7 条）：△(U+25B3) lmroman 缺字形 → 数学模式
     assert format_chem_text("CuO, △") == "CuO, $\\triangle$"
     assert format_chem_text("CuO, Δ") == "CuO, $\\Delta$"

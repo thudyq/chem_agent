@@ -96,3 +96,12 @@ def test_label_wrapped_size_returns_width_height():
     w, h = label_wrapped_size("质子化乙醇的反应中间体")
     assert w > 0 and h > 0
     assert abs(h - 0.35 * len(wrap_label_lines("质子化乙醇的反应中间体"))) < 1e-9
+
+
+def test_wrap_format_text_name_locant_no_superscript():
+    """Drawbacks bug：中文化学名含位次号（3-溴-1-甲基环己烯）被换行成
+    "3-溴-1-" 行尾时，位次号 "1-" 不得被误判为电荷上标（$^{1-}$）。"""
+    out = wrap_format_text("3-溴-1-甲基环己烯")
+    assert "$^{1-}$" not in out
+    assert "$^{-}$" not in out          # 不应引入任何电荷上标
+    assert "3-溴-1-" in out and "甲基环己烯" in out   # 名称内容完整保留

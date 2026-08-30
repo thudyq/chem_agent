@@ -1650,7 +1650,10 @@ def format_chem_text(text: str) -> str:
     """化学文本自动排版：字母/括号后的数字转下标，尾部电荷转上标。
 
     先剥离尾部电荷（含电荷数），再对余下文本转下标，保证「SO42-」
-    中 4 为下标、2- 为上标。已含 $（已手工排版）或为空时原样返回。
+    中 4 为下标、2- 为上标。尾部 [+-] 仅在纯化学式末尾才视为电荷：
+    前置文本含连字符（位次号/键，如被换行拆出的中文名 "3-溴-1-"）说明
+    是名称碎片而非电荷，不转上标（修复 Drawbacks：3-溴-1-甲基环己烯的
+    "1-" 被误判为电荷）。已含 $（已手工排版）或为空时原样返回。
      Unicode 上下标（H₂SO₄、H⁺、SO₄²⁻、Ca²⁺ 等）先转 LaTeX 命令。
      加热/希腊符号转数学模式：△（U+25B3）→ $\\triangle$；全部小写
      希腊字母与有大写命令的大写（α β γ δ ε ν π σ ω Γ Δ Θ Λ Ξ Π Σ Υ Φ
@@ -1669,8 +1672,12 @@ def format_chem_text(text: str) -> str:
     charge = ""
     m = _CHARGE_TAIL_RE.search(text)
     if m:
-        charge = f"$^{{{m.group(1) or ''}{m.group(2)}}}$"
-        text = text[: m.start()]
+        # 尾部 [+-] 只在纯化学式末尾才是电荷。前置文本含连字符（位次号/键）
+        # 说明这是名称碎片（如被换行的中文名 "3-溴-1-"），不是电荷，不转上标。
+        charge_body = text[: m.start()]
+        if "-" not in charge_body:
+            charge = f"$^{{{m.group(1) or ''}{m.group(2)}}}$"
+            text = text[: m.start()]
     out = _SUBSCRIPT_RE.sub(r"\1$_\2$", text) + charge
     # 必须最后替换：提前插入 $ 会使尾部电荷正则 _CHARGE_TAIL_RE 失效
     out = out.replace("△", r"$\triangle$").replace("Δ", r"$\Delta$")
