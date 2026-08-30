@@ -608,6 +608,55 @@ def test_history_cache_miss_falls_back_to_strip(client, monkeypatch):
     assert "[COMPOSITE" not in hist[1]["content"]    # 未命中不恢复
 
 
+def test_is_correction_intent():
+    """修正/重画意图检测：命中才去锚定。"""
+    assert api._is_correction_intent("重画一下")
+    assert api._is_correction_intent("你画错了")
+    assert api._is_correction_intent("再画一遍")
+    assert api._is_correction_intent("这个结构不对")
+    assert api._is_correction_intent("重新绘制总反应")     # 20260830 补：重绘变体
+    assert api._is_correction_intent("重新绘制 3,3-二甲基-2-丁醇脱水重排的总反应式")
+    assert not api._is_correction_intent("继续画那个环己烷")
+    assert not api._is_correction_intent("这是什么结构")
+
+
+def test_extract_history_deanchor_strips_markers():
+    """修正回合去锚定：assistant 历史不恢复上一轮标记（避免照着抄错图）；
+    正常追问则恢复（作为 few-shot）。"""
+    answer_cache.clear()
+    render = ("这是 3-溴-1-甲基环己烯的结构：\n"
+              "\\begin{tikzpicture}\\draw (0,0);\\end{tikzpicture}\n"
+              "\n![化学图示-1](https://x/img.png)\n")
+    raw = ("这是 3-溴-1-甲基环己烯的结构：\n"
+           "[STRUCT:CC1=CC(Br)CCC1,label=3-溴-1-甲基环己烯]\n")
+    answer_cache.store(render, raw)
+    msgs = [{"role": "user", "content": "画 3-溴-1-甲基环己烯"},
+            {"role": "assistant", "content": render},
+            {"role": "user", "content": "你画错了，重画"}]
+    h_restore = api._extract_history(msgs, deanchor=False)
+    h_deanchor = api._extract_history(msgs, deanchor=True)
+    assert "[STRUCT:" in h_restore[1]["content"]          # 正常追问恢复标记
+    assert "[STRUCT:" not in h_deanchor[1]["content"]      # 修正回合去锚定
+    assert "3-溴-1-甲基环己烯" in h_deanchor[1]["content"]  # 散文保留
+    answer_cache.clear()
+
+
+def test_maybe_add_correction_directive_injects_reason():
+    """修正回合且上一轮被校验拦截 → 附失败原因，去锚定重画。"""
+    answer_cache.clear()
+    answer_cache.store("渲染A", "[STRUCT:CCO]",
+                       meta={"failed": True, "reason": "化学校验：不守恒"})
+    msgs = [{"role": "user", "content": "画乙醛"},
+            {"role": "assistant", "content": "渲染A"},
+            {"role": "user", "content": "重画"}]
+    out = api._maybe_add_correction_directive("重画", "重画", msgs)
+    assert "未通过校验" in out
+    assert "化学校验：不守恒" in out and "不要照抄" in out
+    out2 = api._maybe_add_correction_directive("画苯", "画苯", msgs)
+    assert out2 == "画苯"                 # 非修正回合不追加
+    answer_cache.clear()
+
+
 def test_stream_registers_answer_cache(client, monkeypatch):
     """流式路径同样登记缓存（拼接后的完整 display 为 key）。"""
     answer_cache.clear()

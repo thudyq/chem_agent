@@ -232,12 +232,71 @@ def _strip_md_images(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", text)
 
 
-def _extract_history(messages: list, max_items: int = 10) -> list:
+# 修正/重画意图：当前用户消息命中这些词，判定为"让模型重画/修正"——多轮修正
+# 时**去锚定**（不把上一轮标记喂回，否则模型照着抄错图）；若上一轮被校验器
+# 拦而用户不懂原因，则把失败原因一并回传给模型（多轮修正方案）。
+_CORRECTION_RE = re.compile(
+    r"画错|错了|不对|不正确|不是这个|不是这样|重画|重新画|再画|重画一下|重画一遍"
+    r"|重新绘制|重绘|再绘制|修正|更正|改错|重新给|重新输出",
+)
+
+
+def _is_correction_intent(text: str) -> bool:
+    """当前用户消息是否在要求"重画/修正"。"""
+    return bool(text) and bool(_CORRECTION_RE.search(text or ""))
+
+
+def _diag_meta(diag: list) -> dict:
+    """从诊断里摘要"是否仍有未解决的失败 + 原因"（供下轮修正/去锚定判断）。"""
+    unresolved = [d for d in (diag or []) if d.get("resolved") is False]
+    if not unresolved:
+        return {"failed": False, "reason": ""}
+    reason = "; ".join((d.get("reason") or "") for d in unresolved)
+    return {"failed": True, "reason": reason[:500]}
+
+
+def _last_assistant_meta(messages: list) -> dict | None:
+    """最后一条 assistant 消息的处理结果 meta（failed/reason）；无则 None。"""
+    if not isinstance(messages, list):
+        return None
+    for m in reversed(messages):
+        if not isinstance(m, dict) or m.get("role") != "assistant":
+            continue
+        content = m.get("content")
+        text = content if isinstance(content, str) else ""
+        if not text:
+            continue
+        _raw, meta = answer_cache.lookup_full(text)
+        if meta:
+            return meta
+    return None
+
+
+def _maybe_add_correction_directive(question: str, text: str,
+                                    messages: list) -> str:
+    """修正回合：在问题后附上去锚定的重画指示；若上一轮被校验拦截则附失败原因。"""
+    if not _is_correction_intent(text):
+        return question
+    meta = _last_assistant_meta(messages)
+    if meta and meta.get("failed") and meta.get("reason"):
+        directive = (f"（请修正重画：上一版图示未通过校验："
+                     f"{meta['reason'][:220]}。请根据原始目标重新推导正确结构/标记，"
+                     f"不要照抄上一版图示。）")
+    else:
+        directive = ("（请重新绘制：上一版图示有误。请根据原始目标重新推导，"
+                     "不要照抄上一版图示。）")
+    return f"{question} {directive}"
+
+
+def _extract_history(messages: list, max_items: int = 10,
+                     deanchor: bool = False) -> list:
     """提取最后一条 user 消息之前的对话历史（A3 多轮对话）。
 
     返回 [{"role": "user"/"assistant", "content": 文本}, ...]（最近 max_items 条）。
     - 当前问题 = 最后一条 user 消息（由 _extract_question 处理），其本身不在此处；
-    - assistant 历史剥离渲染代码（TikZ/chemfig）；
+    - assistant 历史：默认剥离渲染代码（TikZ/chemfig）并（命中缓存时）恢复为
+      原始标记文本（下轮看到上一轮画了什么）；`deanchor=True`（修正回合）时
+      **不恢复标记**、仅保留散文——避免模型照着上一轮（错的）标记重抄；
     - 多模态 content 数组只取文本部分。
     """
     if not isinstance(messages, list):
@@ -268,11 +327,16 @@ def _extract_history(messages: list, max_items: int = 10) -> list:
         else:
             continue
         if role == "assistant":
-            # 命中回答缓存则恢复为原始标记文本（LLM 可看到上一轮的
-            # [COMPOSITE] 等标记——20260828 方案 A）；未命中（服务重启/
-            # 过期/非本服务回答）回退剥离渲染产物
-            restored = answer_cache.lookup(text)
-            text = restored if restored is not None else _strip_render_code(text)
+            if deanchor:
+                # 去锚定：修正回合不恢复上一轮标记文本（避免照着抄错图），
+                # 只保留散文（仍剥离渲染产物 TikZ/图片）
+                text = _strip_render_code(text)
+            else:
+                # 命中回答缓存则恢复为原始标记文本（LLM 可看到上一轮的
+                # [COMPOSITE] 等标记——20260828 方案 A）；未命中（服务重启/
+                # 过期/非本服务回答）回退剥离渲染产物
+                restored = answer_cache.lookup(text)
+                text = restored if restored is not None else _strip_render_code(text)
         if text.strip():
             history.append({"role": role, "content": text.strip()})
     return history
@@ -491,7 +555,7 @@ def _sse_stream(question: str, history: list, cid: str, created: int,
         # 登记回答缓存（同非流式路径）：display 将被分帧发出，平台存储后
         # 下轮历史原样带回，命中缓存即恢复为原始标记文本
         if responses:
-            answer_cache.store(display, responses[-1])
+            answer_cache.store(display, responses[-1], meta=_diag_meta(diag))
         answer_q.put(display)
         result_q.put(attachments)
 
@@ -591,13 +655,16 @@ async def chat_completions(request: Request, authorization: str | None = Header(
     stream = stream if isinstance(stream, bool) else False
 
     text, images, audios, files = _extract_question(body.get("messages") or [])
-    history = _extract_history(body.get("messages") or [])
+    history = _extract_history(body.get("messages") or [],
+                               deanchor=_is_correction_intent(text))
     cid = f"chatcmpl-{int(time.time() * 1000)}"
     created = int(time.time())
     public_base = _public_base(request)
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         question = _build_question(text, images, audios, files, tmp_dir)
+        question = _maybe_add_correction_directive(
+            question, text, body.get("messages") or [])
 
     if stream:
         return StreamingResponse(
@@ -626,7 +693,7 @@ async def chat_completions(request: Request, authorization: str | None = Header(
     # 登记回答缓存：下轮对话历史中该回答将被恢复为原始标记文本
     # （responses[-1] = 最终采用的渲染前标记文本）
     if responses:
-        answer_cache.store(content, responses[-1])
+        answer_cache.store(content, responses[-1], meta=_diag_meta(diag))
     payload = {
         "id": cid,
         "object": "chat.completion",

@@ -23,7 +23,7 @@ _TTL_SECONDS = 24 * 3600     # 历史标记恢复的有效期（跨天对话足�
 _MAX_ENTRIES = 1000          # LRU 容量上限（每条约几 KB，内存可控）
 
 _LOCK = threading.Lock()
-_CACHE: "OrderedDict[str, tuple[float, str]]" = OrderedDict()
+_CACHE: "OrderedDict[str, tuple[float, str, dict]]" = OrderedDict()
 
 _REASONING_RE = re.compile(r"\s*\[REASONING\].*?\[/REASONING\]\s*",
                            re.DOTALL)
@@ -35,14 +35,16 @@ def _strip_reasoning(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
-def store(content: str, raw_markup: str) -> None:
+def store(content: str, raw_markup: str, meta: dict = None) -> None:
     """登记一条回答映射。content = 实际发给客户端的文本（渲染后）；
-    raw_markup = 渲染前的标记文本。纯文本回答（二者一致）不缓存。"""
+    raw_markup = 渲染前的标记文本；meta = 可选处理结果（如
+    {"failed": bool, "reason": str}，供下轮"修正/去锚定"时判断并回传失败原因）。
+    纯文本回答（二者一致）不缓存。"""
     if not content or not raw_markup or content == raw_markup:
         return
     key = hashlib.sha256(content.encode("utf-8")).hexdigest()
     with _LOCK:
-        _CACHE[key] = (time.time(), _strip_reasoning(raw_markup))
+        _CACHE[key] = (time.time(), _strip_reasoning(raw_markup), meta or {})
         _CACHE.move_to_end(key)
         while len(_CACHE) > _MAX_ENTRIES:
             _CACHE.popitem(last=False)
@@ -50,19 +52,25 @@ def store(content: str, raw_markup: str) -> None:
 
 def lookup(content: str) -> str | None:
     """按发出的 content 找回原始标记文本；未登记/过期返回 None。"""
+    raw, _meta = lookup_full(content)
+    return raw
+
+
+def lookup_full(content: str) -> tuple:
+    """按发出的 content 找回 (原始标记文本, meta)；未登记/过期返回 (None, None)。"""
     if not content:
-        return None
+        return None, None
     key = hashlib.sha256(content.encode("utf-8")).hexdigest()
     with _LOCK:
         entry = _CACHE.get(key)
         if entry is None:
-            return None
-        ts, raw = entry
+            return None, None
+        ts, raw, meta = entry
         if time.time() - ts > _TTL_SECONDS:
             _CACHE.pop(key, None)
-            return None
+            return None, None
         _CACHE.move_to_end(key)
-        return raw
+        return raw, meta or {}
 
 
 def clear() -> None:

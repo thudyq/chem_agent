@@ -50,6 +50,20 @@ def test_identical_content_not_stored():
     assert answer_cache.lookup("纯文本回答") is None
 
 
+def test_store_lookup_full_meta():
+    """lookup_full 返回 (原始标记, meta)；无 meta 存默认 {}。"""
+    answer_cache.store("渲染C", "[STRUCT:CCO]",
+                       meta={"failed": True, "reason": "化学校验：不守恒"})
+    raw, meta = answer_cache.lookup_full("渲染C")
+    assert raw == "[STRUCT:CCO]"
+    assert meta == {"failed": True, "reason": "化学校验：不守恒"}
+    answer_cache.store("渲染D", "[STRUCT:CCO]")
+    raw2, meta2 = answer_cache.lookup_full("渲染D")
+    assert raw2 == "[STRUCT:CCO]" and meta2 == {}
+    # lookup（旧接口）仍只回标记文本
+    assert answer_cache.lookup("渲染C") == "[STRUCT:CCO]"
+
+
 def test_ttl_expiry(monkeypatch):
     """超过 TTL 的条目失效并清除。"""
     answer_cache.store("内容A", "标记A")
