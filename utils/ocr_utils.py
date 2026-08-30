@@ -24,7 +24,17 @@ _DESCRIBE_PROMPT = """请描述这张图片的内容，供后续化学问答使�
 
 输出格式（严格两行）：
 类型：文字题 | 结构式 | 反应式 | 机理图 | 混合 | 其他
-内容：<按上述要求的转录与描述>"""
+内容：<按上述要求的转录与描述>
+
+纪律（必须遵守）：
+- 先识别并转录图上的文字（题目/标签/数值/图例/条件等），文字优先，别漏。
+- 内容只放结论性描述，把分析/犹豫过程放到思考里，不要写进"内容"。
+- 有多个对象（多个结构/多步/多取代基）时，用 [1] [2] 编号逐条列出。
+- 无法从图中确定的部分（如取代基/自由基的确切位置）不要编造确定答案：
+  标"不确定"并给最有把握的判断；能确定位置时就给出邻/间/对或编号。
+- 关键数值、图例、坐标轴刻度、图上文字要逐字转录，不要概括。
+- 尽快输出这两行结论，不要长时间空想；若图过于复杂或关键信息无法可靠
+  确定，也在"内容"里给出你确定的部分（至少转录到的文字），不要给空。"""
 
 # 视觉调用总尝试次数：初始 1 次 + 失败重试 2 次（连接不稳定场景，20260818）
 _VISION_MAX_ATTEMPTS = 3
@@ -40,6 +50,58 @@ def _parse_description(text: str) -> dict:
     m2 = re.search(r"内容[:：]\s*(.*)", t, re.DOTALL)
     content = (m2.group(1) if m2 else t).strip()
     return {"type": ctype, "content": content}
+
+
+def _extract_description(text: str, max_len: int = 600) -> dict:
+    """从文本中提取"类型：/内容："结构化描述；提取不出时收敛而非整段透传。
+
+    reasoning_content 兜底时，文本可能是无格式的思考草稿（"Let me look.../
+    Wait/Actually"），直接整段当 content 会污染下游（_structure_smiles_ok 拿
+    它去匹配 SMILES，可能误判）。此函数：
+    - 文本内含"类型:"与"内容:"两行 → 正常解析（_parse_description）；
+    - 否则：截断到 max_len 并把 type 标为"未分类_草稿"，明确标注这是未
+      结构化的思考回退，避免后续当成结构化描述。
+    返回 {"type", "content"}。
+    """
+    t = (text or "").strip()
+    if not t:
+        return {"type": "未分类", "content": ""}
+    if re.search(r"类型\s*[:：]", t) and re.search(r"内容\s*[:：]", t):
+        return _parse_description(t)
+    if len(t) > max_len:
+        t = t[:max_len] + "…"
+    return {"type": "未分类_草稿", "content": t}
+
+
+def _best_effort_extract(reasoning: str, max_len: int = 600) -> dict:
+    """从思考链里尽量抢救可用的描述（降级时的兜底增强）。
+
+    当模型没写出正式"类型/内容"两行、只留下思考草稿时，这张图往往有
+    文字或关键信息（题目/数值/结构描述）。尽量从中提取片段而非直接放弃：
+    - 优先找像是"结论"的句子（含分子/结构/SMILES/文字转录线索的连续中文/英文行）；
+    - 找不到就用草稿前段截断。
+    与 _extract_description 不同，这里不要求"类型/内容"两行，而是尽力给下游
+    一点可用信息（尤其文字），使降级不至完全空白。
+    """
+    t = (reasoning or "").strip()
+    if not t:
+        return {"type": "未分类", "content": ""}
+    # 找带化学关键词或疑似转录内容的句子（尽量选信息密度高的段）
+    candidates = re.split(r"\n{2,}|(?<=[。！？?.])\s+", t)
+    hits = []
+    for c in candidates:
+        c = c.strip()
+        if len(c) < 8:
+            continue
+        # 含化学/结构/数字/转录线索的句子优先
+        if re.search(r"SMILES|结构|分子|苯|环|键|反应|机理|过渡态|原子|"
+                     r"\d|C\d|文字|题目|标注|图中|内容[:：]", c):
+            hits.append(c)
+    picked = hits[:3] if hits else [t]
+    out = "\n".join(picked)
+    if len(out) > max_len:
+        out = out[:max_len] + "…"
+    return {"type": "未分类_草稿", "content": out}
 
 
 def _is_valid_smiles(smi: str) -> bool:
@@ -107,7 +169,7 @@ def _describe_once(url: str, headers: dict, payload: dict,
     """
     print(f"[ocr] 调用视觉模型 {model} 理解图片 ...")
     try:
-        resp = requests.post(url, headers=headers, json=payload, timeout=120)
+        resp = requests.post(url, headers=headers, json=payload, timeout=60)
     except requests.exceptions.RequestException as e:
         print(f"[ocr] 请求异常: {e}")
         return None, True
@@ -119,7 +181,7 @@ def _describe_once(url: str, headers: dict, payload: dict,
         print("[ocr] 端点不识别 thinking 参数，去掉重试 ...")
         payload.pop("thinking", None)
         try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=120)
+            resp = requests.post(url, headers=headers, json=payload, timeout=60)
         except requests.exceptions.RequestException as e:
             print(f"[ocr] 请求异常: {e}")
             return None, True
@@ -139,12 +201,19 @@ def _describe_once(url: str, headers: dict, payload: dict,
     content = msg.get("content") or ""
     # 思考型模型兜底：content 为空但 reasoning_content 有内容时回退提取
     # （thinking disabled 生效时 content 直接有值，此分支为兼容不识别
-    # 该参数的端点）
+    # 该参数的端点）。回退用 _extract_description——reasoning 可能是无格式
+    # 思考草稿，直接整段当 content 会污染下游，故提取两行结构或收敛标注。
     if not content.strip():
         reasoning = msg.get("reasoning_content") or ""
         if reasoning.strip():
-            print("[ocr] content 为空，回退 reasoning_content")
-            content = reasoning
+            print("[ocr] content 为空，回退 reasoning_content"
+                  "（最佳努力提取文字/结构线索）")
+            # 先用 _extract_description 拿结构化两行；若无两行，再用
+            # _best_effort_extract 尽量从思考链抢救文字/结构片段（不空白降级）
+            desc = _extract_description(reasoning)
+            if desc["type"] == "未分类_草稿":
+                desc = _best_effort_extract(reasoning)
+            return (desc if desc["content"] else None), True
         else:
             return None, True  # 空响应（瞬时抖动），可重试
     desc = _parse_description(content)
@@ -152,12 +221,14 @@ def _describe_once(url: str, headers: dict, payload: dict,
 
 
 def describe_image(image_path: str, max_attempts: int = _VISION_MAX_ATTEMPTS) -> dict | None:
-    """上传图片 → 视觉 LLM 理解 → {"type": ..., "content": ...}。
+    """上传图片 → 视觉 LLM 理解 → {"type", "content", "smiles_ok", "downgraded"}。
 
-    单模型整图描述（glm-4.6v 等）：关闭深度思考（thinking disabled）让
-    模型直接输出 content——glm-4.6v 思考型行为会把回答吞进 reasoning_content
-    致 content 为空（20260817 实测：本地失败/智谱平台成功即此差异）；
-    个别端点不识别 thinking 参数或 content 仍空时，回退 reasoning_content。
+    glm-5.3-flash（当前模型）：开启思考（thinking.enabled，实测 disabled 报错）。
+    若模型把结论写进 reasoning_content 致 content 空，回退时先用
+    _extract_description 提取"类型/内容"两行；没有两行（复杂图思考过长、
+    未及输出正式结论）则用 _best_effort_extract 尽量抢救文字/结构片段，
+    并把 type 标为"未分类_草稿"、附加 downgraded=True——调用方可据此走
+    "识别受限"降级，同时保留抢救到的文字（至少图上的文字不因降级而全丢）。
 
     连接不稳定容错（20260818）：失败（网络异常 / 5xx / 空响应）自动重试，
     默认最多 max_attempts=3 次（初始 1 次 + 重试 2 次）；配置性失败
@@ -192,11 +263,16 @@ def describe_image(image_path: str, max_attempts: int = _VISION_MAX_ATTEMPTS) ->
             ],
         }],
         "temperature": 0.1,
-        # 800 → 2000：复杂图（教材文字+反应式）描述长，避免思考/回答被截断
-        "max_tokens": 2000,
-        # 关闭深度思考（智谱 thinking 参数）：直接输出 content，避免
-        # 回答进 reasoning_content 致 content 空（20260817 本地失败根因）
-        "thinking": {"type": "disabled"},
+        # 800 → 2000 → 4000：复杂图（教材文字+反应式/长思考）描述长，避免
+        # content 被截断成空后触发放大思考兜底（20260828 flash 实测：max_tokens
+        # 不足 → content 空 → 代码把 reasoning 整段当 content，污染下游）。
+        "max_tokens": 4000,
+        # 思考模式：enabled——glm-5.3-flash 实测必须开思考（disabled 会报错），
+        # 且开思考时若模型把结论写进 reasoning_content 致 content 空，
+        # 由 _describe_once 的 _extract_description 兜底提取/收敛。
+        # （旧注释"glm-4.6v 吞 reasoning 故 disabled"是针对旧模型的实测，
+        # 不适用于当前 glm-5.3-flash；20260828 更正。）
+        "thinking": {"type": "enabled"},
     }
 
     for attempt in range(1, max_attempts + 1):
@@ -205,6 +281,13 @@ def describe_image(image_path: str, max_attempts: int = _VISION_MAX_ATTEMPTS) ->
             # B1（20260826）：结构式 SMILES 过 RDKit 硬校验，供调用方示警
             desc["smiles_ok"] = _structure_smiles_ok(
                 desc.get("content"), desc.get("type"))
+            # 降级标记：未产出正式"类型/内容"两行（未分类_草稿）→ 调用方可
+            # 据此作"识别受限"处理（保留 desc 里抢救到的文字，而非整段弃掉）。
+            if desc.get("type") == "未分类_草稿":
+                desc["downgraded"] = True
+                print("[ocr] 识别降级：未产出结构化两行，仅保留最佳努力片段")
+            else:
+                desc["downgraded"] = False
             return desc
         if not retryable or attempt >= max_attempts:
             return None
