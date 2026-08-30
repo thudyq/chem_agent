@@ -288,15 +288,24 @@ def _maybe_add_correction_directive(question: str, text: str,
     return f"{question} {directive}"
 
 
-def _extract_history(messages: list, max_items: int = 10,
-                     deanchor: bool = False) -> list:
+def _subject_summary(meta: dict) -> str:
+    """assistant 输出的"去锚定状态摘要"：只报是否通过校验，**绝不回喂标记/TikZ/
+    机制结构**（避免模型把自己上一轮可能错的输出当模板照抄 → 同对话同质化）。
+    主题由 user 消息承载（原文保留，不在此抽词——启发式易出垃圾如"结构如下"）。"""
+    if meta and meta.get("failed"):
+        return "（上一版图示未通过校验）"
+    return "（已给出图示与说明）"
+
+
+def _extract_history(messages: list, max_items: int = 10) -> list:
     """提取最后一条 user 消息之前的对话历史（A3 多轮对话）。
 
     返回 [{"role": "user"/"assistant", "content": 文本}, ...]（最近 max_items 条）。
     - 当前问题 = 最后一条 user 消息（由 _extract_question 处理），其本身不在此处；
-    - assistant 历史：默认剥离渲染代码（TikZ/chemfig）并（命中缓存时）恢复为
-      原始标记文本（下轮看到上一轮画了什么）；`deanchor=True`（修正回合）时
-      **不恢复标记**、仅保留散文——避免模型照着上一轮（错的）标记重抄；
+    - **user 消息原文保留**（承载话题/意图，追问靠它）；
+    - **assistant 消息不以原文喂**：替换为"去锚定状态摘要"（是否通过校验），
+      绝不回喂标记/TikZ/机制结构——避免自我锚定导致同对话同质化、照抄错版
+      （20260830 观察：新对话多样且常对，同对话同质化且常错）。
     - 多模态 content 数组只取文本部分。
     """
     if not isinstance(messages, list):
@@ -327,16 +336,8 @@ def _extract_history(messages: list, max_items: int = 10,
         else:
             continue
         if role == "assistant":
-            if deanchor:
-                # 去锚定：修正回合不恢复上一轮标记文本（避免照着抄错图），
-                # 只保留散文（仍剥离渲染产物 TikZ/图片）
-                text = _strip_render_code(text)
-            else:
-                # 命中回答缓存则恢复为原始标记文本（LLM 可看到上一轮的
-                # [COMPOSITE] 等标记——20260828 方案 A）；未命中（服务重启/
-                # 过期/非本服务回答）回退剥离渲染产物
-                restored = answer_cache.lookup(text)
-                text = restored if restored is not None else _strip_render_code(text)
+            _raw, meta = answer_cache.lookup_full(text)
+            text = _subject_summary(meta)   # 去锚定：主题+状态，绝不回喂原文
         if text.strip():
             history.append({"role": role, "content": text.strip()})
     return history
@@ -655,8 +656,7 @@ async def chat_completions(request: Request, authorization: str | None = Header(
     stream = stream if isinstance(stream, bool) else False
 
     text, images, audios, files = _extract_question(body.get("messages") or [])
-    history = _extract_history(body.get("messages") or [],
-                               deanchor=_is_correction_intent(text))
+    history = _extract_history(body.get("messages") or [])
     cid = f"chatcmpl-{int(time.time() * 1000)}"
     created = int(time.time())
     public_base = _public_base(request)

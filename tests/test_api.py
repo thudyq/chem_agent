@@ -570,8 +570,8 @@ def _two_turn_setup(monkeypatch):
 
 
 def test_history_restores_markup_from_cache(client, monkeypatch):
-    """第二轮历史命中缓存 → assistant 历史恢复为原始标记文本（LLM 可见
-    [COMPOSITE]），且图片 markdown/REASONING 不出现。"""
+    """第二轮历史：assistant 不以原文喂回——替换为去锚定状态摘要（**不再**把
+    上一轮标记当 few-shot，避免自我锚定同质化/照抄错版）；图片/REASONING 均不出现。"""
     answer_cache.clear()
     captured = _two_turn_setup(monkeypatch)
     # 第一轮
@@ -588,8 +588,9 @@ def test_history_restores_markup_from_cache(client, monkeypatch):
     assert len(captured) == 2
     hist = captured[1]["history"]
     assert len(hist) == 2                       # user1 + assistant1
-    assert "[COMPOSITE:reaction]" in hist[1]["content"]   # 标记已恢复
+    assert "[COMPOSITE" not in hist[1]["content"]   # 不回喂标记（去锚定）
     assert "REASONING" not in hist[1]["content"]
+    assert "已给出" in hist[1]["content"]           # 去锚定状态摘要
 
 
 def test_history_cache_miss_falls_back_to_strip(client, monkeypatch):
@@ -620,24 +621,36 @@ def test_is_correction_intent():
     assert not api._is_correction_intent("这是什么结构")
 
 
-def test_extract_history_deanchor_strips_markers():
-    """修正回合去锚定：assistant 历史不恢复上一轮标记（避免照着抄错图）；
-    正常追问则恢复（作为 few-shot）。"""
+def test_extract_history_subject_summary_no_marker():
+    """assistant 历史不原文喂回：替换为去锚定状态摘要（不出现标记/TikZ）；
+    user 消息原文保留（承载主题，追问靠它）。"""
     answer_cache.clear()
     render = ("这是 3-溴-1-甲基环己烯的结构：\n"
               "\\begin{tikzpicture}\\draw (0,0);\\end{tikzpicture}\n"
               "\n![化学图示-1](https://x/img.png)\n")
-    raw = ("这是 3-溴-1-甲基环己烯的结构：\n"
-           "[STRUCT:CC1=CC(Br)CCC1,label=3-溴-1-甲基环己烯]\n")
-    answer_cache.store(render, raw)
+    answer_cache.store(render, "[STRUCT:CC1=CC(Br)CCC1,label=3-溴-1-甲基环己烯]")
     msgs = [{"role": "user", "content": "画 3-溴-1-甲基环己烯"},
             {"role": "assistant", "content": render},
-            {"role": "user", "content": "你画错了，重画"}]
-    h_restore = api._extract_history(msgs, deanchor=False)
-    h_deanchor = api._extract_history(msgs, deanchor=True)
-    assert "[STRUCT:" in h_restore[1]["content"]          # 正常追问恢复标记
-    assert "[STRUCT:" not in h_deanchor[1]["content"]      # 修正回合去锚定
-    assert "3-溴-1-甲基环己烯" in h_deanchor[1]["content"]  # 散文保留
+            {"role": "user", "content": "它画错了吗"}]
+    h = api._extract_history(msgs)
+    assert h[0]["content"] == "画 3-溴-1-甲基环己烯"            # user 原文保留
+    assert "[STRUCT:" not in h[1]["content"]                    # 不回喂标记
+    assert "tikzpicture" not in h[1]["content"]                 # 不回喂渲染产物
+    assert "已给出图示与说明" in h[1]["content"]                 # 去锚定状态摘要
+    answer_cache.clear()
+
+
+def test_extract_history_subject_summary_failed_status():
+    """上一版被校验拦截 → assistant 摘要标明"未通过校验"，且 user 原文保留。"""
+    answer_cache.clear()
+    answer_cache.store("渲染A", "[STRUCT:CCO]",
+                       meta={"failed": True, "reason": "化学校验：不守恒"})
+    msgs = [{"role": "user", "content": "画乙醛"},
+            {"role": "assistant", "content": "渲染A"},
+            {"role": "user", "content": "继续"}]
+    h = api._extract_history(msgs)
+    assert "未通过校验" in h[1]["content"]
+    assert h[0]["content"] == "画乙醛"
     answer_cache.clear()
 
 
