@@ -1282,7 +1282,7 @@ _CN_MAIN_RE = re.compile(
     rf"({_CN_NUM_RE})[-‐‑—–\d,，、]*((?:二|三|四)?(?:{_CN_SUFFIX_RE}))")
 _CN_PREFIX_RE = re.compile(
     rf"(二|三|四)?({'|'.join(_CN_PREFIX_HETERO)})")
-_CN_GROUP_RE = re.compile(rf"({_CN_NUM_RE})基")   # 烷基取代基/主基团
+_CN_GROUP_RE = re.compile(rf"(二|三|四)?({_CN_NUM_RE})基")   # 烷基取代基/主基团（含倍数：二甲基=2×甲基）
 
 
 def _chinese_name_constraints(label: str):
@@ -1309,7 +1309,9 @@ def _chinese_name_constraints(label: str):
         for g in _CN_GROUP_RE.finditer(label):
             if g.start() >= m.start() and g.start() < m.end():
                 continue
-            sub_c += _CN_CARBON_NUM[g.group(1)]
+            # 倍数前缀：二甲基=2×甲基、二乙基=2×乙基（20260830 修复：此前漏算倍数）
+            mult = _CN_MULT.get(g.group(1), 1)
+            sub_c += mult * _CN_CARBON_NUM[g.group(2)]
         if sub_c:
             c_total += sub_c
             c_src += f"+取代基{sub_c}"
@@ -1318,11 +1320,12 @@ def _chinese_name_constraints(label: str):
         g = _CN_GROUP_RE.search(label)
         if g is None:
             return None   # 无碳数词（水、硫酸、σ 络合物、角色词）——不查
-        c_total = _CN_CARBON_NUM[g.group(1)]
-        c_src = f"{g.group(1)}基={c_total}"
+        c_total = _CN_CARBON_NUM[g.group(2)]
+        c_src = f"{g.group(2)}基={c_total}"
         suffix_txt = ""
         main_start = g.start()
-        sub_c = sum(1 for _ in _CN_GROUP_RE.finditer(label)) - 1
+        sub_c = sum(_CN_MULT.get(gg.group(1), 1) * _CN_CARBON_NUM[gg.group(2)]
+                    for gg in _CN_GROUP_RE.finditer(label)) - _CN_CARBON_NUM[g.group(2)]
     suffix = re.sub(r"^(二|三|四)", "", suffix_txt)
     suffix_mult = suffix_txt[:1] in _CN_MULT
     hetero_min = {}

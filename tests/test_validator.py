@@ -1655,6 +1655,11 @@ def test_chinese_label_consistency():
     # A3：label 与 SMILES 一致 → 放行
     _, ok = _validate("[STRUCT:CC(O)CC,label=2-丁醇]")
     assert not ok, [r.reason for r in ok]
+    # A4（20260830）：多取代基倍数——2,3-二甲基-2-丁烯 = 4+2=6C（此前漏算"二"倍数误判为 5C）
+    _, ok = _validate("[STRUCT:CC(C)=C(C)C,label=2,3-二甲基-2-丁烯]")
+    assert not ok, [r.reason for r in ok]          # 6C 放行（回归：不误判）
+    _, bad = _validate("[STRUCT:CC(C)=CC,label=2,3-二甲基-2-丁烯]")
+    assert len(bad) == 1 and "应为 6 个碳" in bad[0].reason   # 5C 仍拦，碳数说明"取代基2"
     # B1：羧酸至少 2 个 O——乙酸写成乙醇 → 拦截
     _, bad = _validate("[STRUCT:CCO,label=乙酸]")
     assert len(bad) == 1 and "至少含 2 个 O" in bad[0].reason
