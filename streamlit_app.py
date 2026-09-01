@@ -72,6 +72,45 @@ _CE_RE = re.compile(r"\\ce\{((?:[^{}]|\{[^{}]*\})*)\}")
 _SESSIONS_FILE = Path(__file__).resolve().parent / "data" / "chat_sessions.json"
 _LEGACY_FILE = Path(__file__).resolve().parent / "data" / "chat_history.json"
 
+# 诊断流水（data/ 已 gitignore）：每次提问追加一行 JSON —— 时间戳、会话 id、
+# 提问原文、原始标记（responses，含模型最终采用的标记文本；**不含渲染后
+# TikZ**）、诊断列表（每轮校验/渲染失败的 round/stage/type/raw/reason/
+# resolved）。用于质量回溯/统计，不参与页面逻辑。
+_DIAGNOSTICS_FILE = Path(__file__).resolve().parent / "data" / "diagnostics.jsonl"
+# 一次性清空旧诊断（每次启动首次运行时执行一次，之后 append）
+_DIAG_CLEARED_KEY = "_diagnostics_cleared"
+
+
+def _flush_diagnostics_file() -> None:
+    """清空 diagnostics.jsonl（幂等：仅首次运行时真正执行）。"""
+    if st.session_state.get(_DIAG_CLEARED_KEY):
+        return
+    _DIAGNOSTICS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _DIAGNOSTICS_FILE.write_text("", encoding="utf-8")
+    st.session_state[_DIAG_CLEARED_KEY] = True
+
+
+def _append_diagnostic(session_id: str, question: str,
+                       responses: list, diagnostics: list) -> None:
+    """把一次提问的诊断记录追加到 diagnostics.jsonl（一行一条 JSON）。
+
+    记录原始标记（responses，未渲染）与诊断失败项，**不记录渲染后含 TikZ
+    的 answer**——避免大段 LaTeX 污染、且便于统计模型实际写出的标记。
+    """
+    try:
+        record = {
+            "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "session_id": session_id,
+            "question": question,
+            "responses": responses or [],
+            "diagnostics": diagnostics or [],
+        }
+        _DIAGNOSTICS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with _DIAGNOSTICS_FILE.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception as e:  # 记录失败不拖垮主流程
+        print(f"[streamlit] 诊断写入失败: {e}")
+
 # AI 命名标题的极简系统提示（替代完整 system_prompt，省 token）
 _TITLE_SYSTEM = ("你是对话标题生成器。根据用户第一条提问提炼一个"
                  "不超过 12 个字的对话标题。只输出标题本身，不要任何"
@@ -282,7 +321,12 @@ def _append_user_msg(cur: dict, sessions: list, *, content: str = "",
 def _generate_answer(sessions: list, cur: dict, question: str,
                      history: list, is_first: bool, status=None) -> None:
     """状态框 + 草稿流 + process_question + 标题 + 入列持久化 + 重跑。
-    status 已存在时复用（图片流：视觉理解阶段已创建）。"""
+    status 已存在时复用（图片流：视觉理解阶段已创建）。
+
+    诊断：process_question 的 responses（原始标记文本，不含渲染后 TikZ）与
+    diagnostics（每轮校验/渲染失败）在生成后写入 data/diagnostics.jsonl。"""
+    diag = []          # diagnostics 收集（每轮失败）
+    resp = []          # responses 收集（各阶段原始标记文本）
     if hasattr(st, "status"):
         if status is None:
             status = st.status("正在思考并绘制化学图示…", expanded=False)
@@ -292,7 +336,8 @@ def _generate_answer(sessions: list, cur: dict, question: str,
                 question, history=history,
                 progress_callback=_progress_updater(draft_box),
                 correction_callback=lambda: status.update(
-                    label="正在修正回答…", state="running"))
+                    label="正在修正回答…", state="running"),
+                diagnostics=diag, responses=resp)
             failed = (not answer) or answer.startswith("（LLM 调用失败")
         except Exception as e:
             answer = f"（生成异常：{e}）"
@@ -304,12 +349,14 @@ def _generate_answer(sessions: list, cur: dict, question: str,
         )
     else:
         with st.spinner("思考中（LLM 生成 + 渲染）..."):
-            answer = process_question(question, history=history)
+            answer = process_question(question, history=history,
+                                      diagnostics=diag, responses=resp)
 
     if is_first:
         cur["title"] = _summarize_title(question)
     cur["messages"].append({"role": "assistant", "content": answer})
     _save_sessions(sessions)
+    _append_diagnostic(cur["id"], question, resp, diag)
     _rerun()
 
 
@@ -674,6 +721,9 @@ if "current_id" not in st.session_state or \
 
 sessions = st.session_state.sessions
 current_id = st.session_state.current_id
+
+# 每次启动清空一次 diagnostics.jsonl（幂等），之后提问逐条 append
+_flush_diagnostics_file()
 
 # ---- 侧边栏：会话管理 ----
 with st.sidebar:
