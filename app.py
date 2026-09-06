@@ -526,6 +526,23 @@ def _build_correction_prompt(user_question: str, original: str,
     return "\n".join(lines)
 
 
+def _tag_identity_tokens(raw: str) -> set:
+    """标记身份令牌（id=/label= 值集合）——用于判断"修正后的标记"是否与
+    原标记是同一个东西。空集合 = 无法判断（调用方保守放行）。"""
+    return set(re.findall(r"(?:id|label)=([^,\]]+)", raw))
+
+
+def _tag_inventory(text: str) -> dict:
+    """文本中标记的类型计数（G2 内容完整性对账用）。
+    REASONING 不计——注入时本就剥离，不属用户可见内容。"""
+    counts = {}
+    for t in parse_tags(text):
+        if t.type == "REASONING":
+            continue
+        counts[t.type] = counts.get(t.type, 0) + 1
+    return counts
+
+
 def _apply_patch_corrections(original: str, failures: list,
                              fixed_text: str) -> str | None:
     """把 LLM 部分修正输出（应为一组修正标记）替换进原文对应位置。
@@ -533,6 +550,11 @@ def _apply_patch_corrections(original: str, failures: list,
     failures: [(RenderTag, reason), ...]（与修正 prompt 顺序一致）。
     返回替换后的完整文本；修正输出解析不出标记、或原文中找不到对应标记
     时返回 None（调用方保留原文，继续下一轮或降级）。
+
+    G2 身份闸门（20260906，Q10 病例）：修正标记与原标记**类型不同**、或
+    身份令牌（id/label）**零交集**时拒绝该处替换——LLM 答非所问（重写
+    了别的图）会把题目要求的内容替换没（"删内容保合法"）；拒绝替换后原
+    标记留在原文走降级，内容缺失对用户可见。
     """
     fixed_tags = parse_tags(fixed_text)
     if not fixed_tags:
@@ -541,9 +563,16 @@ def _apply_patch_corrections(original: str, failures: list,
     for i, (tag, _err) in enumerate(failures):
         if i >= len(fixed_tags):
             break
-        new_raw = fixed_tags[i].raw
+        new_tag = fixed_tags[i]
+        new_raw = new_tag.raw
         if new_raw == tag.raw:
             continue
+        if new_tag.type != tag.type:
+            continue  # 类型不同——不是同一个图的修正，拒绝替换
+        old_ids = _tag_identity_tokens(tag.raw)
+        new_ids = _tag_identity_tokens(new_raw)
+        if old_ids and new_ids and not (old_ids & new_ids):
+            continue  # 身份零交集——替换等于删除原图，拒绝
         if tag.raw not in new_text:
             return None  # 原文位置丢失（不应发生），保守放弃本次修补
         new_text = new_text.replace(tag.raw, new_raw, 1)
@@ -729,6 +758,7 @@ def _generate_with_corrections(user_question: str, model=None,
 
     prev_fps = None   # 上一轮失败 fingerprint（P3 逃生比对）
     surgical_tried = set()  # 已尝试过手术式箭头重写的标记原文（每标记只试一次）
+    baseline_counts = None  # 首跑输出的标记清单（G2 内容完整性基线）
     for attempt in range(max_corrections + 1):
         # 2. 解析标记
         tags = parse_tags(full_response)
@@ -736,6 +766,8 @@ def _generate_with_corrections(user_question: str, model=None,
             if responses is not None:
                 responses.append(full_response)  # 纯文本回答（无标记）
             return full_response  # 纯文本回答，无需渲染
+        if attempt == 0:
+            baseline_counts = _tag_inventory(full_response)
 
         # 2.5 标记契约校验（P1）：渲染前拦截坏参数（非法 SMILES / 越界引用 /
         #    超长 label / 格式错误），降级为友好提示，坏参数不进渲染器
@@ -914,7 +946,38 @@ def _generate_with_corrections(user_question: str, model=None,
                     d["resolved"] = final_ok
         if responses is not None:
             responses.append(full_response)  # 最终采用的原始标记文本
-        return inject_tags_into_text(full_response, tags, rendered)
+        result_text = inject_tags_into_text(full_response, tags, rendered)
+        # G2 内容完整性对账（20260906，Q10 病例）：修正/重写后标记总数少于
+        # 首跑输出 = 内容被删（"删内容保合法"）——按未解决记账（路由升级判定
+        # 随之视为失败），并在回答末尾显式告知，不允许无声通过
+        if baseline_counts:
+            missing = []
+            final_counts = _tag_inventory(full_response)
+            for ttype, n0 in baseline_counts.items():
+                n1 = final_counts.get(ttype, 0)
+                if n1 < n0:
+                    missing.append((ttype, n0, n1))
+            if missing:
+                notes = []
+                for ttype, n0, n1 in missing:
+                    notes.append(f"{ttype} 图示（原 {n0} 处，现 {n1} 处）")
+                    if diagnostics is not None:
+                        diagnostics.append({
+                            "round": attempt,
+                            "stage": stage,
+                            "type": ttype,
+                            "raw": "",
+                            "reason": (f"修正后内容缺失：{ttype} 标记 "
+                                       f"{n0}→{n1}（修正/重写过程中被删除）"),
+                            "friendly": f"（{ttype} 图示在修正过程中未能保留，已省略）",
+                            "resolved": False,
+                        })
+                print(f"[process_question] 修正后内容缺失："
+                      + "、".join(notes))
+                result_text += ("\n\n> 注：修正过程中部分图示未能保留，已省略"
+                                "（" + "、".join(notes) + "）——"
+                                "需要的话我可以重新绘制。")
+        return result_text
 
     return "（LLM 调用失败，请检查 .env 配置与网络）"
 

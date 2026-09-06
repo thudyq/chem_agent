@@ -464,3 +464,62 @@ def test_correction_prompt_dynamic_sections():
     assert "直接改写" in prompt                  # mech 指引在场
     assert "禁用 [O]/[H] 占位符" not in prompt      # 守恒段落被裁掉
     assert "配体括号写全" not in prompt             # SMILES 段落被裁掉
+
+
+def test_patch_rejects_unrelated_rewrite():
+    """G2 身份闸门（20260906，Q10 病例）：修正输出是"另一个图"（类型不同或
+    id/label 零交集）→ 拒绝该处替换——替换等于删除原图（删内容保合法）；
+    同身份修正（保留 id/label）正常替换。"""
+    from app import _apply_patch_corrections
+    from core.tag_parser import parse_tags
+    original = ("共振式：[COMPOSITE:row][BLOCK][STRUCT:XYZABC,id=c1,"
+                "label=式 I][/BLOCK][/COMPOSITE]")
+    tag = parse_tags(original)[0]
+    # 修正输出是毫不相干的另一个 COMPOSITE（id/label 零交集）→ 拒绝替换
+    fixed = "[COMPOSITE:row][STRUCT:Cc1ccccc1,id=x,label=甲苯][/COMPOSITE]"
+    patched = _apply_patch_corrections(original, [(tag, "无效 SMILES")], fixed)
+    assert patched is not None and "XYZABC" in patched
+    # 类型不同 → 拒绝替换
+    fixed2 = "[STRUCT:Cc1ccccc1]"
+    patched2 = _apply_patch_corrections(original, [(tag, "无效 SMILES")], fixed2)
+    assert patched2 is not None and "XYZABC" in patched2
+    # 同一身份（保留 id/label）→ 正常替换
+    fixed3 = ("[COMPOSITE:row][BLOCK][STRUCT:Cc1ccccc1,id=c1,label=式 I]"
+              "[/BLOCK][/COMPOSITE]")
+    patched3 = _apply_patch_corrections(original, [(tag, "无效 SMILES")], fixed3)
+    assert "XYZABC" not in patched3 and "Cc1ccccc1" in patched3
+
+
+def test_correction_content_loss_flagged(fake_rdkit, fake_renderers,
+                                         monkeypatch):
+    """G2 内容完整性对账（20260906，Q10 病例）：修正/重写把标记改没了
+    （校验全过但内容缺失）→ 按未解决记账 + 回答末尾显式提示，不允许
+    "删内容保合法"无声通过。"""
+    monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
+    monkeypatch.setattr(
+        "app.ask_llm",
+        lambda *a, **k: "苯是 [STRUCT:c1ccccc1]。[STRUCT:XYZABC]")
+    # 结构重写失控：返回无标记文本（原标记被替换没了）
+    monkeypatch.setattr("app._rewrite_struct_smiles",
+                        lambda *a, **k: "（该图省略）")
+    diag = []
+    result = process_question("画苯", max_corrections=1, diagnostics=diag)
+    assert "未能保留" in result                 # 显式提示用户
+    assert "RENDERED:c1ccccc1" in result        # 其余内容正常
+    assert any(d["resolved"] is False and d["type"] == "STRUCT"
+               and "缺失" in d["reason"] for d in diag), diag
+
+
+def test_correction_no_loss_no_note(fake_rdkit, fake_renderers, monkeypatch):
+    """G2 对照：正常修正（标记数量不变）不出现缺失提示、不产生缺失诊断。"""
+    monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
+    answers = [
+        "苯是 [STRUCT:XYZABC]。",      # 非法 SMILES → 触发修正
+        "苯是 [STRUCT:c1ccccc1]。",     # 修正版（1 个标记换 1 个标记）
+    ]
+    monkeypatch.setattr(
+        "app.ask_llm", lambda *a, **k: answers.pop(0))
+    diag = []
+    result = process_question("画苯", max_corrections=1, diagnostics=diag)
+    assert "未能保留" not in result
+    assert not any("缺失" in d["reason"] for d in diag), diag
