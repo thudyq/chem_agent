@@ -517,9 +517,25 @@ def _build_correction_prompt(user_question: str, original: str,
             "（[K+].[O-][Mn](=O)(=O)=O）；含氧酸根中心原子带足双键氧"
             "（H2SO4=OS(=O)(=O)O、HNO3=[O-][N+](=O)O、硝基=R[N+](=O)[O-]）；"
             "氨写 [NH3] 或 N；写不出的物种省略或文字描述。")
+        # G5（20260906，Q15/Q14 病例）：特殊物种写法规则——校验器只报
+        # "无效 SMILES"不教写法，实测 LLM 三轮原地重犯；给通式+构造法则
+        # （不给单一答案——照抄示例会抄错碳数）
+        reqs.append(
+            "特殊物种写法规则：酰基正离子通式 R[C+]=O 或 RC#[O+]——"
+            "从酰氯 R-C(=O)Cl 去掉 Cl、羰基碳标 [C+]（R 随酰基变化，"
+            "如乙酰基 C[C+]=O、丙酰基 CC[C+]=O，按题目底物数清 R 的碳数）；"
+            "sp2 碳负离子写 [CH-]（不要写 2 键裸 [C-]）；"
+            "氧鎓脱质子需引用 H 时写 [O+]([H]) 显式氢"
+            "（[OH+] 内嵌 H 会重复计键）。")
         reqs.append(
             "「-」前缀只用于箭头条件（|-H2O）；反应物/产物列表中的离子直接写"
             "（[H+]、[Br-]、[OH-]）。")
+    # G5：离子+自由基簿记冲突（2 键裸 [C-] 写 sp2 碳负离子触发）——
+    # 该失败属 other 类，单独注入正确写法
+    if any("自由基" in err and "电荷" in err for _, err in failures):
+        reqs.append(
+            "「同一原子同时带电荷与自由基」类错误：sp2 碳负离子的正确写法是 "
+            "[CH-]（或 [C-]([H])）——2 键裸 [C-] 会被簿记成离子+自由基冲突。")
     lines.append("")
     lines.append("修正要求：")
     lines += [f"{i}. {r}" for i, r in enumerate(reqs, 1)]

@@ -523,3 +523,29 @@ def test_correction_no_loss_no_note(fake_rdkit, fake_renderers, monkeypatch):
     result = process_question("画苯", max_corrections=1, diagnostics=diag)
     assert "未能保留" not in result
     assert not any("缺失" in d["reason"] for d in diag), diag
+
+
+def test_correction_prompt_special_species_guidance():
+    """G5（20260906，Q15/Q14 病例）：无效 SMILES 失败时修正 prompt 附特殊
+    物种写法词典（酰基正离子 C[C+]=O / sp2 碳负离子 [CH-] / 氧鎓显式 H）；
+    离子+自由基簿记冲突（other 类）单独注入 [CH-] 写法。"""
+    from core.tag_parser import parse_tags
+    from core.tag_validator import validate_tag
+    # 酰基正离子病例（Q15）：CC(=O)[Cl-] 无效 SMILES
+    text = ("[COMPOSITE:reaction][STRUCT:CC(=O)Cl,id=ac]"
+            "[ARROW:type=single][STRUCT:CC(=O)[Cl-],id=acy][/COMPOSITE]")
+    tag = parse_tags(text)[0]
+    vr = validate_tag(tag)
+    assert "无效 SMILES" in vr.reason
+    prompt = _build_correction_prompt("傅克酰化", text, [(tag, vr.reason)])
+    assert "R[C+]=O" in prompt          # 酰基正离子通式
+    assert "丙酰基 CC[C+]=O" in prompt   # 不同碳数示例（防照抄不换 R）
+    assert "[CH-]" in prompt            # sp2 碳负离子写法
+    assert "[O+]([H])" in prompt        # 氧鎓显式 H 写法
+    # 簿记冲突病例（other 类失败）：2 键裸 [C-]
+    text2 = "[STRUCT:C1[C-]C=CC=C1,label=苯基负离子]"
+    tag2 = parse_tags(text2)[0]
+    vr2 = validate_tag(tag2)
+    assert "自由基" in vr2.reason and "电荷" in vr2.reason
+    prompt2 = _build_correction_prompt("苯基负离子", text2, [(tag2, vr2.reason)])
+    assert "[CH-]" in prompt2 and "[C-]" in prompt2
