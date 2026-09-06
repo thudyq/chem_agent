@@ -452,10 +452,12 @@ def _sum_c_counts(species: list):
 
 
 def _balance_reason(left, right, strict_h: bool, step: str,
-                    check_charge: bool = True) -> str:
+                    check_charge: bool = True, hint: str = "") -> str:
     """两侧元素计数比对：非 H 元素必须相等；strict_h 时 H 也必须相等。
     净电荷：check_charge=True 时两侧电荷必须相等；
-    False 时保持"旁观离子省略"惯例不比对。"""
+    False 时保持"旁观离子省略"惯例不比对。
+    hint：可操作的修正指引（默认反应守恒口径；共振守恒等场景传入
+    场景化指引）。"""
     if left is None or right is None:
         return ""
     lc, rc = dict(left[0]), dict(right[0])
@@ -472,7 +474,7 @@ def _balance_reason(left, right, strict_h: bool, step: str,
                 diff.append(f"{k} {d:+d}")
         diff_txt = f"，右侧相对左侧：{'、'.join(diff)}" if diff else ""
         return (f"{_CHEM_PREFIX}{step}两侧原子不守恒（{detail}{diff_txt}，"
-                f"请核对物种 SMILES 是否多写/漏写原子；辅助试剂请写入箭头条件而非省略主物种）")
+                f"{hint or '请核对物种 SMILES 是否多写/漏写原子；辅助试剂请写入箭头条件而非省略主物种'}）")
     if check_charge and left[1] != right[1]:
         return (f"{_CHEM_PREFIX}{step}两侧净电荷不守恒"
                 f"（{left[1]:+d} vs {right[1]:+d}，需补全离子或修正电荷）")
@@ -954,7 +956,72 @@ def _check_block(block_children: list) -> Tuple[bool, str]:
                            f"ARROW:resonance / MECHARROW）")
     if not has_struct:
         return False, "BLOCK 内缺少 [STRUCT] 组件"
+    reason = _check_block_resonance_balance(block_children)
+    if reason:
+        return False, reason
     return True, ""
+
+
+def _check_block_resonance_balance(block_children: list) -> str:
+    """BLOCK 内共振式守恒（20260906，G3：Q6 无单电子共振式 / Q14-m2 五元环
+    病例）——resonance 箭头相邻两侧极限式必须同分子式（含 H）+ 同净电荷 +
+    同自由基单电子总数。无法解析的组件（化学式文本组件/dummy 占位）跳过
+    （宁漏勿拦）。返回错误原因或 ""。"""
+    # 按 ARROW 分段（BLOCK 内禁 PLUS——每段至多 1 个 STRUCT）
+    segments, cur = [], []
+    for c in block_children:
+        if c.type == "ARROW":
+            segments.append(cur)
+            cur = []
+        else:
+            cur.append(c)
+    segments.append(cur)
+
+    def _smi_of(seg):
+        for c in seg:
+            if c.type == "STRUCT" and c.args and c.args[0]:
+                return c.args[0].strip()
+        return ""
+
+    def _radical_electrons(smi: str):
+        """SMILES 的自由基单电子总数；无 RDKit/无法解析/接口缺失返回 None。"""
+        if not _RDKIT_OK:
+            return None
+        mol = _parse_mol(smi)
+        if mol is None:
+            return None
+        atoms_fn = getattr(mol, "GetAtoms", None)
+        if atoms_fn is None:
+            return None  # fake mol：跳过单电子比对
+        total = 0
+        for a in atoms_fn():
+            gr = getattr(a, "GetNumRadicalElectrons", None)
+            if gr is None:
+                return None
+            total += gr()
+        return total
+
+    for i in range(len(segments) - 1):
+        ls, rs = _smi_of(segments[i]), _smi_of(segments[i + 1])
+        if not ls or not rs:
+            continue
+        lc = _formula_or_smiles_counts(ls)
+        rc = _formula_or_smiles_counts(rs)
+        if lc is None or rc is None:
+            continue  # 无法计数（dummy 占位等）——跳过
+        step = f"共振式 {i + 1}↔{i + 2} "
+        reason = _balance_reason(
+            lc, rc, strict_h=True, step=step, check_charge=True,
+            hint="共振式间只移动电子、原子组成必须完全相同——请核对两侧"
+                 "极限式是否为同一物种的不同电子排布")
+        if reason:
+            return reason
+        lr, rr = _radical_electrons(ls), _radical_electrons(rs)
+        if lr is not None and rr is not None and lr != rr:
+            return (f"{_CHEM_PREFIX}{step}两侧自由基单电子数不等"
+                    f"（{lr} vs {rr}）——共振式只移动电子位置，不产生或消灭"
+                    f"单电子；请检查是否漏写/多写自由基（如 [C]）")
+    return ""
 
 
 def _check_reaction_sequence(children: list, comps: dict) -> str:

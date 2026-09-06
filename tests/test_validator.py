@@ -494,6 +494,58 @@ def test_block_id_global_unique():
     assert "id 重复" in invalid[0].reason
 
 
+def test_block_resonance_balance():
+    """BLOCK 内共振式守恒（20260906，G3：难题集 Q6/Q14 病例）——resonance
+    箭头两侧极限式必须同分子式（含 H）+ 同净电荷 + 同自由基单电子总数，
+    且不限布局（row 布局下此前完全跳过守恒，是 Q6 放行的根因）。"""
+    pytest.importorskip("rdkit")
+    # A：Q6 病例（row 布局）——苄基自由基式 I（C8H9·）vs 式 II（C7H10，
+    # 环上直接连甲基、无单电子）→ 原子不守恒拦截
+    _, bad = _validate(
+        "[COMPOSITE:row][BLOCK]"
+        "[STRUCT:[CH](C)c1ccccc1,id=q1,label=极限式 I]"
+        "[ARROW:type=resonance]"
+        "[STRUCT:CC1C=CC=CC=1,id=q2,label=极限式 II]"
+        "[/BLOCK][/COMPOSITE]")
+    assert len(bad) == 1 and "不守恒" in bad[0].reason
+    # B：Q14-m2 病例——环闭合错位成五元环（硝基 Meisenheimer 变体，
+    # 原子数不等）→ 拦截
+    _, bad2 = _validate(
+        "[COMPOSITE:reaction][BLOCK]"
+        "[STRUCT:COC1([Cl])[CH-]C=C([N+](=O)[O-])C=C1,id=m1]"
+        "[ARROW:type=resonance]"
+        "[STRUCT:COC1([Cl])C=[C-]C(=C1)[N+](=O)[O-],id=m2]"
+        "[/BLOCK][/COMPOSITE]")
+    assert len(bad2) == 1 and "不守恒" in bad2[0].reason
+    # C：净电荷不等——碳负离子式 vs 自由基式（同原子数）→ 拦截
+    _, bad3 = _validate(
+        "[COMPOSITE:row][BLOCK]"
+        "[STRUCT:[CH2-]c1ccccc1,id=a1][ARROW:type=resonance]"
+        "[STRUCT:[CH2]c1ccccc1,id=a2][/BLOCK][/COMPOSITE]")
+    assert len(bad3) == 1 and "净电荷不守恒" in bad3[0].reason
+    # D：单电子数不等——乙炔（闭壳层）vs 双自由基写法（同 C2H2、同电荷）
+    _, bad4 = _validate(
+        "[COMPOSITE:row][BLOCK]"
+        "[STRUCT:C#C,id=d1][ARROW:type=resonance]"
+        "[STRUCT:[CH]=[CH],id=d2][/BLOCK][/COMPOSITE]")
+    assert len(bad4) == 1 and "单电子" in bad4[0].reason
+    # E：合法共振放行——row 布局下苄基自由基正确三式（含单电子，Q6 修正版）
+    _, bad5 = _validate(
+        "[COMPOSITE:row][BLOCK]"
+        "[STRUCT:[CH](C)c1ccccc1,id=f1,label=极限式 I]"
+        "[ARROW:type=resonance]"
+        "[STRUCT:CC=C1[C]=CC=CC1,id=f2,label=极限式 II]"
+        "[ARROW:type=resonance]"
+        "[STRUCT:CC=C1C=C[C]=CC1,id=f3,label=极限式 III]"
+        "[/BLOCK][/COMPOSITE]")
+    assert not bad5, [r.reason for r in bad5]
+    # F：既有合法共振不误伤——羧酸根（reaction 布局）
+    _, bad6 = _validate(
+        "[COMPOSITE:reaction][BLOCK][STRUCT:[O-]C=O,id=r1]"
+        "[ARROW:type=resonance][STRUCT:O=C[O-],id=r2][/BLOCK][/COMPOSITE]")
+    assert not bad6, [r.reason for r in bad6]
+
+
 def test_composite_row_without_struct_passes():
     """row 布局允许无 [STRUCT]（纯箭头/条件/连接符序列合法）——要求已删除。"""
     _, invalid = _validate("[COMPOSITE:row][PLUS][ARROW:type=single,条件][/COMPOSITE]")
