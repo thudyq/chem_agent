@@ -45,7 +45,7 @@
 参数按逗号追加：
 
 - [STRUCT:O,mode=lewis,label=水]
-- [STRUCT:C[C@H](O)C(=O)O,mode=stereo,label=(R)-乳酸]
+- [STRUCT:C[C@@H](O)C(=O)O,mode=stereo,label=(R)-乳酸]
 - [STRUCT:BrC1CCCCC1,mode=chair,subs=0:ax]（subs=取代基原子序号:ax/eq；序号为 SMILES 0 起、指向直接连在环碳上的那个取代基原子，如 Br 的 0、甲基的 C 的 0；同一环碳上的两个取代基（偕二取代）各给一条、必为一 ax 一 eq，如 [STRUCT:BrC1(Br)CCCCC1,mode=chair,subs=0:ax,2:eq]；椅式翻转对比见示例 10）
 - [STRUCT:CC,mode=newman,bond=0-1,angle=60]
 - bond=a-b（非 newman 模式）：红色加粗突出该键；charge=序号:±：在原子旁标注部分电荷

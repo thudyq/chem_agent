@@ -213,7 +213,7 @@ def test_struct_mode_lewis_stereo_passes():
     _, invalid = _validate("[STRUCT:O, mode=lewis, label=水]")
     assert len(invalid) == 0
     _, invalid2 = _validate(
-        "[STRUCT:C[C@H](O)C(=O)O, mode=stereo, label=(R)-乳酸]")
+        "[STRUCT:C[C@@H](O)C(=O)O, mode=stereo, label=(R)-乳酸]")
     assert len(invalid2) == 0
 
 
@@ -1910,3 +1910,41 @@ def test_chinese_label_topology():
     assert not ok, [r.reason for r in ok]
     _, ok = _validate("[STRUCT:OCC(O)CC,label=1,2-丁二醇]")
     assert not ok, [r.reason for r in ok]
+
+
+def test_stereo_label_crosscheck():
+    """CIP 构型与顺反标签交叉核对（20260906，G4：难题集 Q1「(2S,3S) 冒充
+    (2R,3S)」/ Q3 顺反写反病例）。集合级 R/S 比对（避开位次映射）+
+    双键 E/Z 与顺/反声称核对。"""
+    pytest.importorskip("rdkit")
+    # A1：Q1 病例——(2S,3S) 的 SMILES 声称 (2R,3S) → 拦截
+    _, bad = _validate(
+        "[STRUCT:C[C@H](Cl)[C@@H](Cl)CC,label=(2R,3S)-2,3-二氯戊烷]")
+    assert len(bad) == 1 and "构型" in bad[0].reason
+    # A2：正确的 (2R,3S) → 放行
+    _, bad2 = _validate(
+        "[STRUCT:C[C@@H](Cl)[C@@H](Cl)CC,label=(2R,3S)-2,3-二氯戊烷]")
+    assert not bad2, [r.reason for r in bad2]
+    # A3：(R)-乳酸写反 → 拦截；写对放行
+    _, bad3 = _validate("[STRUCT:C[C@H](O)C(=O)O,label=(R)-乳酸]")
+    assert len(bad3) == 1 and "构型" in bad3[0].reason
+    _, bad4 = _validate("[STRUCT:C[C@@H](O)C(=O)O,label=(R)-乳酸]")
+    assert not bad4, [r.reason for r in bad4]
+    # B1：顺/反写反 → 拦截（C/C=C/C 为 E 反式）
+    _, bad5 = _validate("[STRUCT:C/C=C/C,label=顺-2-丁烯]")
+    assert len(bad5) == 1 and "顺反写反" in bad5[0].reason
+    # B2：顺/反写对放行（C/C=C\\C 为 Z 顺式；C/C=C/C 为 E 反式）
+    _, bad6 = _validate("[STRUCT:C/C=C\\C,label=顺-2-丁烯]")
+    assert not bad6, [r.reason for r in bad6]
+    _, bad7 = _validate("[STRUCT:C/C=C/C,label=反-2-丁烯]")
+    assert not bad7, [r.reason for r in bad7]
+    # C：跳过面不误伤——无立体双键的顺声称（无法核对）、无描述符、
+    # SMILES 无 @（? 中心）、杂原子取代双键（顺反与 E/Z 不必然对应）
+    _, bad8 = _validate("[STRUCT:CC=CC,label=顺-2-丁烯]")
+    assert not bad8, [r.reason for r in bad8]
+    _, bad9 = _validate("[STRUCT:CC(O)C(=O)O,label=乳酸]")
+    assert not bad9, [r.reason for r in bad9]
+    _, bad10 = _validate("[STRUCT:CC(O)C(=O)O,label=(R)-乳酸]")
+    assert not bad10, [r.reason for r in bad10]
+    _, bad11 = _validate("[STRUCT:F/C=C/Cl,label=顺-1-氟-2-氯乙烯]")
+    assert not bad11, [r.reason for r in bad11]

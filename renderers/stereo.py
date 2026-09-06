@@ -113,11 +113,11 @@ def render_stereo(smiles: str, label: str = None) -> str:
 
 
 if __name__ == "__main__":
-    print("[1] (R)-乳酸 C[C@H](O)C(=O)O:")
-    print(render_stereo("C[C@H](O)C(=O)O"))
+    print("[1] (R)-乳酸 C[C@@H](O)C(=O)O:")
+    print(render_stereo("C[C@@H](O)C(=O)O"))
     print("\n[2] (S)-2-氨基丁酸 CC[C@@H](N)C(=O)O:")
     print(render_stereo("CC[C@@H](N)C(=O)O"))
     print("\n[3] 无手性中心（应提示）:")
     print(render_stereo("CCO"))
-    print("\n[4] 带 label：(R)-乳酸 C[C@H](O)C(=O)O, label=(R)-乳酸:")
-    print(render_stereo("C[C@H](O)C(=O)O", label="(R)-乳酸"))
+    print("\n[4] 带 label：(R)-乳酸 C[C@@H](O)C(=O)O, label=(R)-乳酸:")
+    print(render_stereo("C[C@@H](O)C(=O)O", label="(R)-乳酸"))

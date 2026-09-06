@@ -148,7 +148,7 @@ def test_smoke_stereo():
 
 
 def test_smoke_stereo_with_label():
-    outs, bad = _render("[STRUCT:C[C@H](O)C(=O)O,mode=stereo,label=(R)-乳酸]")
+    outs, bad = _render("[STRUCT:C[C@@H](O)C(=O)O,mode=stereo,label=(R)-乳酸]")
     assert len(outs) == 1 and bad == 0
     _assert_ok(outs[0], "\\node[below]")
 

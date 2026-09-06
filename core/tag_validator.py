@@ -1639,6 +1639,100 @@ def _check_cn_topology(mol, topo: dict, label: str) -> str:
     return ""
 
 
+def _check_cip_label(mol, label: str) -> str:
+    """CIP 构型与 label 的 R/S 声称交叉核对（20260906，G4：难题集 Q1 病例——
+    (2S,3S) 的 SMILES 标「(2R,3S)」放行渲染；@/@@ 由 LLM 凭感觉写，错误高发）。
+
+    集合级比对（避开"IUPAC 位次→原子"映射难题）：label 括号内 R/S 描述符的
+    多重集合 vs RDKit CIP 判定集合。跳过面（宁漏勿拦）：label 无 (R)/(S)
+    描述符、有未判定中心（?）、描述符数与中心数不等、无手性中心、
+    fake mol / 无 FindMolChiralCenters 接口。返回原因串（"" = 通过/不查）。
+    """
+    if not label:
+        return ""
+    desc = [m.upper() for m in
+            re.findall(r"\d\s*([RSrs])(?=[,，、)）\s])", label)]
+    desc += [m.upper() for m in
+             re.findall(r"[(\（]\s*([RS])\s*[)\）]", label)]
+    if not desc:
+        return ""
+    centers_fn = getattr(Chem, "FindMolChiralCenters", None)
+    if centers_fn is None:
+        return ""
+    try:
+        centers = centers_fn(mol, includeUnassigned=True,
+                             useLegacyImplementation=False)
+    except Exception:
+        return ""
+    if not centers:
+        return ""
+    assigned = [c for _i, c in centers]
+    if "?" in assigned or len(assigned) != len(desc):
+        return ""
+    if sorted(assigned) != sorted(desc):
+        return (f"{_CHEM_PREFIX}label「{label}」与 SMILES 不一致——声称构型 "
+                f"{''.join(desc)}，但 SMILES 实际为 {''.join(assigned)}"
+                f"（@/@@ 写反了——请用 RDKit 或编号图核对每个手性中心）")
+    return ""
+
+
+def _check_cistrans_label(mol, label: str) -> str:
+    """顺/反（cis/trans、Z/E）label 与 SMILES 双键立体交叉核对
+    （20260906，G4：难题集 Q3/Q10 类"顺反写反"）。
+
+    跳过面（宁漏勿拦）：label 无顺/反/(Z)/(E) 声称；无立体双键（SMILES
+    未写 / \\）或立体双键多于 1 个；双键取代基含杂原子（此时 顺反 与
+    E/Z 不必然对应）；环系与椅式（由渲染参数驱动，不在此项）；fake mol。
+    返回原因串（"" = 通过/不查）。
+    """
+    if not label:
+        return ""
+    if re.search(r"\(E\)|反[-‐‑—–式]", label):
+        claim = "E"
+    elif re.search(r"\(Z\)|顺[-‐‑—–式]", label):
+        claim = "Z"
+    else:
+        return ""
+    bonds_fn = getattr(mol, "GetBonds", None)
+    stereo_enum = getattr(Chem, "BondStereo", None)
+    if bonds_fn is None or stereo_enum is None:
+        return ""
+    # 本模块 _parse_mol 走 sanitize=False（保留显式 H），双键立体未经
+    # AssignStereochemistry 赋值——此处补做（fake mol 无此接口时跳过）
+    assign_fn = getattr(Chem, "AssignStereochemistry", None)
+    if assign_fn is None:
+        return ""
+    try:
+        assign_fn(mol, cleanIt=True, force=True)
+    except Exception:
+        return ""
+    stereo = []
+    for b in bonds_fn():
+        st = getattr(b, "GetStereo", lambda: None)()
+        if st in (stereo_enum.STEREOZ, stereo_enum.STEREOE):
+            stereo.append((b, st))
+    if len(stereo) != 1:
+        return ""
+    bond, st = stereo[0]
+    # 双键两侧取代基须全为 C/H（否则 顺/反 与 E/Z 按 CIP 优先级不必然
+    # 对应，如 cis-1-溴-2-氯乙烯——跳过不查）
+    for end in (bond.GetBeginAtom(), bond.GetEndAtom()):
+        for nb in end.GetNeighbors():
+            if nb.GetIdx() == bond.GetBeginAtomIdx() or \
+                    nb.GetIdx() == bond.GetEndAtomIdx():
+                continue
+            if nb.GetAtomicNum() not in (1, 6):
+                return ""
+    actual = "Z" if st == stereo_enum.STEREOZ else "E"
+    cn = {"Z": "顺", "E": "反"}
+    if actual != claim:
+        return (f"{_CHEM_PREFIX}label「{label}」与 SMILES 不一致——声称"
+                f"{cn[claim]}式（{claim}），但 SMILES 双键实为"
+                f"{cn[actual]}式（{actual}）（顺反写反了——检查双键两侧 "
+                f"/ 与 \\ 的方向）")
+    return ""
+
+
 def _validate_struct_args(args: list, attrs: dict = None) -> Tuple[bool, str]:
     """校验单个 STRUCT 参数（顶层或容器内）：SMILES 非空 + label 长度 + 模式参数。
 
@@ -1689,6 +1783,15 @@ def _validate_struct_args(args: list, attrs: dict = None) -> Tuple[bool, str]:
             cn_reason = _check_chinese_label(mol, label_text)
             if cn_reason:
                 return False, cn_reason
+            # G4（20260906，难题集 Q1/Q3 病例）：CIP 构型与顺反标签的
+            # 交叉核对——(2R,3S) 的 SMILES 实为 (2S,3S)、顺/反写反均可
+            # 确定性拦截（集合级比对，避开 IUPAC 位次→原子映射难题）
+            cip_reason = _check_cip_label(mol, label_text)
+            if cip_reason:
+                return False, cip_reason
+            ct_reason = _check_cistrans_label(mol, label_text)
+            if ct_reason:
+                return False, ct_reason
     mode = attrs.get("mode", "skeleton")
     if mode not in _STRUCT_MODES:
         return False, (f"未知 STRUCT 模式「{mode}」，支持 "
