@@ -1346,7 +1346,16 @@ def _chinese_name_constraints(label: str):
         n_prefix += 1
         if p.group(2) in ("氟", "氯", "溴", "碘") and p.start() < main_start:
             halo_in_head = p.group(2)
-    hydrocarbon = suffix in _CN_HYDROCARBON_SUFFIXES and n_prefix == 0
+    # 环氧/氧化物命名（20260906，难题集 Q9 误报病例）：1,2-环氧丁烷、
+    # 乙基环氧乙烷、丁烯氧化物等名称自带 1 个 O——此前「环氧」不在杂原子
+    # 前缀表中，n_prefix==0 且后缀为烷/烯时触发烃类误判，把正确的环氧化物
+    # 标记拦死（好图被拦）。
+    epoxy = "环氧" in label or label.endswith("氧化物")
+    if epoxy:
+        hetero_min["O"] = hetero_min.get("O", 0) + 1
+        h_src.append("环氧（≥1 O）")
+    hydrocarbon = (suffix in _CN_HYDROCARBON_SUFFIXES and n_prefix == 0
+                   and not epoxy)
     topo = _cn_topology(label, main_start, c_total, suffix,
                         suffix_mult, has_substituent=sub_c > 0,
                         halo_in_head=halo_in_head)

@@ -1,100 +1,152 @@
 [
-  {
-    "id": "ethanol-ether-free-hydrogen",
-    "source": "真实端到端 2026-08-03 乙醇→乙醚（LLM 从旧 prompt 示例学到 [H]O[H] 写法，RDKit 报孤立氢警告）",
-    "llm_output": "乙醇在浓硫酸下加热生成乙醚：\n[COMPOSITE:reaction][STRUCT:C=C,id=a][PLUS][STRUCT:[H]O[H],id=w][ARROW:type=single,H2SO4][STRUCT:CCO,id=b][/COMPOSITE]\n水的显式氢写法应改为 O。",
-    "expect": {"valid": 1, "invalid": 0},
-    "note": "游离氢写法不拦截（[H]O[H] 可解析），但应在 prompt 层避免；此样本验证不崩溃"
+ {
+  "id": "ethanol-ether-free-hydrogen",
+  "source": "真实端到端 2026-08-03 乙醇→乙醚（LLM 从旧 prompt 示例学到 [H]O[H] 写法，RDKit 报孤立氢警告）",
+  "llm_output": "乙醇在浓硫酸下加热生成乙醚：\n[COMPOSITE:reaction][STRUCT:C=C,id=a][PLUS][STRUCT:[H]O[H],id=w][ARROW:type=single,H2SO4][STRUCT:CCO,id=b][/COMPOSITE]\n水的显式氢写法应改为 O。",
+  "expect": {
+   "valid": 1,
+   "invalid": 0
   },
-  {
-    "id": "truncated-half-struct",
-    "source": "LLM 输出被截断场景（max_tokens 用尽，finish_reason 谎报 stop 时残留半截标记）",
-    "llm_output": "苯的结构是 [STRUCT:c1ccc",
-    "expect": {"valid": 0, "invalid": 0},
-    "note": "半截标记（无闭合 ]）解析器跳过，原文保留，不崩溃"
+  "note": "游离氢写法不拦截（[H]O[H] 可解析），但应在 prompt 层避免；此样本验证不崩溃"
+ },
+ {
+  "id": "truncated-half-struct",
+  "source": "LLM 输出被截断场景（max_tokens 用尽，finish_reason 谎报 stop 时残留半截标记）",
+  "llm_output": "苯的结构是 [STRUCT:c1ccc",
+  "expect": {
+   "valid": 0,
+   "invalid": 0
   },
-  {
-    "id": "energy-at-out-of-range",
-    "source": "LLM 对能量点数误判（构造的越界场景，属真实高频错误模式）",
-    "llm_output": "[COMPOSITE:energy][ENERGY:0,108,-20][STRUCT:CCl,label=反应物,at=0][STRUCT:CO,label=过渡态,at=5][/COMPOSITE]",
-    "expect": {"valid": 0, "invalid": 1},
-    "note": "at=5 超出能量点范围 0~2，校验层拦截"
+  "note": "半截标记（无闭合 ]）解析器跳过，原文保留，不崩溃"
+ },
+ {
+  "id": "energy-at-out-of-range",
+  "source": "LLM 对能量点数误判（构造的越界场景，属真实高频错误模式）",
+  "llm_output": "[COMPOSITE:energy][ENERGY:0,108,-20][STRUCT:CCl,label=反应物,at=0][STRUCT:CO,label=过渡态,at=5][/COMPOSITE]",
+  "expect": {
+   "valid": 0,
+   "invalid": 1
   },
-  {
-    "id": "overlong-label",
-    "source": "LLM 中等长度中文标签（真实高频：端到端标签重叠的诱因之一）",
-    "llm_output": "产物是 [STRUCT:CCO,label=对甲基苯甲酸甲酯的酯化反应中间产物]",
-    "expect": {"valid": 1, "invalid": 0},
-    "note": "label 17 字 < 24 硬上限 → 放行；防重叠靠 prompt ≤10 字建议 + 宽度表"
+  "note": "at=5 超出能量点范围 0~2，校验层拦截"
+ },
+ {
+  "id": "overlong-label",
+  "source": "LLM 中等长度中文标签（真实高频：端到端标签重叠的诱因之一）",
+  "llm_output": "产物是 [STRUCT:CCO,label=对甲基苯甲酸甲酯的酯化反应中间产物]",
+  "expect": {
+   "valid": 1,
+   "invalid": 0
   },
-  {
-    "id": "overlong-label-extreme",
-    "source": "LLM 超长标签（突破硬上限，属真实失败模式）",
-    "llm_output": "产物是 [STRUCT:CCO,label=对甲基苯甲酸甲酯的酯化反应中间产物的进一步转化产物]",
-    "expect": {"valid": 0, "invalid": 1},
-    "note": "label 26 字 > 24 硬上限 → 校验层拦截降级"
+  "note": "label 17 字 < 24 硬上限 → 放行；防重叠靠 prompt ≤10 字建议 + 宽度表"
+ },
+ {
+  "id": "overlong-label-extreme",
+  "source": "LLM 超长标签（突破硬上限，属真实失败模式）",
+  "llm_output": "产物是 [STRUCT:CCO,label=对甲基苯甲酸甲酯的酯化反应中间产物的进一步转化产物]",
+  "expect": {
+   "valid": 0,
+   "invalid": 1
   },
-  {
-    "id": "mecharrow-ghost-ref",
-    "source": "LLM 引用不存在的组件 id（真实高频：原子编号/组件命名错误）",
-    "llm_output": "[COMPOSITE:reaction][STRUCT:CCl,id=nu][ARROW:type=single][STRUCT:CO,id=pe][MECHARROW:ghost:0>pe:1][/COMPOSITE]",
-    "expect": {"valid": 0, "invalid": 1},
-    "note": "MECHARROW 引用未知组件 ghost，校验层拦截"
+  "note": "label 26 字 > 24 硬上限 → 校验层拦截降级"
+ },
+ {
+  "id": "mecharrow-ghost-ref",
+  "source": "LLM 引用不存在的组件 id（真实高频：原子编号/组件命名错误）",
+  "llm_output": "[COMPOSITE:reaction][STRUCT:CCl,id=nu][ARROW:type=single][STRUCT:CO,id=pe][MECHARROW:ghost:0>pe:1][/COMPOSITE]",
+  "expect": {
+   "valid": 0,
+   "invalid": 1
   },
-  {
-    "id": "mecharrow-atom-out-of-range",
-    "source": "LLM 原子编号越界（真实高频：未数清原子就写编号）",
-    "llm_output": "[COMPOSITE:reaction][STRUCT:CCl,id=nu][ARROW:type=single][STRUCT:CO,id=pe][MECHARROW:nu:9>pe:0][/COMPOSITE]",
-    "expect": {"valid": 0, "invalid": 1},
-    "note": "nu 组件仅 2 原子，9 越界，校验层拦截"
+  "note": "MECHARROW 引用未知组件 ghost，校验层拦截"
+ },
+ {
+  "id": "mecharrow-atom-out-of-range",
+  "source": "LLM 原子编号越界（真实高频：未数清原子就写编号）",
+  "llm_output": "[COMPOSITE:reaction][STRUCT:CCl,id=nu][ARROW:type=single][STRUCT:CO,id=pe][MECHARROW:nu:9>pe:0][/COMPOSITE]",
+  "expect": {
+   "valid": 0,
+   "invalid": 1
   },
-  {
-    "id": "reaction-trailing-comma",
-    "source": "真实端到端 20260808 metrics 基线（乙醇→乙醚机理题，REACTION 产物带尾逗号：SMILES 'CC[OH2+],' 直达 RDKit 报错）",
-    "llm_output": "乙醇在浓硫酸催化下 140°C 脱水生成乙醚：\n[COMPOSITE:reaction][STRUCT:CCO,id=a][PLUS][STRUCT:CCO,id=b][ARROW:type=single,H2SO4, 140°C][STRUCT:CCOCC,id=c][PLUS][STRUCT:O,id=w,][/COMPOSITE]",
-    "expect": {"valid": 1, "invalid": 0},
-    "note": "尾逗号属良性笔误：SMILES 不含逗号，组分按 [;,] 拆分归一化后放行（20260808 起）"
+  "note": "nu 组件仅 2 原子，9 越界，校验层拦截"
+ },
+ {
+  "id": "reaction-trailing-comma",
+  "source": "真实端到端 20260808 metrics 基线（乙醇→乙醚机理题，REACTION 产物带尾逗号：SMILES 'CC[OH2+],' 直达 RDKit 报错）",
+  "llm_output": "乙醇在浓硫酸催化下 140°C 脱水生成乙醚：\n[COMPOSITE:reaction][STRUCT:CCO,id=a][PLUS][STRUCT:CCO,id=b][ARROW:type=single,H2SO4, 140°C][STRUCT:CCOCC,id=c][PLUS][STRUCT:O,id=w,][/COMPOSITE]",
+  "expect": {
+   "valid": 1,
+   "invalid": 0
   },
-  {
-    "id": "stereo-with-label",
-    "source": "真实端到端 20260808 metrics 基线（(R)-乳酸楔形式题，LLM 给 STEREO 误加 label 参数，整串进 RDKit 报错）",
-    "llm_output": "(R)-乳酸的楔形式结构如下：\n[STRUCT:C[C@@H](O)C(=O)O,mode=stereo,label=(R)-乳酸]",
-    "expect": {"valid": 1, "invalid": 0},
-    "note": "STRUCT mode=stereo + label（旧 STEREO 标记扩展的归一写法），拆分后放行"
+  "note": "尾逗号属良性笔误：SMILES 不含逗号，组分按 [;,] 拆分归一化后放行（20260808 起）"
+ },
+ {
+  "id": "stereo-with-label",
+  "source": "真实端到端 20260808 metrics 基线（(R)-乳酸楔形式题，LLM 给 STEREO 误加 label 参数，整串进 RDKit 报错）",
+  "llm_output": "(R)-乳酸的楔形式结构如下：\n[STRUCT:C[C@@H](O)C(=O)O,mode=stereo,label=(R)-乳酸]",
+  "expect": {
+   "valid": 1,
+   "invalid": 0
   },
-  {
-    "id": "baseline-20260810-ether-catalyst-misplaced",
-    "source": "真实 metrics 基线 20260810 乙醇→乙醚机理题（Q4）：LLM 把催化剂 H2SO4 误写进反应物 O=S(=O)(O)O 且只写 1 分子乙醇，方程式 C2H8O5S vs C4H12O2 不守恒",
-    "llm_output": "乙醇在浓硫酸催化下 140°C 脱水生成乙醚：\n[COMPOSITE:reaction][STRUCT:CCO,id=a][PLUS][STRUCT:O=S(=O)(O)O,id=h][ARROW:type=single][STRUCT:CCOCC,id=c][PLUS][STRUCT:O,id=w][/COMPOSITE]",
-    "expect": {"valid": 0, "invalid": 1},
-    "note": "催化剂/辅助试剂应写箭头条件而非反应物列表；校验以两侧原子不守恒拦截（20260811 prompt 决策表已强化该规则）"
+  "note": "STRUCT mode=stereo + label（旧 STEREO 标记扩展的归一写法），拆分后放行"
+ },
+ {
+  "id": "baseline-20260810-ether-catalyst-misplaced",
+  "source": "真实 metrics 基线 20260810 乙醇→乙醚机理题（Q4）：LLM 把催化剂 H2SO4 误写进反应物 O=S(=O)(O)O 且只写 1 分子乙醇，方程式 C2H8O5S vs C4H12O2 不守恒",
+  "llm_output": "乙醇在浓硫酸催化下 140°C 脱水生成乙醚：\n[COMPOSITE:reaction][STRUCT:CCO,id=a][PLUS][STRUCT:O=S(=O)(O)O,id=h][ARROW:type=single][STRUCT:CCOCC,id=c][PLUS][STRUCT:O,id=w][/COMPOSITE]",
+  "expect": {
+   "valid": 0,
+   "invalid": 1
   },
-  {
-    "id": "baseline-20260810-sn2-transition-state-smiles",
-    "source": "真实 metrics 基线 20260810 SN2 势能面题（Q6）：LLM 为过渡态硬写 SMILES [OH-]CCl（过渡态不是稳定分子，无法用 SMILES 表达）",
-    "llm_output": "[COMPOSITE:energy][ENERGY:0,100,-40][STRUCT:CCl.[OH-],label=反应物,at=0][STRUCT:[OH-]CCl,label=过渡态(示意),at=1][STRUCT:CO.[Cl-],label=产物,at=2][/COMPOSITE]",
-    "expect": {"valid": 0, "invalid": 1},
-    "note": "过渡态/中间体写不准 SMILES 时校验拦截；P2 修正与降级提示兜底（20260811 维持可写+校验策略，不禁止）"
+  "note": "催化剂/辅助试剂应写箭头条件而非反应物列表；校验以两侧原子不守恒拦截（20260811 prompt 决策表已强化该规则）"
+ },
+ {
+  "id": "baseline-20260810-sn2-transition-state-smiles",
+  "source": "真实 metrics 基线 20260810 SN2 势能面题（Q6）：LLM 为过渡态硬写 SMILES [OH-]CCl（过渡态不是稳定分子，无法用 SMILES 表达）",
+  "llm_output": "[COMPOSITE:energy][ENERGY:0,100,-40][STRUCT:CCl.[OH-],label=反应物,at=0][STRUCT:[OH-]CCl,label=过渡态(示意),at=1][STRUCT:CO.[Cl-],label=产物,at=2][/COMPOSITE]",
+  "expect": {
+   "valid": 0,
+   "invalid": 1
   },
-  {
-    "id": "radical-h-abstraction-explicit-h-20260812",
-    "source": "B1 修复后（20260812→20260821）：Q14 自由基夺氢步骤——20260821 起显式 H 是真实原子参与编号（a#k 语法废弃），用 C([H])([H])([H])[H] 写甲烷、ch4:1 直接引用 H 原子、断键写 0-1 键中点",
-    "llm_output": "甲烷氯代：\n[COMPOSITE:reaction][STRUCT:ClCl,id=cl2,label=Cl2][ARROW:type=single,hν][STRUCT:[Cl],id=clA,label=Cl·][PLUS][STRUCT:[Cl],id=clB,label=Cl·][MECHARROW:cl2:0-1>>cl2:0][MECHARROW:cl2:0-1>>cl2:1][/COMPOSITE]\n[COMPOSITE:reaction][STRUCT:[Cl],id=cl,label=Cl·][PLUS][STRUCT:C([H])([H])([H])[H],id=ch4,label=CH4][ARROW:type=single][STRUCT:Cl,id=hcl,label=HCl][PLUS][STRUCT:[CH3],id=me,label=·CH3][MECHARROW:cl:0>>cl:0+ch4:0][MECHARROW:ch4:1>>cl:0+ch4:0][MECHARROW:ch4:1>>ch4:0][/COMPOSITE]",
-    "expect": {"valid": 2, "invalid": 0},
-    "note": "链引发（Cl2 均裂）用键中点 a-b；夺氢用 SMILES 显式 H 原子序号（ch4:1，C—H 断键可写 ch4:0-1）；回归固化 B1 修复（20260821 a#k 废弃）；20260822 第三根鱼钩改为同步内 ch4:1>>ch4:0（跨主反应箭头的机理箭头已禁止；均裂鱼钩改为反应物侧自指 cl2:0-1>>cl2:0/cl2:1）"
+  "note": "过渡态/中间体写不准 SMILES 时校验拦截；P2 修正与降级提示兜底（20260811 维持可写+校验策略，不禁止）"
+ },
+ {
+  "id": "radical-h-abstraction-explicit-h-20260812",
+  "source": "B1 修复后（20260812→20260821）：Q14 自由基夺氢步骤——20260821 起显式 H 是真实原子参与编号（a#k 语法废弃），用 C([H])([H])([H])[H] 写甲烷、ch4:1 直接引用 H 原子、断键写 0-1 键中点",
+  "llm_output": "甲烷氯代：\n[COMPOSITE:reaction][STRUCT:ClCl,id=cl2,label=Cl2][ARROW:type=single,hν][STRUCT:[Cl],id=clA,label=Cl·][PLUS][STRUCT:[Cl],id=clB,label=Cl·][MECHARROW:cl2:0-1>>cl2:0][MECHARROW:cl2:0-1>>cl2:1][/COMPOSITE]\n[COMPOSITE:reaction][STRUCT:[Cl],id=cl,label=Cl·][PLUS][STRUCT:C([H])([H])([H])[H],id=ch4,label=CH4][ARROW:type=single][STRUCT:Cl,id=hcl,label=HCl][PLUS][STRUCT:[CH3],id=me,label=·CH3][MECHARROW:cl:0>>cl:0+ch4:0][MECHARROW:ch4:1>>cl:0+ch4:0][MECHARROW:ch4:1>>ch4:0][/COMPOSITE]",
+  "expect": {
+   "valid": 2,
+   "invalid": 0
   },
-  {
-    "id": "sulfonation-pi-attack-wrong-target-20260822",
-    "source": "真实 metrics 基线 20260822 第 8 次测试（fast_test/que_test8）Q11 苯磺化机理第一步：苯环 π 电子应进攻 SO₃ 的 S、S=O 的 π 电子应转给 O，LLM 却把两个弯箭头的靶原子写反（π→O、O→S）",
-    "llm_output": "第一步：亲电进攻。苯环的一对 π 电子进攻 SO₃ 的 S：\n[COMPOSITE:reaction]\n[STRUCT:C1=CC=CC=C1,label=苯,id=ar][PLUS][STRUCT:O=S(=O)=O,label=SO3,id=so3]\n[ARROW:type=single]\n[STRUCT:O=S([O-])(=O)C([H])1C=CC=C[CH+]1,label=σ 络合物,id=sigma]\n[MECHARROW:ar:0-1>so3:0][MECHARROW:so3:0-1>so3:1]\n[/COMPOSITE]",
-    "expect": {"valid": 1, "invalid": 0},
-    "note": "化学方向错误（π 攻中性 O 而非 S）。20260826 起真实 RDKit 下已由 R4（A1 方向语义校验）拦截：MECHARROW「ar:0-1>so3:0」为跨分子 π→中性氧，报错并建议 so3:1（S）。本 corpus 走 fake_rdkit（缺少真实化学，R4 因无 GetBondBetweenAtoms/GetIsAromatic 而跳过），故按不可校验记 valid:1；真实拦截由 tests/test_validator.py::test_pi_attack_target_not_neutral_oxygen（rdkit 单测）覆盖。"
+  "note": "链引发（Cl2 均裂）用键中点 a-b；夺氢用 SMILES 显式 H 原子序号（ch4:1，C—H 断键可写 ch4:0-1）；回归固化 B1 修复（20260821 a#k 废弃）；20260822 第三根鱼钩改为同步内 ch4:1>>ch4:0（跨主反应箭头的机理箭头已禁止；均裂鱼钩改为反应物侧自指 cl2:0-1>>cl2:0/cl2:1）"
+ },
+ {
+  "id": "sulfonation-pi-attack-wrong-target-20260822",
+  "source": "真实 metrics 基线 20260822 第 8 次测试（fast_test/que_test8）Q11 苯磺化机理第一步：苯环 π 电子应进攻 SO₃ 的 S、S=O 的 π 电子应转给 O，LLM 却把两个弯箭头的靶原子写反（π→O、O→S）",
+  "llm_output": "第一步：亲电进攻。苯环的一对 π 电子进攻 SO₃ 的 S：\n[COMPOSITE:reaction]\n[STRUCT:C1=CC=CC=C1,label=苯,id=ar][PLUS][STRUCT:O=S(=O)=O,label=SO3,id=so3]\n[ARROW:type=single]\n[STRUCT:O=S([O-])(=O)C([H])1C=CC=C[CH+]1,label=σ 络合物,id=sigma]\n[MECHARROW:ar:0-1>so3:0][MECHARROW:so3:0-1>so3:1]\n[/COMPOSITE]",
+  "expect": {
+   "valid": 1,
+   "invalid": 0
   },
-  {
-    "id": "sn2-step-missing-protonated-ether-intermediate-20260822",
-    "source": "真实 metrics 基线 20260822 第 8 次测试（fast_test/que_test8）Q4 乙醇→乙醚机理第二步（SN2）：生成物应为质子化乙醚+水（下一步才去质子化），LLM 写成乙醚+水+H+，跳过质子化乙醚中间体",
-    "llm_output": "第二步：亲核取代（SN2）：\n[COMPOSITE:reaction]\n[STRUCT:CC[OH2+],label=质子化乙醇,id=pro][PLUS][STRUCT:CCO,label=乙醇,id=nu]\n[ARROW:type=single]\n[STRUCT:CCOCC,label=乙醚][PLUS][STRUCT:O,label=水][PLUS][STRUCT:[H+],label=H+]\n[MECHARROW:nu:2>pro:1]\n[MECHARROW:pro:1-2>pro:2]\n[/COMPOSITE]",
-    "expect": {"valid": 1, "invalid": 0},
-    "note": "分步产物错误但未被拦截（原子+电荷守恒通过：CCOCC+H₂O+H⁺ 与质子化乙醚+H₂O 同组成；但本步产物应为质子化乙醚+水，H⁺ 应在下去质子化步才写出——跳过了中间体）；属「步内产物与机理类型一致性」校验缺口（Drawbacks 十三 5.png，较难静态校验，可能需 LLM 裁判复审）。"
-  }
+  "note": "化学方向错误（π 攻中性 O 而非 S）。20260826 起真实 RDKit 下已由 R4（A1 方向语义校验）拦截：MECHARROW「ar:0-1>so3:0」为跨分子 π→中性氧，报错并建议 so3:1（S）。本 corpus 走 fake_rdkit（缺少真实化学，R4 因无 GetBondBetweenAtoms/GetIsAromatic 而跳过），故按不可校验记 valid:1；真实拦截由 tests/test_validator.py::test_pi_attack_target_not_neutral_oxygen（rdkit 单测）覆盖。"
+ },
+ {
+  "id": "sn2-step-missing-protonated-ether-intermediate-20260822",
+  "source": "真实 metrics 基线 20260822 第 8 次测试（fast_test/que_test8）Q4 乙醇→乙醚机理第二步（SN2）：生成物应为质子化乙醚+水（下一步才去质子化），LLM 写成乙醚+水+H+，跳过质子化乙醚中间体",
+  "llm_output": "第二步：亲核取代（SN2）：\n[COMPOSITE:reaction]\n[STRUCT:CC[OH2+],label=质子化乙醇,id=pro][PLUS][STRUCT:CCO,label=乙醇,id=nu]\n[ARROW:type=single]\n[STRUCT:CCOCC,label=乙醚][PLUS][STRUCT:O,label=水][PLUS][STRUCT:[H+],label=H+]\n[MECHARROW:nu:2>pro:1]\n[MECHARROW:pro:1-2>pro:2]\n[/COMPOSITE]",
+  "expect": {
+   "valid": 1,
+   "invalid": 0
+  },
+  "note": "分步产物错误但未被拦截（原子+电荷守恒通过：CCOCC+H₂O+H⁺ 与质子化乙醚+H₂O 同组成；但本步产物应为质子化乙醚+水，H⁺ 应在下去质子化步才写出——跳过了中间体）；属「步内产物与机理类型一致性」校验缺口（Drawbacks 十三 5.png，较难静态校验，可能需 LLM 裁判复审）。"
+ },
+ {
+  "id": "epoxide-label-false-positive-20260906",
+  "source": "难题集复检 route_difficult_0 Q9——1,2-环氧丁烷（CCC1CO1）被中文名校验误判「烃类不应含杂原子」拦死（pro 修三轮无路可走，整体降级）；修复：_chinese_name_constraints 识别环氧/氧化物命名（O 下限 +1、豁免烃类判定）",
+  "llm_output": "1,2-环氧丁烷在酸性甲醇中开环：\n[COMPOSITE:reaction][STRUCT:CCC1CO1,label=1,2-环氧丁烷,id=ep][PLUS][STRUCT:CO,label=甲醇,id=meoh][ARROW:type=single,H+][STRUCT:OCC(OC)CC,label=2-甲氧基-1-丁醇,id=prod][/COMPOSITE]",
+  "expect": {
+   "valid": 1,
+   "invalid": 0
+  },
+  "note": "好图被拦回归锚点：环氧化物命名（1,2-环氧丁烷/乙基环氧乙烷/丁烯氧化物）必须放行"
+ }
 ]

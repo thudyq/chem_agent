@@ -1708,6 +1708,30 @@ def test_chinese_label_consistency():
     assert not ok, [r.reason for r in ok]
 
 
+def test_chinese_label_epoxide():
+    """环氧/氧化物命名豁免（20260906，难题集 Q9 误报病例）：「1,2-环氧丁烷」
+    等名称自带 1 个 O，此前「环氧」不在杂原子前缀表 → 被判"烃类不应含杂原子"
+    把好图拦死（好图被拦=立即修）。豁免后：环氧化物放行，碳数仍精确、
+    烃类判定不松。"""
+    pytest.importorskip("rdkit")
+    # 放行：各种环氧命名写法（乙基环氧乙烷 = 2+2=4C；1-丁烯氧化物 = 4C）
+    for label in ("1,2-环氧丁烷", "乙基环氧乙烷", "环氧丁烷", "1-丁烯氧化物"):
+        _, ok = _validate(f"[STRUCT:CCC1CO1,label={label}]")
+        assert not ok, (label, [r.reason for r in ok])
+    # 环氧乙烷本体（2C1O）
+    _, ok = _validate("[STRUCT:C1CO1,label=环氧乙烷]")
+    assert not ok, [r.reason for r in ok]
+    # 碳数仍精确：1,2-环氧丁烷画成 1,2-环氧丙烷（3C）→ 仍拦截
+    _, bad = _validate("[STRUCT:CC1CO1,label=1,2-环氧丁烷]")
+    assert len(bad) == 1 and "应为 4 个碳" in bad[0].reason
+    # 缺 O 仍拦截：1,2-环氧丁烷画成纯碳环（环丁烷，4C 无 O）→ 应至少含 1 个 O
+    _, bad = _validate("[STRUCT:C1CCC1,label=1,2-环氧丁烷]")
+    assert len(bad) == 1 and "至少含 1 个 O" in bad[0].reason
+    # 烃类判定不松：丁烷画成环氧化物 → 仍拦截
+    _, bad = _validate("[STRUCT:CCC1CO1,label=丁烷]")
+    assert len(bad) == 1 and "不应含杂原子" in bad[0].reason
+
+
 def test_elimination_pi_target():
     """消除成 π 键方向校验（20260827，EAS σ 规则向普通双键推广——用户
     E1 实测病例：叔丁基碳正离子脱 β-H 生成异丁烯，C—H 键电子终点写成

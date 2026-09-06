@@ -41,6 +41,8 @@ KNOWN_SMILES = {
     # 20260822 corpus：苯磺化（EAS 机理），真实 RDKit 可解析的凯库勒苯/SO3/σ 络合物
     "C1=CC=CC=C1": _FakeMol(6), "O=S(=O)=O": _FakeMol(4),
     "O=S([O-])(=O)C([H])1C=CC=C[CH+]1": _FakeMol(10),
+    # 20260906 corpus：Q9 环氧误报病例（1,2-环氧丁烷/甲醇/2-甲氧基-1-丁醇）
+    "CCC1CO1": _FakeMol(5), "OCC(OC)CC": _FakeMol(7),
 }
 
 
