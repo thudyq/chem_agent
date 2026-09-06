@@ -503,8 +503,10 @@ def test_strip_render_code_removes_md_images():
 
 
 def test_extract_history_strips_md_images():
-    """_extract_history：assistant 历史消息的图片 markdown 被剥离；
-    user 消息不动。"""
+    """_extract_history：assistant 历史以去锚定状态摘要回喂（20260830
+    主题摘要方案）——图片 markdown/标记/TikZ 都不可能进入历史；
+    user 消息原文不动。（20260906 同步：20260828 版断言的 `[化学图示]`
+    占位是 _strip_render_code 层的输出，历史层已整体升级为摘要。）"""
     msgs = [
         {"role": "user", "content": "介绍 SN1 机理"},
         {"role": "assistant", "content": f"分两步：\n\n{_FAKE_MD_IMAGE}"},
@@ -512,8 +514,9 @@ def test_extract_history_strips_md_images():
     ]
     history = api._extract_history(msgs)
     assert len(history) == 2
-    assert "files/" not in history[1]["content"]
-    assert "[化学图示]" in history[1]["content"]
+    assert history[0]["content"] == "介绍 SN1 机理"       # user 原文不动
+    assert history[1]["content"] == "（已给出图示与说明）"  # assistant → 去锚定摘要
+    assert "files/" not in str(history) and "![" not in str(history)
 
 
 def test_output_strips_hallucinated_md_images_non_stream(client, monkeypatch):
