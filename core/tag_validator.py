@@ -474,11 +474,49 @@ def _balance_reason(left, right, strict_h: bool, step: str,
                 diff.append(f"{k} {d:+d}")
         diff_txt = f"，右侧相对左侧：{'、'.join(diff)}" if diff else ""
         return (f"{_CHEM_PREFIX}{step}两侧原子不守恒（{detail}{diff_txt}，"
-                f"{hint or '请核对物种 SMILES 是否多写/漏写原子；辅助试剂请写入箭头条件而非省略主物种'}）")
+                f"{hint or _balance_guidance(left[0], right[0], left[1], right[1])}）")
     if check_charge and left[1] != right[1]:
         return (f"{_CHEM_PREFIX}{step}两侧净电荷不守恒"
                 f"（{left[1]:+d} vs {right[1]:+d}，需补全离子或修正电荷）")
     return ""
+
+
+# 分场景指引关注的金属阳离子（旁观/反离子漏写的高频元素）
+_BALANCE_METALS = ("Na", "K", "Li", "Mg", "Ca")
+
+
+def _balance_guidance(left_counts: dict, right_counts: dict,
+                      left_q: int, right_q: int) -> str:
+    """守恒失败的场景化修正指引（20260906，G6：Q5 病例——右侧漏写 Na⁺
+    反离子时，通用指引"辅助试剂请写入箭头条件"反而诱导删物种、三轮振荡）。
+
+    按差额元素分类：缺金属阳离子且该侧有净负电荷 → 指引补反离子；
+    差额恰为一分子水（H±2、O±1）→ 指引补水；其余保留通用指引。
+    指引必须"可照抄"（与错误信息可照抄化同一原则）。
+    """
+    diff = {k: right_counts.get(k, 0) - left_counts.get(k, 0)
+            for k in set(left_counts) | set(right_counts)}
+    short_metals = [m for m in _BALANCE_METALS if diff.get(m)]
+    if short_metals:
+        for m in short_metals:
+            # diff[m] < 0 → 右侧缺该金属；>0 → 左侧缺
+            side_q = right_q if diff[m] < 0 else left_q
+            if side_q < 0:
+                side = "右侧" if diff[m] < 0 else "左侧"
+                return (f"{'、'.join(short_metals)} 只在另一侧出现——{side}有"
+                        f"带负电的物种却缺反离子：请把离子对写进同一个组分"
+                        f"（用 . 连接，如钠盐写 [C-]#C.[Na+]），"
+                        f"而不是删掉带金属的物种")
+        return ("两侧金属离子数不等——请核对含金属物种（金属有机试剂/盐）"
+                "的离子对写法")
+    if diff.get("H") == -2 and diff.get("O") == -1:
+        return ("右侧疑似漏写一分子水：请在产物侧补 [STRUCT:O]"
+                "（或箭头条件写 -H2O 补足）")
+    if diff.get("H") == 2 and diff.get("O") == 1:
+        return ("左侧疑似漏写一分子水：请在反应物侧补 [STRUCT:O]"
+                "（或箭头条件写 H2O 补足）")
+    return ("请核对物种 SMILES 是否多写/漏写原子；辅助试剂请写入箭头条件"
+            "而非省略主物种")
 
 
 # ---------------------------------------------------------------------------

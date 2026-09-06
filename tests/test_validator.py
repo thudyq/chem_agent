@@ -1948,3 +1948,34 @@ def test_stereo_label_crosscheck():
     assert not bad10, [r.reason for r in bad10]
     _, bad11 = _validate("[STRUCT:F/C=C/Cl,label=顺-1-氟-2-氯乙烯]")
     assert not bad11, [r.reason for r in bad11]
+
+
+def test_balance_guidance_scenarios():
+    """G6（20260906，难题集 Q5 病例）：守恒失败消息分场景给可操作指引——
+    缺金属反离子给离子对写法、差一分子水给补水指引、通用场景保留原指引。"""
+    pytest.importorskip("rdkit")
+    # A：Q5 病例——NaNH2 脱质子右侧漏写 [Na+] 反离子 → 指引补反离子
+    _, bad = _validate(
+        "[COMPOSITE:reaction][STRUCT:C#C,label=乙炔,id=b1][PLUS]"
+        "[STRUCT:[Na+].[NH2-],label=氨基钠,id=r1][ARROW:type=single]"
+        "[STRUCT:[C-]#C,label=乙炔钠,id=b2][PLUS][STRUCT:N,label=氨]"
+        "[/COMPOSITE]")
+    assert len(bad) == 1 and "反离子" in bad[0].reason and "[Na+]" in bad[0].reason
+    assert "辅助试剂请写入箭头条件" not in bad[0].reason   # 不再给误导指引
+    # B：酯化漏写水（H -2、O -1）→ 指引补水
+    _, bad2 = _validate(
+        "[COMPOSITE:reaction][STRUCT:CC(=O)O,id=a][PLUS][STRUCT:CCO,id=b]"
+        "[ARROW:type=single,浓H2SO4][STRUCT:CC(=O)OCC,id=c][/COMPOSITE]")
+    assert len(bad2) == 1 and "漏写一分子水" in bad2[0].reason
+    # C：纯骨架不符（无金属、非水差额）→ 保留通用指引
+    _, bad3 = _validate(
+        "[COMPOSITE:reaction][STRUCT:CCO,id=a][PLUS][STRUCT:CCO,id=b]"
+        "[ARROW:type=single,140℃][STRUCT:CCCCCO,id=c][/COMPOSITE]")
+    assert len(bad3) == 1 and "辅助试剂请写入箭头条件" in bad3[0].reason
+    # D：反离子写全的正确版本放行（Q5 修正版）
+    _, bad4 = _validate(
+        "[COMPOSITE:reaction][STRUCT:C#C,label=乙炔,id=b1][PLUS]"
+        "[STRUCT:[Na+].[NH2-],label=氨基钠,id=r1][ARROW:type=single]"
+        "[STRUCT:[C-]#C.[Na+],label=乙炔钠,id=b2][PLUS][STRUCT:N,label=氨]"
+        "[/COMPOSITE]")
+    assert not bad4, [r.reason for r in bad4]
