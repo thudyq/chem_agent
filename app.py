@@ -13,7 +13,7 @@ from core.prompt_manager import load_mech_arrow_prompt, load_struct_rewrite_prom
 from core.tag_parser import parse_tags
 from core.tag_injector import inject_tags_into_text
 from core.tag_validator import (
-    autofix_mech_bond_endpoint, autofix_stereo_label,
+    autofix_balance_gap, autofix_mech_bond_endpoint, autofix_stereo_label,
     build_component_atom_maps, degrade_text_friendly,
     iter_struct_components, validate_tags,
 )
@@ -801,6 +801,10 @@ def _generate_with_corrections(user_question: str, model=None,
                     # 枚举 @ 组合/翻转方向键，不经 LLM——模型不会做
                     # "声称构型→@ 组合"的反向映射，修正三轮都救不回）
                     fix = autofix_stereo_label(r.tag)
+                if fix is None and "不守恒" in (r.reason or ""):
+                    # 守恒缺口确定性补足（20260906，Q5/Q13 类：旁观离子/水
+                    # 漏写的机械性缺口，修正环实测振荡多轮）
+                    fix = autofix_balance_gap(r.tag, r.reason)
                 if fix is None or r.tag.raw not in full_response:
                     continue
                 new_raw, note = fix

@@ -2039,3 +2039,48 @@ def test_autofix_stereo_label():
     assert autofix_stereo_label(tag4) is None
     tag5 = parse_tags("[STRUCT:CC=CC,label=2-丁烯]")[0]
     assert autofix_stereo_label(tag5) is None
+
+
+def test_autofix_balance_gap():
+    """守恒缺口确定性补足（20260906，难题集 Q5/Q13 类）——旁观离子/水漏写
+    由代码补齐（不经 LLM），采纳前重校验把关。"""
+    from core.tag_validator import autofix_balance_gap
+    pytest.importorskip("rdkit")
+    # A：Q5 病例——缺 Na+ 反离子（右侧乙炔钠带负电）→ 补进组分，重校验通过
+    tag = parse_tags(
+        "[COMPOSITE:reaction][STRUCT:C#C,label=乙炔,id=b1][PLUS]"
+        "[STRUCT:[Na+].[NH2-],label=氨基钠,id=r1][ARROW:type=single]"
+        "[STRUCT:[C-]#C,label=乙炔钠,id=b2][PLUS][STRUCT:N,label=氨]"
+        "[/COMPOSITE]")[0]
+    fix = autofix_balance_gap(tag)
+    assert fix is not None and "[C-]#C.[Na+]" in fix[0]
+    _, bad = _validate(fix[0])
+    assert not bad, [r.reason for r in bad]
+    # B：酯化缺水（产物侧）→ 补 [STRUCT:O,label=水]
+    tag2 = parse_tags(
+        "[COMPOSITE:reaction][STRUCT:CC(=O)O,id=a][PLUS][STRUCT:CCO,id=b]"
+        "[ARROW:type=single,浓H2SO4][STRUCT:CC(=O)OCC,id=c][/COMPOSITE]")[0]
+    fix2 = autofix_balance_gap(tag2)
+    assert fix2 is not None and "[STRUCT:O,label=水]" in fix2[0]
+    _, bad2 = _validate(fix2[0])
+    assert not bad2, [r.reason for r in bad2]
+    # C：酸催化水解缺水（反应物侧，产物写中性乙酸）→ 补在箭头前（左段末尾）
+    tag3 = parse_tags(
+        "[COMPOSITE:reaction][STRUCT:CC(=O)OCC,id=a]"
+        "[ARROW:type=single,H+][STRUCT:CC(=O)O,id=b][PLUS]"
+        "[STRUCT:CCO,id=c][/COMPOSITE]")[0]
+    fix3 = autofix_balance_gap(tag3)
+    assert fix3 is not None and "[STRUCT:O,label=水]" in fix3[0]
+    _, bad3 = _validate(fix3[0])
+    assert not bad3, [r.reason for r in bad3]
+    # D：骨架碳数不符（非机械缺口）→ 不修
+    tag4 = parse_tags(
+        "[COMPOSITE:reaction][STRUCT:CCO,id=a][PLUS][STRUCT:CCO,id=b]"
+        "[ARROW:type=single][STRUCT:CCCCCO,id=c][/COMPOSITE]")[0]
+    assert autofix_balance_gap(tag4) is None
+    # E：多负电组分（反离子归属歧义）→ 不修
+    tag5 = parse_tags(
+        "[COMPOSITE:reaction][STRUCT:[Na+].[NH2-],id=r1][ARROW:type=single]"
+        "[STRUCT:[C-]#C,id=b2][PLUS][STRUCT:[OH-],id=w]"
+        "[/COMPOSITE]")[0]
+    assert autofix_balance_gap(tag5) is None

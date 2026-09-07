@@ -1649,6 +1649,151 @@ def _cn_find_center(mol, kind: str):
     return cands[0] if len(cands) == 1 else None
 
 
+def autofix_balance_gap(tag, reason: str = "") -> tuple | None:
+    """守恒缺口确定性补足（20260906，难题集 Q5/Q13 类——旁观离子/水反复
+    漏写导致修正振荡）：reaction 布局按步核算，缺口为可机械补足的模式时
+    直接补齐，不经 LLM：
+
+    - 缺金属反离子（Na/K/Li，缺 1 个）：该侧有且仅有 1 个带负电组分 →
+      反离子写进该组分（`[C-]#C.[Na+]`，Q5 病例）；
+    - 缺一分子水（差额恰为 H±2、O±1）→ 该侧补 `[STRUCT:O,label=水]`
+      （缩合/酯化漏写水的高频病例）。
+
+    跳过面（宁漏勿拦）：非 reaction 布局、含 BLOCK、带系数组件、
+    多负电组分（反离子归属歧义）、缺口不匹配上述模式。步的判定复用
+    `_check_reaction_step`（含 2b 箭头补足口径），只对真实失败的步动手。
+    采纳与否由调用方全量重校验把关。返回 (新 raw, 说明) 或 None。
+    """
+    if tag.type != "COMPOSITE" or not tag.args or len(tag.args) < 2:
+        return None
+    if (tag.args[0] or "").split(",")[0].strip() != "reaction":
+        return None
+    children = tag.args[1]
+    if not isinstance(children, list) or \
+            any(c.type == "BLOCK" for c in children):
+        return None
+    # 组件表（与校验器同口径：系数剥离；arrow 令牌标记；raw 供文本手术）
+    comps, cid_of = {}, {}
+    for cid, child in iter_struct_components(children):
+        raw_smi = child.args[0].strip() if child.args and child.args[0] else ""
+        parsed_c = _parse_coeff(raw_smi)
+        if parsed_c is None or parsed_c[0] != 1:
+            return None   # 带系数组件的文本手术有归属歧义，不修
+        comps[cid] = {"smiles": parsed_c[1], "child": child}
+        cid_of[id(child)] = cid
+    # 序列化主序列（与 _check_reaction_sequence 同构），保留组件身份供定位
+    seq = []
+    for child in children:
+        if child.type == "STRUCT":
+            cid = cid_of.get(id(child))
+            if child.attrs.get("arrow"):
+                continue   # sup 附件不进主序列
+            seq.append(("struct", comps[cid]["smiles"], cid))
+        elif child.type == "PLUS":
+            seq.append(("plus",))
+        elif child.type == "ARROW":
+            seq.append(("arrow", (child.args[0] if child.args else "") or "single",
+                        child.args[1] if len(child.args) > 1 else [],
+                        child.args[2] if len(child.args) > 2 else "",
+                        child.raw))
+    # 分步
+    segments, arrows = [], []
+    cur = []
+    for item in seq:
+        if item[0] == "arrow":
+            arrows.append(item)
+            segments.append(cur)
+            cur = []
+        elif item[0] == "struct":
+            cur.append(item)
+    segments.append(cur)
+
+    def _net_charge(smi: str):
+        """组分净电荷；无法解析/无 RDKit 返回 None。"""
+        if not _RDKIT_OK:
+            return None
+        m = _parse_mol(smi)
+        if m is None:
+            return None
+        try:
+            return sum(a.GetFormalCharge() for a in m.GetAtoms())
+        except Exception:
+            return None
+
+    for i, arrow in enumerate(arrows):
+        a_type = arrow[1]
+        if a_type not in ("single", "reversible"):
+            continue
+        left_items = [("struct", it[1]) for it in segments[i]]
+        right_items = [("struct", it[1]) for it in segments[i + 1]]
+        step_reason = _check_reaction_step(left_items, right_items,
+                                           arrow[:4], i, comps)
+        if not step_reason or "不守恒" not in step_reason:
+            continue
+        # 该步真实失败。物种加总（含 sup 附件：+id 计左、-id 计右）
+        left_cids = [it[2] for it in segments[i]]
+        right_cids = [it[2] for it in segments[i + 1]]
+        for s in (arrow[2] or []):
+            s = s.strip()
+            if s:
+                (left_cids if s[0] != "-" else right_cids).append(
+                    s.lstrip("+-"))
+        for cids in (left_cids, right_cids):
+            if any(c not in comps for c in cids):
+                break
+        else:
+            left = _sum_species([(1, comps[c]["smiles"]) for c in left_cids])
+            right = _sum_species([(1, comps[c]["smiles"]) for c in right_cids])
+            if left is not None and right is not None and left != right:
+                diff = {k: right[0].get(k, 0) - left[0].get(k, 0)
+                        for k in set(left[0]) | set(right[0]) if
+                        right[0].get(k, 0) != left[0].get(k, 0)}
+                # ① 缺金属反离子：差额恰为 1 个单价金属，且缺失侧有且仅有
+                #    1 个带负电组分 → 反离子写进该组分
+                metal_short = [m for m in ("Na", "K", "Li")
+                               if abs(diff.get(m, 0)) == 1]
+                if metal_short and len(diff) == 1:
+                    short_left = diff[metal_short[0]] > 0
+                    cids = left_cids if short_left else right_cids
+                    neg = [c for c in cids
+                           if (_net_charge(comps[c]["smiles"]) or 0) < 0]
+                    if len(neg) == 1:
+                        metal = metal_short[0]
+                        child = comps[neg[0]]["child"]
+                        bare = comps[neg[0]]["smiles"]
+                        if f"[{metal}+]" not in bare:
+                            new_child_raw = child.raw.replace(
+                                bare, f"{bare}.[{metal}+]", 1)
+                            new_raw = tag.raw.replace(child.raw,
+                                                      new_child_raw, 1)
+                            return (new_raw,
+                                    f"守恒自动补足：{neg[0]} 组分补反离子 "
+                                    f"[{metal}+]（第 {i + 1} 步）")
+                # ② 缺一分子水：差额恰为 H±2、O±1 → 缺失侧补水组分
+                if set(diff) == {"H", "O"} and \
+                        abs(diff["H"]) == 2 and abs(diff["O"]) == 1:
+                    short_left = diff["H"] > 0   # 右侧多 → 左侧缺
+                    water = "[PLUS][STRUCT:O,label=水]"
+                    if short_left:
+                        # 左侧缺：插到本步箭头之前（即左段末尾）
+                        new_raw = tag.raw.replace(arrow[4],
+                                                  water + arrow[4], 1)
+                    else:
+                        # 右侧缺：插到下一箭头之前，或 [/COMPOSITE] 之前
+                        if i + 1 < len(arrows):
+                            anchor = arrows[i + 1][4]
+                            new_raw = tag.raw.replace(anchor,
+                                                      water + anchor, 1)
+                        else:
+                            new_raw = tag.raw.replace(
+                                "[/COMPOSITE]", water + "[/COMPOSITE]", 1)
+                    side = "左" if short_left else "右"
+                    return (new_raw,
+                            f"守恒自动补足：第 {i + 1} 步{side}侧补水组分 "
+                            f"[STRUCT:O,label=水]")
+    return None
+
+
 def _check_cn_topology(mol, topo: dict, label: str) -> str:
     """拓扑一致性：骨架分支特征 + 官能团中心碳的碳邻居数。
 

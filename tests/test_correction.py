@@ -564,3 +564,20 @@ def test_autofix_stereo_skips_llm_correction(monkeypatch):
     assert len(calls) == 1                     # 自动修正，无 LLM 修正调用
     assert "无法渲染" not in result
     assert "tikzpicture" in result
+
+
+def test_autofix_balance_gap_skips_llm_correction(monkeypatch):
+    """守恒缺口自动补足端到端（20260906，Q5 病例）：漏写 Na+ 反离子 →
+    自动补齐后直接渲染，零 LLM 修正调用。"""
+    pytest.importorskip("rdkit")
+    calls = []
+    bad_tag = ("[COMPOSITE:reaction][STRUCT:C#C,label=乙炔,id=b1][PLUS]"
+               "[STRUCT:[Na+].[NH2-],label=氨基钠,id=r1][ARROW:type=single]"
+               "[STRUCT:[C-]#C,label=乙炔钠,id=b2][PLUS][STRUCT:N,label=氨]"
+               "[/COMPOSITE]")
+    monkeypatch.setattr(
+        "app.ask_llm", lambda *a, **k: calls.append(k) or f"脱质子：{bad_tag}")
+    result = process_question("炔钠制备测试", max_corrections=2)
+    assert len(calls) == 1                     # 自动补足，无 LLM 修正调用
+    assert "无法渲染" not in result
+    assert "tikzpicture" in result
