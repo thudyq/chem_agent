@@ -1403,12 +1403,27 @@ def _chinese_name_constraints(label: str):
         return None   # 混写/含英文（(R)-乳酸等），不查
     if any(w in label for w in _CN_LABEL_SKIP):
         return None
+    composite_suffix = False
     m = _CN_MAIN_RE.search(label)
     if m is not None:
         c_total = _CN_CARBON_NUM[m.group(1)]
         c_src = f"{m.group(1)}={c_total}"
         suffix_txt = m.group(2)
         main_start = m.start()
+        # 复合后缀修正（20260906，难题集 Q13 误报病例）：「2-丁烯醛」
+        # 「顺丁烯二酸」等 烯/炔+杂原子后缀 复合命名，主正则匹配到 烯/炔
+        # 即停（"丁烯"），真正的主基团（醛/酸…）被丢 → 烃类误判把好图拦死。
+        # 烃类后缀后紧跟杂原子后缀时，改判杂原子后缀（倍数前缀一并转移，
+        # 如 二酸 → O≥4）。
+        if re.fullmatch(r"(二|三|四)?(烯|炔)", suffix_txt):
+            hm = re.match(r"(二|三|四)?(羧酸|氨酸|酸|醇|醛|酮|胺|腈)",
+                          label[m.end():])
+            if hm:
+                suffix_txt = (hm.group(1) or "") + hm.group(2)
+                # 复合命名的位次号归属不饱和键（2-丁烯醇 = 丁-2-烯-1-醇，
+                # 2 是双键位次而非羟基位次）——拓扑中心的位次语义不可靠，
+                # 跳过拓扑检查
+                composite_suffix = True
         # 主链已占用后，其余 X基 均为取代基（2-甲基-2-丙醇 → 甲基 +1）
         sub_c = 0
         for g in _CN_GROUP_RE.finditer(label):
@@ -1461,9 +1476,10 @@ def _chinese_name_constraints(label: str):
         h_src.append("环氧（≥1 O）")
     hydrocarbon = (suffix in _CN_HYDROCARBON_SUFFIXES and n_prefix == 0
                    and not epoxy)
-    topo = _cn_topology(label, main_start, c_total, suffix,
-                        suffix_mult, has_substituent=sub_c > 0,
-                        halo_in_head=halo_in_head)
+    topo = None if composite_suffix else _cn_topology(
+        label, main_start, c_total, suffix,
+        suffix_mult, has_substituent=sub_c > 0,
+        halo_in_head=halo_in_head)
     return {"C": c_total, "c_src": c_src, "hetero_min": hetero_min,
             "h_src": "+".join(h_src), "hydrocarbon": hydrocarbon,
             "suffix": suffix, "topo": topo}

@@ -1979,3 +1979,26 @@ def test_balance_guidance_scenarios():
         "[STRUCT:[C-]#C.[Na+],label=乙炔钠,id=b2][PLUS][STRUCT:N,label=氨]"
         "[/COMPOSITE]")
     assert not bad4, [r.reason for r in bad4]
+
+
+def test_chinese_label_composite_suffix():
+    """烯/炔+杂原子后缀复合命名修正（20260906，难题集 Q13 误报病例）：
+    「2-丁烯醛」曾被主正则解析为后缀=烯 → 误判"烃类不应含杂原子"。
+    修复后改判杂原子后缀（醛 O≥1、酸 O≥2、二酸 O≥4），烃类判定不松。"""
+    pytest.importorskip("rdkit")
+    # 放行：复合命名的正确结构
+    _, bad = _validate("[STRUCT:C/C=C/C=O,label=2-丁烯醛]")
+    assert not bad, [r.reason for r in bad]
+    _, bad2 = _validate("[STRUCT:OCC=CC,label=2-丁烯醇]")
+    assert not bad2, [r.reason for r in bad2]
+    _, bad3 = _validate("[STRUCT:O=C(O)C=CC(=O)O,label=顺丁烯二酸]")
+    assert not bad3, [r.reason for r in bad3]
+    # 拦截：复合命名缺杂原子
+    _, bad4 = _validate("[STRUCT:CC=CC,label=2-丁烯醛]")
+    assert len(bad4) == 1 and "至少含 1 个 O" in bad4[0].reason
+    # 碳数仍精确：2-丁烯醛画成丙烯醛（3C）→ 拦截
+    _, bad5 = _validate("[STRUCT:C=CC=O,label=2-丁烯醛]")
+    assert len(bad5) == 1 and "应为 4 个碳" in bad5[0].reason
+    # 烃类判定不松：纯烯烃含杂原子仍拦截
+    _, bad6 = _validate("[STRUCT:CC(O)C=C,label=2-丁烯]")
+    assert len(bad6) == 1 and "不应含杂原子" in bad6[0].reason
