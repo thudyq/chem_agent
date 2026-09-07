@@ -2002,3 +2002,40 @@ def test_chinese_label_composite_suffix():
     # 烃类判定不松：纯烯烃含杂原子仍拦截
     _, bad6 = _validate("[STRUCT:CC(O)C=C,label=2-丁烯]")
     assert len(bad6) == 1 and "不应含杂原子" in bad6[0].reason
+
+
+def test_autofix_stereo_label():
+    """立体指定确定性自动修正（20260906，难题集 Q1/Q3 病例——校验拦下后
+    模型三轮修不对）：枚举 @/@@ 组合或翻转方向键，不经 LLM，构造即正确。"""
+    from core.tag_validator import autofix_stereo_label
+    pytest.importorskip("rdkit")
+    # Q1 病例：(2S,3S) 写法声称 (2R,3S) → 枚举到正确写法
+    tag = parse_tags(
+        "[STRUCT:C[C@H](Cl)[C@@H](Cl)CC,mode=stereo,"
+        "label=(2R,3S)-2,3-二氯戊烷]")[0]
+    fix = autofix_stereo_label(tag)
+    assert fix is not None and "自动修正" in fix[1]
+    _, bad = _validate(fix[0])
+    assert not bad, [r.reason for r in bad]          # 修后全校验通过
+    # 修正结果与已核实的 (2R,3S) 写法 canonical 同一（canonical 化可能
+    # 重排原子序，CIP 判定顺序随之变化——同一性以 isomeric canonical 为准）
+    from rdkit import Chem
+    fixed_smi = fix[0].split(":", 1)[1].split(",")[0]
+    assert Chem.MolToSmiles(Chem.MolFromSmiles(fixed_smi)) == \
+        Chem.MolToSmiles(Chem.MolFromSmiles("C[C@@H](Cl)[C@@H](Cl)CC"))
+    # 本来就对的写法 → 不修
+    tag2 = parse_tags(
+        "[STRUCT:C[C@@H](Cl)[C@@H](Cl)CC,mode=stereo,"
+        "label=(2R,3S)-2,3-二氯戊烷]")[0]
+    assert autofix_stereo_label(tag2) is None
+    # 顺反写反（E 声称顺）→ 翻转方向键
+    tag3 = parse_tags("[STRUCT:C/C=C/C,label=顺-2-丁烯]")[0]
+    fix3 = autofix_stereo_label(tag3)
+    assert fix3 is not None and "C/C=C\\C" in fix3[0]
+    _, bad3 = _validate(fix3[0])
+    assert not bad3, [r.reason for r in bad3]
+    # 无立体声称 / 无立体标记 → 不修
+    tag4 = parse_tags("[STRUCT:CC(O)C,label=异丙醇]")[0]
+    assert autofix_stereo_label(tag4) is None
+    tag5 = parse_tags("[STRUCT:CC=CC,label=2-丁烯]")[0]
+    assert autofix_stereo_label(tag5) is None

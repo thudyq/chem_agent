@@ -549,3 +549,18 @@ def test_correction_prompt_special_species_guidance():
     assert "自由基" in vr2.reason and "电荷" in vr2.reason
     prompt2 = _build_correction_prompt("苯基负离子", text2, [(tag2, vr2.reason)])
     assert "[CH-]" in prompt2 and "[C-]" in prompt2
+
+
+def test_autofix_stereo_skips_llm_correction(monkeypatch):
+    """立体枚举修正端到端（20260906，Q1 病例）：CIP 写反 → 自动修正后直接
+    渲染，零 LLM 修正调用。"""
+    pytest.importorskip("rdkit")
+    calls = []
+    bad_tag = ("[STRUCT:C[C@H](Cl)[C@@H](Cl)CC,mode=stereo,"
+               "label=(2R,3S)-2,3-二氯戊烷]")
+    monkeypatch.setattr(
+        "app.ask_llm", lambda *a, **k: calls.append(k) or f"构型：{bad_tag}")
+    result = process_question("立体构型测试", max_corrections=2)
+    assert len(calls) == 1                     # 自动修正，无 LLM 修正调用
+    assert "无法渲染" not in result
+    assert "tikzpicture" in result

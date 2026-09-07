@@ -13,8 +13,9 @@ from core.prompt_manager import load_mech_arrow_prompt, load_struct_rewrite_prom
 from core.tag_parser import parse_tags
 from core.tag_injector import inject_tags_into_text
 from core.tag_validator import (
-    autofix_mech_bond_endpoint, build_component_atom_maps,
-    degrade_text_friendly, iter_struct_components, validate_tags,
+    autofix_mech_bond_endpoint, autofix_stereo_label,
+    build_component_atom_maps, degrade_text_friendly,
+    iter_struct_components, validate_tags,
 )
 from renderers.registry import RENDERER_REGISTRY, render_tag
 # 渲染器失败串的统一前缀（各渲染器内部约定："（XX渲染失败：原因）"）
@@ -795,6 +796,11 @@ def _generate_with_corrections(user_question: str, model=None,
             fixed_any = False
             for r in invalid:
                 fix = autofix_mech_bond_endpoint(r.tag)
+                if fix is None:
+                    # 立体指定枚举修正（20260906，Q1 病例：CIP/顺反不符时
+                    # 枚举 @ 组合/翻转方向键，不经 LLM——模型不会做
+                    # "声称构型→@ 组合"的反向映射，修正三轮都救不回）
+                    fix = autofix_stereo_label(r.tag)
                 if fix is None or r.tag.raw not in full_response:
                     continue
                 new_raw, note = fix

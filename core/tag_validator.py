@@ -17,6 +17,7 @@
 """
 
 import contextlib
+import itertools
 import re
 from collections import Counter
 from dataclasses import dataclass, field
@@ -1693,6 +1694,24 @@ def _check_cn_topology(mol, topo: dict, label: str) -> str:
     return ""
 
 
+def _extract_rs_descriptors(label: str) -> list:
+    """label 括号内 R/S 描述符（按出现顺序，大写）。"""
+    desc = [m.upper() for m in
+            re.findall(r"\d\s*([RSrs])(?=[,，、)）\s])", label)]
+    desc += [m.upper() for m in
+             re.findall(r"[(\（]\s*([RS])\s*[)\）]", label)]
+    return desc
+
+
+def _extract_cistrans_claim(label: str) -> str:
+    """label 的顺/反声称：'Z'（顺）/ 'E'（反）/ ''（无）。"""
+    if re.search(r"\(E\)|反[-‐‑—–式]", label):
+        return "E"
+    if re.search(r"\(Z\)|顺[-‐‑—–式]", label):
+        return "Z"
+    return ""
+
+
 def _check_cip_label(mol, label: str) -> str:
     """CIP 构型与 label 的 R/S 声称交叉核对（20260906，G4：难题集 Q1 病例——
     (2S,3S) 的 SMILES 标「(2R,3S)」放行渲染；@/@@ 由 LLM 凭感觉写，错误高发）。
@@ -1704,10 +1723,7 @@ def _check_cip_label(mol, label: str) -> str:
     """
     if not label:
         return ""
-    desc = [m.upper() for m in
-            re.findall(r"\d\s*([RSrs])(?=[,，、)）\s])", label)]
-    desc += [m.upper() for m in
-             re.findall(r"[(\（]\s*([RS])\s*[)\）]", label)]
+    desc = _extract_rs_descriptors(label)
     if not desc:
         return ""
     centers_fn = getattr(Chem, "FindMolChiralCenters", None)
@@ -1741,11 +1757,8 @@ def _check_cistrans_label(mol, label: str) -> str:
     """
     if not label:
         return ""
-    if re.search(r"\(E\)|反[-‐‑—–式]", label):
-        claim = "E"
-    elif re.search(r"\(Z\)|顺[-‐‑—–式]", label):
-        claim = "Z"
-    else:
+    claim = _extract_cistrans_claim(label)
+    if not claim:
         return ""
     bonds_fn = getattr(mol, "GetBonds", None)
     stereo_enum = getattr(Chem, "BondStereo", None)
@@ -1785,6 +1798,94 @@ def _check_cistrans_label(mol, label: str) -> str:
                 f"{cn[actual]}式（{actual}）（顺反写反了——检查双键两侧 "
                 f"/ 与 \\ 的方向）")
     return ""
+
+
+def autofix_stereo_label(tag) -> tuple | None:
+    """立体指定确定性自动修正（20260906，难题集 Q1/Q3 病例——模型不会做
+    "声称构型 → @/@@ 组合"的反向映射，校验拦下后三轮都修不对）：
+
+    label 的 R/S 或顺/反声称与 SMILES 不符时，枚举手性中心 @/@@ 组合
+    （或翻转双键方向键 / ↔ \\）找出与声称一致的写法——不经 LLM，
+    构造即正确。多个候选与声称集合一致时优先"顺序一致"（label 描述符
+    顺序 == 中心按原子序号顺序的判定顺序）。
+    仅处理顶层 STRUCT（容器内组件的立体错误仍走 LLM 修正）。
+    是否采用由调用方重校验决定。返回 (新 raw, 说明) 或 None。
+    """
+    if tag.type != "STRUCT" or not _RDKIT_OK:
+        return None
+    if not tag.args or not tag.args[0]:
+        return None
+    centers_fn = getattr(Chem, "FindMolChiralCenters", None)
+    chiral_type = getattr(Chem, "ChiralType", None)
+    if centers_fn is None or chiral_type is None:
+        return None
+    smi = tag.args[0].strip()
+    label = (tag.args[1] or "") if len(tag.args) > 1 else ""
+
+    def _assign(m):
+        try:
+            return [c for _i, c in centers_fn(
+                m, includeUnassigned=True, useLegacyImplementation=False)]
+        except Exception:
+            return None
+
+    def _replace(new_smi, note):
+        if new_smi == smi or smi not in tag.raw:
+            return None
+        return tag.raw.replace(smi, new_smi, 1), note
+
+    # CIP：枚举手性中心 @/@@ 全部组合，找 CIP 判定与 label 声称一致者
+    claimed = _extract_rs_descriptors(label)
+    if claimed:
+        mol = _parse_mol(smi)
+        if mol is None:
+            return None
+        assigned = _assign(mol)
+        if not assigned or "?" in assigned or len(assigned) != len(claimed):
+            return None
+        if sorted(assigned) == sorted(claimed):
+            return None   # 本来就对（校验不会拦，防御分支）
+        idxs = [i for i, _ in centers_fn(mol, includeUnassigned=True,
+                                         useLegacyImplementation=False)]
+        variants = [chiral_type.CHI_TETRAHEDRAL_CW,
+                    chiral_type.CHI_TETRAHEDRAL_CCW]
+        matches = []
+        for combo in itertools.product(variants, repeat=len(idxs)):
+            m = Chem.MolFromSmiles(smi)
+            for i, t in zip(idxs, combo):
+                m.GetAtomWithIdx(i).SetChiralTag(t)
+            a2 = _assign(m)
+            if a2 and sorted(a2) == sorted(claimed):
+                matches.append((a2, Chem.MolToSmiles(m)))
+        if not matches:
+            return None
+        for a2, new_smi in matches:   # 优先顺序一致
+            if list(a2) == list(claimed):
+                return _replace(new_smi, f"立体构型自动修正：{smi} → {new_smi}")
+        return _replace(matches[0][1],
+                        f"立体构型自动修正（集合级）：{smi} → {matches[0][1]}")
+
+    # 顺/反：翻转双键方向键实现 E↔Z（校验已保证至多 1 个立体双键）
+    claim = _extract_cistrans_claim(label)
+    if claim and ("/" in smi or "\\" in smi):
+        mol = _parse_mol(smi)
+        if mol is None:
+            return None
+        if not _check_cistrans_label(mol, label):
+            return None   # 本来就对（防御分支）
+        # 只翻转双键**一侧**的方向键（全翻 = 约定镜像，相对构型不变）：
+        # 文本层把首个 = 之后的 / 与 \ 对调；重校验把关（仍不符则放弃）
+        eq = smi.find("=")
+        if eq < 0:
+            return None
+        tail = smi[eq:].replace("/", "\x00").replace("\\", "/") \
+                        .replace("\x00", "\\")
+        flipped = smi[:eq] + tail
+        m2 = _parse_mol(flipped)
+        if m2 is not None and not _check_cistrans_label(m2, label):
+            return _replace(flipped,
+                            f"顺反自动修正：翻转双键方向键（{claim}）")
+    return None
 
 
 def _validate_struct_args(args: list, attrs: dict = None) -> Tuple[bool, str]:
