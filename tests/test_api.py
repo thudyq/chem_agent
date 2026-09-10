@@ -174,6 +174,18 @@ def test_chat_stream_error_fallback(client, monkeypatch):
 
 def test_chat_multimodal_image(client, monkeypatch, tmp_path):
     """content 数组中的 image_url 经视觉理解后并入问题（与文字合并）。"""
+    import types
+
+    from core import credentials as cred
+    # ★ 视觉可用性由 `credentials.vision_config()` 判定（无请求覆盖时读**基准
+    # 配置**）。patch `api.settings` 是重构前的失效写法——`api.settings` 只是
+    # 导入时的引用，改了它对 `vision_config()` 没有影响，用例会悄悄退化成
+    # "看开发者 .env 里有没有 VISION_*"：本机配了 glm 就绿、删掉就红
+    # （20260910 实测：删掉 VISION_MODEL 后本文件 3 条 + ocr 全部变红）。
+    monkeypatch.setattr(cred, "vision_config", lambda: types.SimpleNamespace(
+        is_configured=True, model_name="vision-test",
+        base_url="https://vision.example/v1", api_key="sk-vision-test",
+        thinking="off", effort=""))
     captured = {}
     monkeypatch.setattr(api, "_fetch_image_to_temp", lambda url, tmp: "x.png")
     import utils.ocr_utils as ocr
@@ -193,9 +205,16 @@ def test_chat_multimodal_image(client, monkeypatch, tmp_path):
 
 def test_build_question_image_caution(monkeypatch):
     """B3（20260826）：图片输入时提示识别可能有误（smiles_ok 缺省 → 一般提示）。"""
+    import types
+
+    from core import credentials as cred
     import utils.ocr_utils as ocr
-    monkeypatch.setattr(api, "settings", types.SimpleNamespace(
-        vision=types.SimpleNamespace(is_configured=True)))
+    # 见 test_chat_multimodal_image：必须 patch `credentials.vision_config`，
+    # patch `api.settings` 无效（会让结果取决于开发者 .env）
+    monkeypatch.setattr(cred, "vision_config", lambda: types.SimpleNamespace(
+        is_configured=True, model_name="vision-test",
+        base_url="https://vision.example/v1", api_key="sk-vision-test",
+        thinking="off", effort=""))
     monkeypatch.setattr(api, "_fetch_image_to_temp", lambda url, tmp: "x.png")
     monkeypatch.setattr(ocr, "describe_image",
                         lambda p: {"type": "结构式", "content": "c1ccccc1"})
@@ -207,9 +226,14 @@ def test_build_question_image_caution(monkeypatch):
 
 def test_build_question_image_bad_smiles_specific_caution(monkeypatch):
     """B3：smiles_ok=False（结构 SMILES 无法解析）→ 特定"无法解析/核对"提示。"""
+    import types
+
+    from core import credentials as cred
     import utils.ocr_utils as ocr
-    monkeypatch.setattr(api, "settings", types.SimpleNamespace(
-        vision=types.SimpleNamespace(is_configured=True)))
+    monkeypatch.setattr(cred, "vision_config", lambda: types.SimpleNamespace(
+        is_configured=True, model_name="vision-test",
+        base_url="https://vision.example/v1", api_key="sk-vision-test",
+        thinking="off", effort=""))
     monkeypatch.setattr(api, "_fetch_image_to_temp", lambda url, tmp: "x.png")
     monkeypatch.setattr(ocr, "describe_image",
                         lambda p: {"type": "结构式", "content": "SMILES: XYZABC",

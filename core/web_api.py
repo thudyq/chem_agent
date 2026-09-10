@@ -256,13 +256,6 @@ def cleanup_expired_sessions(ttl_seconds: int = SESSION_TTL_SECONDS) -> int:
     return removed
 
 
-def _public_base(request: Request) -> str:
-    """附件下载 URL 前缀：优先 PUBLIC_BASE_URL，否则按请求 Host 推导。"""
-    if settings.service.public_base_url:
-        return settings.service.public_base_url
-    return str(request.base_url).rstrip("/")
-
-
 # ---------------------------------------------------------------- 问题构造
 
 def _extract_question(messages) -> tuple[str, list]:
@@ -403,19 +396,38 @@ def _build_question(text: str, images: list, session_dir: Path) -> str:
 
 # ---------------------------------------------------------------- 结果整备
 
-def _prepare_answer(answer: str, session_id: str, public_base: str) -> str:
+def _prepare_answer(answer: str, session_id: str) -> str:
     """TikZ 代码块 → 编译为 PNG → 就地替换为行内图片引用，返回展示文本。
 
     会话级附件目录（`data/web_sessions/<sid>/`）+ `/api/session/<sid>/<name>.png`
     下载路由：不同用户的图片互不可见（文件名随机 + 会话隔离），且可随会话
     TTL 清理。编译失败降级为"（图示未能渲染）"，不影响文字。
+
+    ★ 图片 URL 用**相对路径**，**故意不拼 `PUBLIC_BASE_URL`**。网页是浏览器
+    直接打开的，相对路径必然解析到"用户此刻正在访问的那个源"，因此：
+
+    * 不会把服务器 `.env` 的公网地址施加给访客——那个地址上既没有这条会话
+      路由、也没有这张图（图落盘在本机 `_SESSIONS_DIR`）。20260910 实测：
+      本地 `uvicorn` 起服务时所有图示全裂，浏览器按 `.env` 的
+      `PUBLIC_BASE_URL=https://60.205.181.60` 去请求
+      `https://60.205.181.60/api/session/<sid>/<name>.png`，而那台机器跑的是
+      旧版应用（`/api/session/*` 与 `/api/web-config` 均 404），必然加载失败；
+    * 反代（Nginx + https）下不会因为推断出的 scheme 是 http 而触发浏览器的
+      混合内容拦截——这正是当初引入绝对 URL 想解决的问题，相对路径让它从
+      根上不存在。
+
+    注意与 `/v1` 的分工：那条路径的图是**清小搭在服务端抓取**的，必须要绝对
+    URL，故 `api.py::_public_base` 保持原样（用 `.env` 的 `PUBLIC_BASE_URL`
+    兜底、缺省按请求 Host 推导）。
     """
     answer = answer or ""
     if not answer:
         return ""
     try:
+        # public_base 传空串：本路径**不使用** build_attachments 拼出的绝对前缀，
+        # 只借用它落盘并返回文件名（见下方 ★ 与函数 docstring）
         attachments = build_attachments(
-            answer, public_base,
+            answer, "",
             dir_path=_session_dir(session_id),
             max_bytes=200 * 1024 * 1024, max_files=2000)
     except Exception as e:      # 编译异常不拖垮已生成的文字
@@ -428,9 +440,10 @@ def _prepare_answer(answer: str, session_id: str, public_base: str) -> str:
         if not a:
             urls.append(None)
             continue
-        # build_attachments 给的是 {base}/files/<name>，换成会话路由
+        # build_attachments 给的是 {base}/files/<name>：只取文件名，丢弃它拼的
+        # 绝对前缀（那前缀来自服务器 .env，见本函数 ★），换成**同源相对**路由
         name = a["fileUrl"].rsplit("/", 1)[-1]
-        urls.append(f"{public_base}/api/session/{session_id}/{name}")
+        urls.append(f"/api/session/{session_id}/{name}")
     return replace_code_blocks_with_images(answer, urls)
 
 
@@ -560,7 +573,6 @@ async def chat(request: Request,
         session_id = uuid.uuid4().hex
     session_dir = _session_dir(session_id)
     history = _extract_history(messages)
-    public_base = _public_base(request)
 
     # 整个请求（含后续 SSE 子线程）都在用户凭证作用域内
     with credentials.user_credentials(creds):
@@ -578,7 +590,7 @@ async def chat(request: Request,
             # 服务器 `.env`（20260830 实测：网页填 deepseek-flash、日志却是
             # .env 的 gemini-3.7-flash，根因即此）。由生成器自己重新建立作用域。
             return StreamingResponse(
-                _sse_stream(question, history, session_id, public_base,
+                _sse_stream(question, history, session_id,
                             thinking=_thinking_of(creds),
                             effort=creds.get("effort"),
                             max_tokens=_max_tokens_of(creds),
@@ -598,7 +610,7 @@ async def chat(request: Request,
         diaglog.log_request(question, f"web-{session_id[:8]}", diag,
                             responses[-1] if responses else None,
                             credential=credentials.fingerprint())
-        display = _prepare_answer(answer, session_id, public_base)
+        display = _prepare_answer(answer, session_id)
         if responses:
             answer_cache.store(display, responses[-1],
                                meta=_diag_meta(diag))
@@ -621,7 +633,7 @@ def _diag_meta(diag: list) -> dict:
 
 
 def _sse_stream(question: str, history: list, session_id: str,
-                public_base: str, thinking: str = None, effort: str = None,
+                thinking: str = None, effort: str = None,
                 max_tokens: int = None, creds: dict = None):
     """SSE 帧序列：role → reasoning 心跳 → content 增量 → stop(+session_id)。
 
@@ -644,12 +656,12 @@ def _sse_stream(question: str, history: list, session_id: str,
     同理不能用 `with user_credentials(...)`：`reset` 要求 set/reset 同 Context，
     跨迭代会抛 `ValueError: Token was created in a different Context`。
     """
-    yield from _sse_stream_inner(question, history, session_id, public_base,
+    yield from _sse_stream_inner(question, history, session_id,
                                  thinking, effort, max_tokens, creds)
 
 
 def _sse_stream_inner(question: str, history: list, session_id: str,
-                      public_base: str, thinking: str = None,
+                      thinking: str = None,
                       effort: str = None, max_tokens: int = None,
                       creds: dict = None):
     """`_sse_stream` 的主体；用户凭证在 `work()` 内落地（见 `_sse_stream`）。"""
@@ -685,8 +697,7 @@ def _sse_stream_inner(question: str, history: list, session_id: str,
         diaglog.log_request(question, f"web-{session_id[:8]}", diag,
                             responses[-1] if responses else None,
                             credential=credentials.fingerprint())
-        display = _polish_answer(_prepare_answer(answer or "", session_id,
-                                                public_base))
+        display = _polish_answer(_prepare_answer(answer or "", session_id))
         if responses:
             answer_cache.store(display, responses[-1], meta=_diag_meta(diag))
         answer_q.put(display)

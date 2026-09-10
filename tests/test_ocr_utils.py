@@ -18,15 +18,29 @@ def _fake_response(content: str, status: int = 200):
     return resp
 
 
+def _vision_stub(**kw):
+    """视觉配置替身（`describe_image` 只读这几个属性）。"""
+    base = dict(api_key="sk-vision-test", base_url="https://vision.example/v1",
+                model_name="vision-test", is_configured=True,
+                thinking="off", effort="")
+    base.update(kw)
+    return types.SimpleNamespace(**base)
+
+
 @pytest.fixture
 def fake_vision(monkeypatch):
     """配置视觉模型 + mock 读图 + 可控响应；返回 (state, 图片路径)。
 
+    ★ 必须 patch `credentials.vision_config()`：视觉的可用性与取值统一由它
+    解析（无请求覆盖时读**基准配置**）。早先 patch `ocr.settings` 是重构前的
+    失效写法——`ocr.settings` 只是导入时的引用，改了它 `describe_image` 根本
+    不读，用例于是退化成"看开发者 .env 里有没有 VISION_*"：本机配了
+    `VISION_MODEL=glm-5.3-flash` 就全绿，删掉就整文件变红（20260910 实测）。
+
     读图层（_read_image_b64）整体 mock 掉——沙箱禁止测试进程写文件
     （含项目内临时目录），describe_image 只依赖 base64 字符串。
     """
-    monkeypatch.setattr(ocr, "settings", types.SimpleNamespace(vision=types.SimpleNamespace(
-        api_key="k", base_url="http://v", model_name="glm", is_configured=True)))
+    monkeypatch.setattr(ocr.credentials, "vision_config", _vision_stub)
     monkeypatch.setattr(ocr, "_read_image_b64", lambda path: "aGVsbG8=")
     state = {"content": "类型：结构式\n内容：苯环，SMILES: c1ccccc1", "status": 200}
 
@@ -68,8 +82,10 @@ def test_describe_http_error_returns_none(fake_vision):
 
 def test_describe_unconfigured_returns_none(monkeypatch):
     """未配置视觉模型 → None（在读图之前即返回，无需真实图片）。"""
-    monkeypatch.setattr(ocr, "settings", types.SimpleNamespace(
-        vision=types.SimpleNamespace(is_configured=False)))
+    monkeypatch.setattr(ocr.credentials, "vision_config",
+                        lambda: _vision_stub(is_configured=False,
+                                             api_key="", base_url="",
+                                             model_name=""))
     assert ocr.describe_image("no-such-file.png") is None
 
 

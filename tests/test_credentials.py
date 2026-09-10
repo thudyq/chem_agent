@@ -270,10 +270,13 @@ def test_vision_independent_model(base_cfg):
             "base_url": "https://api.moonshot.cn/v1",
             "vision_model": "glm-5.3-flash"}):
         v = credentials.vision_config()
+        # ★ 必须在 with **内**判定：`vision_is_main()` 读当前作用域的凭证，
+        # 出了 with 就退回基准配置，断言会退化成"看开发者 .env 里有没有
+        # VISION_*"（20260910 实测：删掉 VISION_MODEL 后这里变红）
+        assert credentials.vision_is_main() is False
     assert v.model_name == "glm-5.3-flash"
     assert v.api_key == "sk-user"
     assert v.base_url == "https://api.moonshot.cn/v1"
-    assert credentials.vision_is_main() is False
     assert v.thinking == "off"      # 独立模型默认关思考（识图要快要省）
 
 
@@ -304,8 +307,11 @@ def test_vision_never_inherits_server_vision(base_cfg):
 
 
 def test_vision_explicit_thinking_override(base_cfg):
+    # 视觉三项给全：**不依赖**基准配置的 `VISION_BASE_URL` 兜底，否则开发者
+    # 没配 `VISION_*` 时会落进"未配置"分支、thinking 被清空（20260910 实测）
     with credentials.user_credentials({
             "api_key": "sk-u", "model": "m1", "vision_model": "v1",
+            "vision_base_url": "https://vision.example/v1",
             "vision_thinking": "on", "vision_effort": "high"}):
         v = credentials.vision_config()
     assert v.thinking == "on"

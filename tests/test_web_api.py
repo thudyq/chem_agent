@@ -364,6 +364,46 @@ def test_answer_compiles_tikz_to_session_image(web, answered, monkeypatch):
     assert "![化学图示-1](" in content
     assert f"/api/session/{'a' * 32}/{'b' * 32}.png" in content
     assert "tikzpicture" not in content          # 裸代码已替换
+    img = content.split("![化学图示-1](", 1)[1].split(")", 1)[0]
+    assert img == f"/api/session/{'a' * 32}/{'b' * 32}.png", \
+        "图示 URL 必须是同源相对路径（不得拼服务器 PUBLIC_BASE_URL）"
+
+
+def test_session_image_url_is_origin_relative_and_fetchable(web, answered,
+                                                             monkeypatch):
+    """★ 回归（20260910）：图示 URL 是同源相对路径，且真能取回 PNG。
+
+    以前 `_prepare_answer` 把服务器 `.env` 的 `PUBLIC_BASE_URL` 当图片前缀，
+    于是**本机起服务**时浏览器会去请求那台公网机器上的
+    `/api/session/<本地会话id>/<图>`：那台机器跑的是旧版应用（实测该路由与
+    `/api/web-config` 都是 404），而且图**根本没落在它上面**（图写在本机
+    `_SESSIONS_DIR`）——所以每个化学图示都裂成 alt 文本。相对路径让浏览器
+    必然回到"它此刻正在访问的这个源"，同时避免反代下 scheme 推断成 http
+    触发的混合内容拦截。
+
+    这里用**真实**的 `build_attachments`（只把 LaTeX 编译换成假 PNG 字节），
+    因此连"前缀被丢弃""文件真的落盘""相对 URL 真能 200 取回"一起覆盖。
+    """
+    from core import attachments
+    png = b"\x89PNG\r\n\x1a\n" + b"0" * 64
+    monkeypatch.setattr(attachments, "compile_tikz_to_png",
+                        lambda code, **kw: png)
+
+    r = web.post("/api/chat", json=_payload(), headers=KEY_HEADERS)
+    assert r.status_code == 200
+    content = r.json()["content"]
+    assert "![化学图示-1](" in content, f"没生成图片引用: {content!r}"
+    img = content.split("![化学图示-1](", 1)[1].split(")", 1)[0]
+
+    assert img.startswith("/api/session/"), f"应是同源相对路径: {img!r}"
+    assert "://" not in img, \
+        f"图示 URL 不得带 scheme/host（那会指向服务器 .env 的公网地址）: {img!r}"
+
+    # 真取一次：同一 app 上必须能拿到这张 PNG
+    got = web.get(img)
+    assert got.status_code == 200, f"{img} 取不到（{got.status_code}）"
+    assert got.headers["content-type"] == "image/png"
+    assert got.content == png
 
 
 def test_serve_session_attachment(web, answered, monkeypatch):
