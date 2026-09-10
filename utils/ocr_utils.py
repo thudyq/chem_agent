@@ -13,6 +13,7 @@ import time
 
 import requests
 
+from core import credentials
 from core.config import settings
 
 _DESCRIBE_PROMPT = """请描述这张图片的内容，供后续化学问答使用。按内容类型分别处理：
@@ -160,37 +161,56 @@ def _read_image_b64(image_path: str) -> str | None:
 
 
 def _describe_once(url: str, headers: dict, payload: dict,
-                   model: str) -> tuple:
+                   model: str, cap_key: str = "") -> tuple:
     """单次视觉调用。返回 (desc, retryable)：
 
     - desc 非 None：本次成功；
     - retryable=True：本次失败但值得重试（网络异常 / 5xx / 空响应）；
     - retryable=False：配置性失败（400/404 不支持视觉），重试无意义。
+
+    端点参数适配（重构 §4.8 / 缺陷 A）：与主客户端**同一套行为判定**——
+    非 200 时按字段名逐个摘掉重试（`thinking` → `reasoning_effort` →
+    `temperature` → `max_tokens`），**摘掉后成功**即认定该字段是原因并记入
+    能力表（`core.capabilities`）。不解析错误文本（GLM 的拒绝是中文，
+    按字段名匹配会漏判）。
     """
     print(f"[ocr] 调用视觉模型 {model} 理解图片 ...")
-    try:
-        resp = requests.post(url, headers=headers, json=payload, timeout=60)
-    except requests.exceptions.RequestException as e:
-        print(f"[ocr] 请求异常: {e}")
-        return None, True
-
-    # 端点不识别 thinking 参数（如 Gemini OpenAI 兼容端点报
-    # 'Unknown name "thinking"'）→ 去掉该参数重试一次（自适应：
-    # 智谱带 thinking disabled，Gemini 等不带）
-    if resp.status_code == 400 and "thinking" in (resp.text or ""):
-        print("[ocr] 端点不识别 thinking 参数，去掉重试 ...")
-        payload.pop("thinking", None)
+    dropped = set()
+    while True:
         try:
             resp = requests.post(url, headers=headers, json=payload, timeout=60)
         except requests.exceptions.RequestException as e:
             print(f"[ocr] 请求异常: {e}")
             return None, True
 
-    if resp.status_code != 200:
+        if resp.status_code == 200:
+            break
+
+        # 非 200：先尝试"摘字段重试"（仅 400/422，且还有可摘字段）
+        if resp.status_code in (400, 422):
+            stripped = _strip_optional_field(payload, dropped)
+            if stripped is not None:
+                field, value = stripped
+                print(f"[ocr] HTTP {resp.status_code} → 摘掉 {field}={value!r} 重试")
+                try:
+                    resp2 = requests.post(url, headers=headers, json=payload,
+                                          timeout=60)
+                except requests.exceptions.RequestException as e:
+                    print(f"[ocr] 请求异常: {e}")
+                    return None, True
+                if resp2.status_code == 200:
+                    _learn_rejected(cap_key, field, value)
+                    print(f"[ocr] 确认：端点拒绝 {field}={value!r}（已记入能力表）")
+                    resp = resp2
+                    break
+                print(f"[ocr] 摘掉 {field} 后仍失败（{resp2.status_code}）"
+                      f"→ 判定与思考参数无关的真实错误")
+                resp = resp2
+
         print(f"[ocr] HTTP {resp.status_code}: {resp.text[:200]}")
         if resp.status_code in (400, 404):
-            print("[ocr] 该模型可能不支持视觉输入，请在 .env 中"
-                  "设置 VISION_MODEL 为支持图片的模型（如 GLM-4.6V）。")
+            print("[ocr] 该模型可能不支持视觉输入，请配置一个支持图片的模型"
+                  "（如 glm-5.3-flash / gemini-3.7-flash / deepseek-flash）。")
             return None, False  # 配置性错误，重试无意义
         return None, True  # 5xx/429 等服务端/限流错误，可重试
 
@@ -199,25 +219,52 @@ def _describe_once(url: str, headers: dict, payload: dict,
     except (KeyError, ValueError):
         return None, True
     content = msg.get("content") or ""
-    # 思考型模型兜底：content 为空但 reasoning_content 有内容时回退提取
-    # （thinking disabled 生效时 content 直接有值，此分支为兼容不识别
-    # 该参数的端点）。回退用 _extract_description——reasoning 可能是无格式
-    # 思考草稿，直接整段当 content 会污染下游，故提取两行结构或收敛标注。
     if not content.strip():
-        reasoning = msg.get("reasoning_content") or ""
+        # ★ 缺陷 B（用户裁定 a，20260830）：**不再**回退 reasoning_content。
+        # 理由：思考草稿是未完成的推理过程，把它当"识别结果"会让错误结构
+        # 静默到达用户（与 Drawbacks §P0 修过的老 bug 同型，也与本项目
+        # "宁可不画，不画错"的理念冲突）。content 为空 → 判识别失败，
+        # 由调用方提示用户重试或改用文字描述。
+        reasoning = msg.get("reasoning_content") or msg.get("reasoning") or ""
         if reasoning.strip():
-            print("[ocr] content 为空，回退 reasoning_content"
-                  "（最佳努力提取文字/结构线索）")
-            # 先用 _extract_description 拿结构化两行；若无两行，再用
-            # _best_effort_extract 尽量从思考链抢救文字/结构片段（不空白降级）
-            desc = _extract_description(reasoning)
-            if desc["type"] == "未分类_草稿":
-                desc = _best_effort_extract(reasoning)
-            return (desc if desc["content"] else None), True
+            print(f"[ocr] 模型只输出思考（{len(reasoning)} 字符）而无识别结论"
+                  f" → 判识别失败（不使用思考草稿）")
         else:
-            return None, True  # 空响应（瞬时抖动），可重试
+            print("[ocr] 空响应（瞬时抖动），可重试")
+        return None, True
     desc = _parse_description(content)
     return (desc if desc["content"] else None), True
+
+
+# 视觉端点的可选字段（摘字段顺序与主客户端一致）
+_VISION_STRIP_ORDER = ("thinking", "reasoning_effort", "temperature", "max_tokens")
+
+
+def _strip_optional_field(payload: dict, dropped: set) -> tuple | None:
+    """从视觉请求体里摘掉**一个**可选字段；无可摘时返回 None。"""
+    for field in _VISION_STRIP_ORDER:
+        if field not in payload:
+            continue
+        value = None
+        if field == "thinking":
+            value = (payload.get("thinking") or {}).get("type")
+        elif field == "reasoning_effort":
+            value = payload.get("reasoning_effort")
+        payload.pop(field, None)
+        dropped.add(field)
+        return field, value
+    return None
+
+
+def _learn_rejected(cap_key: str, field: str, value) -> None:
+    """把"端点拒绝该字段/取值"记入能力表（键为空则跳过）。"""
+    if not cap_key:
+        return
+    try:
+        from core import capabilities
+        capabilities.note_field_rejected(cap_key, field, value)
+    except Exception:
+        pass
 
 
 def describe_image(image_path: str, max_attempts: int = _VISION_MAX_ATTEMPTS) -> dict | None:
@@ -237,9 +284,9 @@ def describe_image(image_path: str, max_attempts: int = _VISION_MAX_ATTEMPTS) ->
     需配置 VISION_MODEL + VISION_BASE_URL + VISION_API_KEY（或回退到主配置）。
     失败（未配置/网络/无 content）返回 None。
     """
-    config = settings.vision
+    config = credentials.vision_config()
     if not config.is_configured:
-        print("[ocr] 未配置 VISION_MODEL/VISION_BASE_URL/VISION_API_KEY")
+        print("[ocr] 视觉模型未配置（且主模型凭证不可用）")
         return None
     api_key, base_url, model = config.api_key, config.base_url, config.model_name
 
@@ -253,6 +300,14 @@ def describe_image(image_path: str, max_attempts: int = _VISION_MAX_ATTEMPTS) ->
 
     url = f"{base_url}/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+    # ---- 视觉自己的思考参数（§4.9）----
+    # 与主生成**解耦**：视觉常是另一家的模型，且识图不需要长思考。
+    # `config.thinking` 为空 = "与主模型相同 → 复用主模型设置"（由调用方
+    # credentials.vision_is_main() 判定后写入空值）；否则默认关思考。
+    from core.llm_client import MAX_TOKENS_VISION
+    v_on, v_effort = _vision_thinking(config)
+
     payload = {
         "model": model,
         "messages": [{
@@ -262,30 +317,44 @@ def describe_image(image_path: str, max_attempts: int = _VISION_MAX_ATTEMPTS) ->
                 {"type": "image_url", "image_url": {"url": data_url}},
             ],
         }],
-        "temperature": 0.1,
-        # 800 → 2000 → 4000：复杂图（教材文字+反应式/长思考）描述长，避免
-        # content 被截断成空后触发放大思考兜底（20260828 flash 实测：max_tokens
-        # 不足 → content 空 → 代码把 reasoning 整段当 content，污染下游）。
-        "max_tokens": 4000,
-        # 思考模式：enabled——glm-5.3-flash 实测必须开思考（disabled 会报错），
-        # 且开思考时若模型把结论写进 reasoning_content 致 content 空，
-        # 由 _describe_once 的 _extract_description 兜底提取/收敛。
-        # （旧注释"glm-4.6v 吞 reasoning 故 disabled"是针对旧模型的实测，
-        # 不适用于当前 glm-5.3-flash；20260828 更正。）
-        "thinking": {"type": "enabled"},
+        # 视觉输出上限（§4.2.1）：复杂机理图描述长，且强制思考端点还要吃掉
+        # 一部分预算——设小会导致 content 被截断（缺陷 E）。
+        "max_tokens": MAX_TOKENS_VISION,
     }
+    if v_on:
+        payload["thinking"] = {"type": "enabled"}
+        if v_effort:
+            payload["reasoning_effort"] = v_effort
+    else:
+        # 关思考：显式发送 disabled（与主客户端同一策略——这样端点若**强制**
+        # 思考会返回 400，我们据此摘字段并把结论记入能力表）
+        payload["thinking"] = {"type": "disabled"}
+        payload["temperature"] = 0.1
+
+    # 能力表：已知结论（该端点拒绝过某字段）→ 本次直接不带
+    cap_key = ""
+    try:
+        from core import capabilities
+        cap_key = capabilities.make_key(base_url, model, api_key)
+        cap = capabilities.get(cap_key)
+        if cap.allows_off() is False:
+            payload.pop("thinking", None)
+        if cap.max_tokens_ok is False:
+            payload.pop("max_tokens", None)
+    except Exception:
+        pass
 
     for attempt in range(1, max_attempts + 1):
-        desc, retryable = _describe_once(url, headers, dict(payload), model)
+        desc, retryable = _describe_once(url, headers, dict(payload), model,
+                                        cap_key=cap_key)
         if desc:
             # B1（20260826）：结构式 SMILES 过 RDKit 硬校验，供调用方示警
             desc["smiles_ok"] = _structure_smiles_ok(
                 desc.get("content"), desc.get("type"))
-            # 降级标记：未产出正式"类型/内容"两行（未分类_草稿）→ 调用方可
-            # 据此作"识别受限"处理（保留 desc 里抢救到的文字，而非整段弃掉）。
+            # 降级标记：未产出正式"类型/内容"两行 → 调用方据此作"识别受限"处理
             if desc.get("type") == "未分类_草稿":
                 desc["downgraded"] = True
-                print("[ocr] 识别降级：未产出结构化两行，仅保留最佳努力片段")
+                print("[ocr] 识别降级：未产出结构化两行，仅保留最佳提取片段")
             else:
                 desc["downgraded"] = False
             return desc
@@ -294,4 +363,26 @@ def describe_image(image_path: str, max_attempts: int = _VISION_MAX_ATTEMPTS) ->
         print(f"[ocr] 第 {attempt} 次尝试失败，重试（{attempt + 1}/{max_attempts}）...")
         time.sleep(_RETRY_DELAY)
     return None
+
+
+def _vision_thinking(config) -> tuple:
+    """视觉调用的思考意图 → (开关 on, 强度)。
+
+    * `config.thinking` 显式给了 `on`/`off` → 用它；
+    * 为空且**视觉就是主模型** → 复用主模型的思考设置（同一个模型）；
+    * 为空且视觉是独立模型 → 默认关思考（识图要快、要省）。
+    """
+    from core.config import normalize_effort, normalize_thinking
+    raw = (getattr(config, "thinking", "") or "").strip()
+    if raw:
+        on = normalize_thinking(raw) == "on"
+    else:
+        try:
+            on = credentials.vision_is_main() and credentials.thinking_setting() == "on"
+        except Exception:
+            on = False
+    eff_raw = (getattr(config, "effort", "") or "").strip()
+    effort = (normalize_effort(eff_raw) if eff_raw
+              else (credentials.effort_setting() if on else ""))
+    return on, (effort if on else "")
 

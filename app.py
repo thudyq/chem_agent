@@ -7,8 +7,11 @@ process_question(user_question) 是核心编排函数，FastAPI 适配层
 
 import re
 
+from core import credentials
 from core.config import settings
-from core.llm_client import ask_llm
+from core.llm_client import (MAX_TOKENS_FIX, MAX_TOKENS_MAIN,
+                              MAX_TOKENS_REWRITE, MAX_TOKENS_TINY,
+                              ask_llm)
 from core.prompt_manager import load_mech_arrow_prompt, load_struct_rewrite_prompt
 from core.tag_parser import parse_tags
 from core.tag_injector import inject_tags_into_text
@@ -56,16 +59,6 @@ def _is_role_label(label: str) -> bool:
         label in _ROLE_LABELS or any(s in label for s in _ROLE_SUBSTRINGS))
 
 # 难题预判关键词（未配置 UPGRADE_KEYWORDS 时的内置默认）：
-# 用户问题命中任一关键词 → 跳过主模型首跑、直接走升级模型。
-# 覆盖机理/箭头/命名反应/电子流动类提问；漏判由 flash 首跑 + 失败升级兜底，
-# 误判（简单题命中）代价仅为一次升级调用。
-_DEFAULT_UPGRADE_KEYWORDS = (
-    "机理", "箭头", "SN1", "SN2", "SN1/SN2", "自由基", "共振", "势能面",
-    "电子转移", "电子推动", "消除反应", "亲核取代", "亲电取代", "亲核加成",
-    "亲电加成", "加成反应", "重排", "去质子", "质子化", "催化循环",
-    "链式反应", "过渡态", "反应历程", "轨道", "HOMO", "LUMO", "构象", "构型",
-)
-
 # SMILES 相关失败原因关键词（值得 PubChem 兜底的类型）
 _SMILES_FAILURE_KEYWORDS = (
     "无效 SMILES", "价态", "化学校验", "显式 H", "XH",
@@ -128,7 +121,11 @@ def _run_with_timeout(fn, timeout: float, default=None):
     用于 PubChem 兜底/增强等"锦上添花"的网络调用：PubChem 在部分网络环境
     慢/被限流（503 重试可卡 90s+），若同步执行会拖住整个回答流程——清小搭
     端表现为"正在思考"长时间无进展。超时放弃后主流程照常走 LLM。
+
+    线程内**显式传播 contextvars**（`copy_context().run`）——新线程不自动
+    继承，不传播会让 fn 里的凭证覆盖（BYOK）与上下文丢失。
     """
+    import contextvars
     import threading
     box = {}
 
@@ -138,7 +135,8 @@ def _run_with_timeout(fn, timeout: float, default=None):
         except Exception:
             box["v"] = default
 
-    t = threading.Thread(target=_target, daemon=True)
+    ctx = contextvars.copy_context()
+    t = threading.Thread(target=lambda: ctx.run(_target), daemon=True)
     t.start()
     t.join(timeout)
     if t.is_alive():
@@ -146,8 +144,18 @@ def _run_with_timeout(fn, timeout: float, default=None):
     return box.get("v", default)
 
 
-def _translate_name_zh2en(name: str) -> str | None:
-    """中文化学名 → 英文（LLM 翻译）；已是英文或翻译失败返回原样/None。"""
+def _translate_name_zh2en(name: str, model: str = None) -> str | None:
+    """中文化学名 → 英文（LLM 翻译）；已是英文或翻译失败返回原样/None。
+
+    辅助调用（§4.6 契约表 #2）：`thinking="disabled"` + 小 `max_tokens`，
+    **绝不继承用户主档位**；端点强制思考时 `ask_llm` 会摘字段/退让并把结论
+    记入能力表。失败一律返回 None（调用方回退英文原名，不影响主流程）。
+
+    ★ `user_scoped=True`：这是**用户请求作用域内**的调用，因此**绝不能**回退到
+    服务器 `.env` 的模型——否则网页用户填了 A 模型，翻译却用服务器的 B 模型
+    （既未授权、也可能无权访问）。20260830 实测病例：网页填 deepseek-flash，
+    日志却出现 `.env` 的 gemini-3.7-flash，根因就是这条链漏传 model。
+    """
     if not name or not isinstance(name, str):
         return None
     import re
@@ -155,8 +163,10 @@ def _translate_name_zh2en(name: str) -> str | None:
         return name  # 已是英文，无需翻译
     try:
         translated = ask_llm(name, system_prompt=_TRANSLATE_SYSTEM,
-                             max_tokens=64, thinking="disabled")
+                             max_tokens=MAX_TOKENS_TINY, thinking="disabled",
+                             model=model, user_scoped=True)
         if translated:
+            translated = str(translated)
             t = translated.strip().strip('"\'。.')
             if t and len(t) < 60:
                 return t
@@ -168,11 +178,13 @@ def _translate_name_zh2en(name: str) -> str | None:
 # PubChem 兜底失败缓存：label 全链路（翻译 → 查询）失败后不再重复尝试
 # （修正循环多轮处理同一失败标记时，避免反复触发 flash 翻译 + PubChem 查询；
 # 成功查询不缓存，照常重查）。name_resolver 层另有网络负缓存兜底。
-_PUBCHEM_FAIL_CACHE: set = set()
+# 按**凭证指纹**分桶：BYOK 场景下不同用户的自定义端点/可用模型不同，
+# 共享一份缓存会把 A 用户的失败结论（连带跳过翻译）泄漏给 B 用户。
+_PUBCHEM_FAIL_CACHE: dict = {}
 
 
 def _fetch_pubchem_references(failures: list, user_question: str = "",
-                              limit: int = 2) -> str:
+                              limit: int = 2, model: str = None) -> str:
     """校验失败 → PubChem 兜底：提取 label/问题名 → 翻译 → 查 SMILES → 参考。
 
     名称来源优先级：① 失败标记的 label（STRUCT）；② 用户问题中的化合物名
@@ -190,27 +202,29 @@ def _fetch_pubchem_references(failures: list, user_question: str = "",
 
     refs = []
     seen = set()
+    fail_cache = _PUBCHEM_FAIL_CACHE.setdefault(
+        credentials.fingerprint(), set())
     for label in candidates:
         if label in seen:
             continue
         seen.add(label)
         if len(refs) >= limit:
             break
-        if label in _PUBCHEM_FAIL_CACHE:
+        if label in fail_cache:
             continue  # 该 label 此前全链路失败，不再重复翻译/查询
-        en = _translate_name_zh2en(label)
+        en = _translate_name_zh2en(label, model=model)
         if not en:
-            _PUBCHEM_FAIL_CACHE.add(label)
+            fail_cache.add(label)
             continue
         try:
             smi = name_to_smiles(en)
         except Exception:
-            _PUBCHEM_FAIL_CACHE.add(label)
+            fail_cache.add(label)
             continue
         if smi:
             refs.append(f"「{label}」的 PubChem 标准 SMILES：`{smi}`")
         else:
-            _PUBCHEM_FAIL_CACHE.add(label)
+            fail_cache.add(label)
     if not refs:
         return ""
     return ("\nPubChem 参考（权威 SMILES，可对照修正你的标记）：\n"
@@ -342,9 +356,11 @@ def _rewrite_composite_arrows(user_question: str, full_text: str, tag,
     parts.append(f"组件原子编号地图：\n{maps}")
     out = ask_llm("\n\n".join(parts),
                   system_prompt=load_mech_arrow_prompt(),
-                  model=model, thinking="disabled", on_piece=on_piece)
+                  model=model, thinking="disabled",
+                  max_tokens=MAX_TOKENS_REWRITE, on_piece=on_piece)
     if not out:
         return None
+    out = str(out)          # 辅助调用按文本使用（兼容结果对象/替身）
     candidates = [t for t in parse_tags(out) if t.type == "COMPOSITE"]
     if not candidates or "[MECHARROW" not in candidates[0].raw:
         return None
@@ -417,9 +433,11 @@ def _rewrite_struct_smiles(user_question: str, full_text: str, tag, err: str,
     parts.append(f"上次写错的原因（不要重犯同样的错误）：\n{reason}")
     out = ask_llm("\n\n".join(parts),
                   system_prompt=load_struct_rewrite_prompt(),
-                  model=model, thinking="disabled", on_piece=on_piece)
+                  model=model, thinking="disabled",
+                  max_tokens=MAX_TOKENS_REWRITE, on_piece=on_piece)
     if not out:
         return None
+    out = str(out)          # 辅助调用按文本使用（兼容结果对象/替身）
     cands = [t for t in parse_tags(out) if t.type == "STRUCT"]
     if not cands or not cands[0].args or not cands[0].args[0]:
         return None
@@ -444,7 +462,7 @@ def _rewrite_struct_smiles(user_question: str, full_text: str, tag, err: str,
 
 
 def _build_correction_prompt(user_question: str, original: str,
-                             failures: list) -> str:
+                             failures: list, model: str = None) -> str:
     """构造 P2 修正 prompt：失败标记清单（含上下文）+ 修正要求。
 
     部分修正模式：模型**只输出修正后的标记**（不重输出整个回答），
@@ -483,7 +501,8 @@ def _build_correction_prompt(user_question: str, original: str,
     # PubChem 兜底：失败标记的 label 是化合物名时，反查权威 SMILES 作为修正参考
     # （12s 硬超时：PubChem 慢/限流时放弃，不拖住修正主流程）
     pubchem_ref = _run_with_timeout(
-        lambda: _fetch_pubchem_references(failures, user_question), 12.0, "")
+        lambda: _fetch_pubchem_references(failures, user_question,
+                                          model=model), 12.0, "")
     if pubchem_ref:
         lines.append("")
         lines.append(pubchem_ref)
@@ -629,7 +648,8 @@ def _partial_render_composite_without_mecharrows(tag) -> str | None:
 def process_question(user_question: str, max_corrections: int = 2,
                      history: list = None, progress_callback=None,
                      correction_callback=None, diagnostics: list = None,
-                     responses: list = None) -> str:
+                     responses: list = None, thinking: str = None,
+                     effort: str = None, max_tokens: int = None) -> str:
     """端到端处理用户问题，返回含渲染后图示代码的文本。
 
     流程：LLM 生成 → 解析标记 → 契约校验（P1）→ 逐标记渲染 → 注入替换。
@@ -637,81 +657,34 @@ def process_question(user_question: str, max_corrections: int = 2,
     清单回传 LLM 自动修正（最多 max_corrections 次），修正版重新走管线；
     仍失败则降级（校验失败标记 → 友好提示，渲染失败标记 → 渲染器错误串）。
 
-    模型路由（配置 UPGRADE_MODEL_NAME 时启用）：主模型（通常 flash）首跑
-    **不做修正**，校验失败立即用升级模型（通常 pro）重新生成完整回答
-    （升级后可带修正闭环）。未配置则保持"主模型 + 修正闭环"原行为。
-    实测依据：flash 对索引/格式类错误修正能救回，对 SMILES 化学构造错误
-    （如碳正离子多写碳）修正救不回，而 pro 一遍过率高——难题直接交 pro。
+    **单模型**（`instructions/Model-Config-Refactor.md` D1/D2）：整个服务只用
+    一个模型，不再有"升级/回退模型"与难题关键词路由——降级发生在**同一模型
+    内部**（思考档位逐级下降，见 `core.llm_client._effort_stages`）。
+
+    thinking / effort / max_tokens: 思考开关、思考强度、最大输出上限。
+        网页（BYOK）由请求头传入；清小搭与 Streamlit 传 None（用 `.env` 默认）。
+        实际生效值可能因端点能力而被改写，此时会在 `diagnostics` 里记
+        `effort_effective` / `notice`，并把提示追加到回答末尾（§4.5.5）。
 
     history: 多轮对话历史（透传给 ask_llm，见 core.llm_client）。
     progress_callback: 可选，LLM 每段生成内容实时回调（B2 流式转发草稿）。
     correction_callback: 可选，P2 修正触发时回调（无参），前端据此提示
-        "正在修正回答…"；修正调用强制 thinking=disabled（机械性任务，
+        "正在修正回答…"；修正等辅助调用走"尽量关思考"（机械性任务，
         思考链收益小、延迟高）。
     diagnostics: 可选 list，调用方传入后**每一轮校验/渲染失败**（含修正机会
         耗尽前的最后一轮）都会 append 诊断 dict：
         {round, stage, type, raw, reason, friendly, resolved}——前端只展示
         friendly（已注入回答），后端用 reason/resolved/stage 做日志与质量分析。
-    responses: 可选 list，调用方传入后记录**各阶段最终采用的原始 LLM 输出**
-        （未注入渲染的标记文本；路由下可能 2 条：主模型 + 升级模型）。渲染后
-        的 TikZ 无法反推模型写的标记，此字段用于质量回溯（如图文不符时定位
-        模型实际写的 SMILES/序号）。
+    responses: 可选 list，调用方传入后记录**最终采用的原始 LLM 输出**
+        （未注入渲染的标记文本）。渲染后的 TikZ 无法反推模型写的标记，
+        此字段用于质量回溯（如图文不符时定位模型实际写的 SMILES/序号）。
     """
-    upgrade = (settings.llm.upgrade_model_name or "").strip()
-    if not upgrade:
-        # 未配置路由：主模型 + 修正闭环（原行为）
-        return _generate_with_corrections(
-            user_question, model=None, max_corrections=max_corrections,
-            history=history, progress_callback=progress_callback,
-            correction_callback=correction_callback,
-            diagnostics=diagnostics, stage="main", responses=responses)
-
-    # 难题预判：命中关键词直接走升级模型（省一次主模型首跑与串行延迟）；
-    # 漏判由下方"主模型首跑 + 失败升级"兜底，最坏不劣于不配置关键词。
-    keywords = getattr(settings.llm, "upgrade_keywords", None) \
-        or _DEFAULT_UPGRADE_KEYWORDS
-    if any(k and k in user_question for k in keywords):
-        print(f"[process_question] 命中难题关键词，直接使用升级模型 {upgrade}…")
-        if correction_callback is not None:
-            correction_callback()  # 前端提示"正在修正/优化…"
-        return _generate_with_corrections(
-            user_question, model=upgrade, max_corrections=max_corrections,
-            history=history, progress_callback=progress_callback,
-            correction_callback=correction_callback,
-            diagnostics=diagnostics, stage="upgrade", responses=responses)
-
-    # flash 首跑 + 失败升级 pro 路由：主模型首跑 max_corrections=0（失败即升级）
-    diag1 = []
-    text1 = _generate_with_corrections(
-        user_question, model=None, max_corrections=0,
-        history=history, progress_callback=progress_callback,
-        correction_callback=None, diagnostics=diag1, stage="main",
-        responses=responses)
-    if diagnostics is not None:
-        diagnostics.extend(diag1)
-    if not diag1:
-        return text1  # 主模型一遍过（无失败标记）
-
-    print(f"[process_question] 主模型输出含 {len(diag1)} 个失败标记，"
-          f"升级模型 {upgrade} 部分修正（不重跑全文）…")
-    if correction_callback is not None:
-        correction_callback()  # 前端提示"正在修正/优化…"
-    result = _generate_with_corrections(
-        user_question, model=upgrade, max_corrections=max_corrections,
+    return _generate_with_corrections(
+        user_question, model=None, max_corrections=max_corrections,
         history=history, progress_callback=progress_callback,
         correction_callback=correction_callback,
-        diagnostics=diagnostics, stage="upgrade", responses=responses,
-        seed_text=text1)
-    # 升级阶段最终无未解决失败 → 主模型（flash）阶段的失败视为被升级解决
-    if diagnostics is not None:
-        upgrade_unresolved = any(
-            d.get("stage") == "upgrade" and d.get("resolved") is False
-            for d in diagnostics)
-        if not upgrade_unresolved:
-            for d in diagnostics:
-                if d.get("stage") == "main":
-                    d["resolved"] = True
-    return result
+        diagnostics=diagnostics, stage="main", responses=responses,
+        thinking=thinking, effort=effort, max_tokens=max_tokens)
 
 
 def _generate_with_corrections(user_question: str, model=None,
@@ -720,17 +693,64 @@ def _generate_with_corrections(user_question: str, model=None,
                                diagnostics: list = None,
                                stage: str = "main",
                                responses: list = None,
-                               seed_text: str = None) -> str:
-    """单模型生成 + P2 修正闭环（PubChem 增强 → LLM → 校验 → 渲染 → 注入）。
+                               seed_text: str = None,
+                               thinking: str = None, effort: str = None,
+                               max_tokens: int = None) -> str:
+    """单模型生成 + P2 修正闭环；末尾统一追加"档位被静默改写"的提示（§4.5.5）。"""
+    text, notice = _generate_inner(
+        user_question, model=model, max_corrections=max_corrections,
+        history=history, progress_callback=progress_callback,
+        correction_callback=correction_callback, diagnostics=diagnostics,
+        stage=stage, responses=responses, seed_text=seed_text,
+        thinking=thinking, effort=effort, max_tokens=max_tokens)
+    if notice and text:
+        # 诚实上报放在最后：用户看到完整回答后，知道实际以什么档位跑的
+        text = f"{text}\n\n{notice}"
+    return text
 
-    model: 覆盖 ask_llm 的模型名（None=配置默认）；stage: diagnostics 的阶段
-    标识（"main"=主模型、"upgrade"=升级模型）。max_corrections=0 时不做修正
-    （校验失败即返回原始标记文本，供路由升级部分修正）。responses: 可选 list，
-    最终采用的原始 LLM 输出（标记文本）append 到此（渲染前版本，供质量回溯）。
-    seed_text: 非 None 时跳过 LLM 主生成，直接以该文本进入校验/修正循环——
-    用于"flash 失败 → 升级模型只做部分修正（不重跑全文）"：对失败标记
-    重新校验并让升级模型修正，成本远低于全文重新生成。
+
+# "思考档位被静默改写"提示的去重（同会话只提一次，避免每轮刷屏）
+_EFFORT_NOTICE_SHOWN: set = set()
+
+
+def _note_effort_notice(notice: str, diagnostics: list | None) -> str:
+    """记录并（首次时）返回"档位被静默改写"的用户可见提示。
+
+    去重键 = 当前凭证指纹（同一用户同一端点只提示一次）。
     """
+    fp = credentials.fingerprint()
+    if fp in _EFFORT_NOTICE_SHOWN:
+        return ""
+    _EFFORT_NOTICE_SHOWN.add(fp)
+    print(f"[process_question] 思考档位被端点静默改写：{notice}")
+    if diagnostics is not None:
+        diagnostics.append({"round": -1, "stage": "effort", "type": "NOTICE",
+                            "raw": "", "reason": notice, "friendly": notice,
+                            "resolved": True})
+    return notice
+
+
+def _generate_inner(user_question: str, model=None,
+                    max_corrections: int = 2, history: list = None,
+                    progress_callback=None, correction_callback=None,
+                    diagnostics: list = None,
+                    stage: str = "main",
+                    responses: list = None,
+                    seed_text: str = None,
+                    thinking: str = None, effort: str = None,
+                    max_tokens: int = None) -> tuple:
+    """生成 + 修正闭环主体；返回 (文本, 待追加的档位提示)。
+
+    model: 覆盖 ask_llm 的模型名；None 走**统一凭证解析**（用户请求头指定的
+    模型优先，否则服务器 `.env` 的 MODEL_NAME）。
+    thinking / effort / max_tokens: 主生成的思考参数（None = 用配置默认）。
+    stage: diagnostics 的阶段标识（单模型后恒为 "main"）。
+    max_corrections=0 时不做修正（校验失败即返回原始标记文本）。
+    responses: 可选 list，最终采用的原始 LLM 输出（标记文本）append 到此
+    （渲染前版本，供质量回溯）。
+    seed_text: 非 None 时跳过 LLM 主生成，直接以该文本进入校验/修正循环。
+    """
+    notice = ""
     if seed_text is not None:
         full_response = seed_text
     else:
@@ -768,10 +788,19 @@ def _generate_with_corrections(user_question: str, model=None,
         except Exception as e:
             print(f"[process_question] PubChem 增强跳过: {e}")
 
-        full_response = ask_llm(llm_input, history=history,
-                                on_piece=progress_callback, model=model)
-        if not full_response:
-            return "（LLM 调用失败，请检查 .env 配置与网络）"
+        res = ask_llm(llm_input, history=history,
+                      on_piece=progress_callback, model=model,
+                      thinking=thinking, effort=effort,
+                      # 主生成默认上限用调用点常量（§4.2.1）；
+                      # 网页用户可在设置里覆盖（max_tokens 参数）
+                      max_tokens=(max_tokens or MAX_TOKENS_MAIN),
+                      return_result=True)
+        if not res:
+            return "（LLM 调用失败，请检查 .env 配置与网络）", notice
+        # `return_result=True` 时是 LLMResult；纯文本替身也兼容
+        notice = (_note_effort_notice(getattr(res, "notice", ""), diagnostics)
+                  if getattr(res, "downgraded", False) else notice)
+        full_response = (res.text if hasattr(res, "text") else res) or ""
 
     prev_fps = None   # 上一轮失败 fingerprint（P3 逃生比对）
     surgical_tried = set()  # 已尝试过手术式箭头重写的标记原文（每标记只试一次）
@@ -782,7 +811,7 @@ def _generate_with_corrections(user_question: str, model=None,
         if not tags:
             if responses is not None:
                 responses.append(full_response)  # 纯文本回答（无标记）
-            return full_response  # 纯文本回答，无需渲染
+            return full_response, notice  # 纯文本回答，无需渲染
         if attempt == 0:
             baseline_counts = _tag_inventory(full_response)
 
@@ -942,10 +971,14 @@ def _generate_with_corrections(user_question: str, model=None,
                 if correction_callback is not None:
                     correction_callback()
                 correction = _build_correction_prompt(
-                    user_question, full_response, problems)
+                    user_question, full_response, problems, model=model)
                 fixed = ask_llm(correction, on_piece=progress_callback,
-                                thinking="disabled", model=model)
+                                thinking="disabled", model=model,
+                                max_tokens=MAX_TOKENS_FIX)
                 if fixed:
+                    # 辅助调用按文本使用（`ask_llm` 默认返回 str；
+                    # 显式 str() 兼容返回结果对象/替身的调用方）
+                    fixed = str(fixed)
                     # 部分修正：用模型输出的修正标记替换原文对应位置
                     patched = _apply_patch_corrections(
                         full_response, problems, fixed)
@@ -957,11 +990,10 @@ def _generate_with_corrections(user_question: str, model=None,
 
         final_ok = not problems  # 修正救回（最终无失败）或从未失败
         if problems and max_corrections == 0:
-            # 路由首跑（flash）失败：返回原始标记文本（不降级注入），
-            # 供升级模型（pro）基于失败标记做部分修正
+            # max_corrections=0（不做修正）：返回原始标记文本
             if responses is not None:
                 responses.append(full_response)
-            return full_response
+            return full_response, notice
         # 4. 注入：校验失败 → 友好降级提示；渲染失败（重试机会耗尽）→ 渲染器错误串
         rendered.update(degraded)
         for tag, err in failures:
@@ -1003,9 +1035,9 @@ def _generate_with_corrections(user_question: str, model=None,
                 result_text += ("\n\n> 注：修正过程中部分图示未能保留，已省略"
                                 "（" + "、".join(notes) + "）——"
                                 "需要的话我可以重新绘制。")
-        return result_text
+        return result_text, notice
 
-    return "（LLM 调用失败，请检查 .env 配置与网络）"
+    return "（LLM 调用失败，请检查 .env 配置与网络）", notice
 
 
 if __name__ == "__main__":

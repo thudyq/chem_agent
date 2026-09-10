@@ -90,40 +90,28 @@ def test_format_report_without_by_type_ok():
     assert "按标记类型统计" not in out
 
 
-# ---------- 端到端路由评估（evaluate_route） ----------
-
-def _enable_route_config(monkeypatch):
-    """启用路由配置（core.config.settings，非 app.settings——evaluate_route
-    内部从 core.config 延迟导入）。"""
-    import types
-    import core.config as cfg
-    monkeypatch.setattr(
-        cfg, "settings",
-        types.SimpleNamespace(
-            llm=types.SimpleNamespace(
-                upgrade_model_name="deepseek-v4-pro",
-                upgrade_keywords=())))  # 空 → 用 app 内置默认关键词
-
+# ---------- 端到端管线评估（evaluate_route，单模型） ----------
 
 def test_evaluate_route_counts(monkeypatch):
-    """路由三种结局统计：flash 一遍过 / 关键词直 pro 降级 / flash 失败升级救回。"""
-    _enable_route_config(monkeypatch)
+    """单模型管线三种结局：一遍过 / 触发修正仍降级 / 修正救回。"""
 
     def fake_pq(q, max_corrections=2, history=None, progress_callback=None,
-                correction_callback=None, diagnostics=None, responses=None):
+                correction_callback=None, diagnostics=None, responses=None,
+                thinking=None, effort=None, max_tokens=None):
         d = diagnostics
-        if "机理" in q:   # 命中关键词 → 直 pro → 失败降级
+        if "机理" in q:   # 修正后仍失败 → 降级
             if responses is not None:
                 responses.append("机理标记文本：[COMPOSITE:reaction][STRUCT:CCO,id=a][ARROW][STRUCT:CC=O,id=b][/COMPOSITE]")
-            d.append({"round": 0, "stage": "upgrade", "type": "REACTION",
-                      "raw": "[COMPOSITE:reaction][STRUCT:CCO,id=a][ARROW][STRUCT:CC=O,id=b][/COMPOSITE]", "reason": "化学校验：不守恒",
+            d.append({"round": 0, "stage": "main", "type": "REACTION",
+                      "raw": "[COMPOSITE:reaction][STRUCT:CCO,id=a][ARROW][STRUCT:CC=O,id=b][/COMPOSITE]",
+                      "reason": "化学校验：不守恒",
                       "friendly": "（反应方程式图示无法渲染，已省略）",
                       "resolved": False})
             return "机理回答（反应方程式图示无法渲染，已省略）"
-        if "氧化" in q:   # flash 失败 → 升级 pro 救回
+        if "氧化" in q:   # 修正救回（round 0 失败 → resolved=True）
             if responses is not None:
-                responses.append("flash 标记文本：[STRUCT:bad]")
-                responses.append("pro 标记文本：[STRUCT:c1ccccc1]")
+                responses.append("首跑标记文本：[STRUCT:bad]")
+                responses.append("修正标记文本：[STRUCT:c1ccccc1]")
             d.append({"round": 0, "stage": "main", "type": "STRUCT",
                       "raw": "[STRUCT:bad]", "reason": "无效 SMILES",
                       "friendly": "（结构式图示无法渲染，已省略）",
@@ -131,63 +119,61 @@ def test_evaluate_route_counts(monkeypatch):
             return "氧化回答 [STRUCT:c1ccccc1]"
         if responses is not None:
             responses.append("苯标记文本：[STRUCT:c1ccccc1]")
-        return "苯是 [STRUCT:c1ccccc1]。"   # flash 一遍过
+        return "苯是 [STRUCT:c1ccccc1]。"   # 一遍过
 
     import app
     monkeypatch.setattr(app, "process_question", fake_pq)
 
     stats = metrics.evaluate_route(
         ["苯的结构式", "介绍苯的硝化反应机理", "乙醇氧化方程式"])
-    assert stats["main_pass"] == 1
-    assert stats["upgrade_triggered"] == 2
-    assert stats["keyword_direct"] == 1
+    assert stats["total"] == 3
+    assert stats["clean_pass"] == 1              # 只有苯题首轮无失败
+    assert stats["corrections_used"] == 2        # 机理 + 氧化都触发了修正闭环
     assert stats["unresolved_tags"] == 1
     assert stats["degraded_answers"] == 1
-    # 原始 LLM 输出记录：每题 1+ 条（氧化题为 flash + pro 两条）
+    # "修正后仍失败"要求**已尝试过修正**（round>=1）。机理题只有 round 0
+    # （首轮被拦即降级、无修正轮次）→ 记为 0；round>=1 的口径见下一个用例。
+    assert stats["corrections_failed_after"] == 0
     by_q = {r["question"]: r for r in stats["responses"]}
     assert by_q["苯的结构式"]["llm_outputs"] == ["苯标记文本：[STRUCT:c1ccccc1]"]
     assert len(by_q["乙醇氧化方程式"]["llm_outputs"]) == 2
 
 
 def test_format_route_report_and_detail():
-    """路由报告与逐题详情输出格式。"""
+    """报告与逐题详情输出格式（单模型口径）。"""
     stats = {
-        "total": 3, "main_pass": 1, "upgrade_triggered": 2,
-        "keyword_direct": 1, "unresolved_tags": 1, "degraded_answers": 1,
-        "corrections_after_upgrade": 0,
+        "total": 2, "clean_pass": 1, "corrections_used": 1,
+        "unresolved_tags": 1, "degraded_answers": 1,
+        "corrections_failed_after": 1,
         "responses": [
-            {"question": "q1", "keyword_hit": False,
-             "upgrade_triggered": False, "degraded": False,
+            {"question": "q1", "degraded": False,
              "corrections_failed_after": False, "unresolved": 0, "diag": [],
              "text": "苯是 [STRUCT:c1ccccc1]。",
              "llm_outputs": ["苯标记文本：[STRUCT:c1ccccc1]"]},
-            {"question": "q2", "keyword_hit": True,
-             "upgrade_triggered": True, "degraded": True,
-             "corrections_failed_after": False, "unresolved": 1,
+            {"question": "q2", "degraded": True,
+             "corrections_failed_after": True, "unresolved": 1,
              "text": "机理回答（反应方程式图示无法渲染，已省略）",
              "llm_outputs": ["机理标记文本：[COMPOSITE:reaction][STRUCT:CCO,id=a][ARROW][STRUCT:CC=O,id=b][/COMPOSITE]"],
-             "diag": [{"round": 0, "stage": "upgrade", "resolved": False,
+             "diag": [{"round": 0, "stage": "main", "resolved": False,
                        "reason": "化学校验：不守恒"}]},
         ],
     }
     rep = metrics.format_route_report(stats)
-    assert "路由评估报告" in rep
-    assert "主模型（flash）一遍过: 1" in rep
-    assert "升级触发: 2" in rep and "关键词直 pro: 1" in rep
+    assert "端到端管线评估报告（单模型）" in rep
+    assert "一遍过（首轮无失败）: 1" in rep
+    assert "修正后仍失败: 1" in rep
     det = metrics.format_route_detail(stats)
-    assert "flash 一遍过" in det
-    assert "关键词直 pro" in det and "未解决 1" in det
+    assert "一遍过" in det
+    assert "修正后仍失败" in det and "未解决 1" in det
     assert "最终回答" in det and "苯是 [STRUCT:c1ccccc1]" in det
-    assert "原始输出（主模型，渲染前）" in det
-    assert "苯标记文本：[STRUCT:c1ccccc1]" in det
 
 
 def test_route_unresolved_dedup_and_corrections_semantics(monkeypatch):
-    """统计口径修复（20260820）：
+    """统计口径（单模型口径，20260830 更新）：
     - 未解决标记按最终回答中未正常渲染的标记数计（降级/错误串出现次数），
       与 diag 轮次记录数无关（同一标记多轮失败不虚增、修正改写法不虚增）；
-    - 首轮失败但修正成功 → 不算"升级后修正仍失败"；
-    - 修正轮次（round>=1）仍失败 → 算"升级后修正仍失败"。"""
+    - 首轮失败但修正成功 → 不算"修正后仍失败"；
+    - 修正轮次（round>=1）仍失败 → 算"修正后仍失败"。"""
 
     def fake_process(q, max_corrections=2, diagnostics=None, responses=None):
         if q == "q_三轮失败":
@@ -231,4 +217,4 @@ def test_route_unresolved_dedup_and_corrections_semantics(monkeypatch):
     assert by_q["q_两轮失败"]["corrections_failed_after"] is True
     # 汇总：1 + 0 + 2 = 3
     assert stats["unresolved_tags"] == 3
-    assert stats["corrections_after_upgrade"] == 2
+    assert stats["corrections_failed_after"] == 2

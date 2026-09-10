@@ -8,10 +8,91 @@
 4. 修正仍失败 → 降级输出且不无限重试（最多 max_corrections 次）。
 """
 
+import dataclasses
+import types
+
 import pytest
 
 from app import _build_correction_prompt, process_question
+from core import credentials
+from core.config import settings as real_settings
 from renderers import registry
+
+
+@pytest.fixture
+def base_env():
+    """注入凭证层基准配置替身（模拟服务器 .env 的思考参数等）。"""
+
+    def _apply(**llm_kw):
+        base = dataclasses.replace(
+            real_settings, llm=dataclasses.replace(real_settings.llm, **llm_kw))
+        credentials.set_base_settings_for_tests(base)
+        return base
+
+    yield _apply
+    credentials.set_base_settings_for_tests(None)
+    credentials._reset_semaphores_for_tests()
+
+
+class _R:
+    """`ask_llm(return_result=True)` 的最小替身（把字符串包成结果对象）。
+
+    辅助调用（重写/修正）仍按 `ask_llm(...)` 的**文本返回**使用其返回值，
+    因此这里把若干字符串方法委托给 text，使同一个替身两种用法都成立。
+    """
+
+    def __init__(self, text):
+        self.text = text
+        self.error = None if text else "模拟失败"
+        self.downgraded = False
+        self.notice = ""
+        self.effort_requested = ""
+        self.effort_effective = None
+
+    def __bool__(self):
+        return bool(self.text)
+
+    def __str__(self):
+        return self.text or ""
+
+    # --- 字符串协议委托（子串查找/包含/拼接）---
+    def find(self, *a, **k):
+        return self.text.find(*a, **k)
+
+    def __contains__(self, item):
+        return item in self.text
+
+    def __add__(self, other):
+        return self.text + other
+
+    def __radd__(self, other):
+        return other + self.text
+
+    def __len__(self):
+        return len(self.text)
+
+    def __getitem__(self, item):
+        return self.text[item]
+
+    def startswith(self, *a, **k):
+        return self.text.startswith(*a, **k)
+
+    def strip(self, *a, **k):
+        return self.text.strip(*a, **k)
+
+    def __getattr__(self, name):
+        """未定义的属性/方法一律委托给 text。
+
+        `_R` 同时服务两类调用点：主生成读 `.text`（return_result=True），
+        辅助调用（修正/重写）把返回值当字符串用（如 `re.sub`/`parse_tags`）。
+        委托后两种用法都成立。
+        """
+        attr = getattr(self.text, name)
+        return attr if callable(attr) else self.text
+
+
+def _res(text):
+    return _R(text)
 
 
 @pytest.fixture
@@ -31,17 +112,19 @@ def flawed_renderers(monkeypatch):
     registry.RENDERER_REGISTRY.update(original)
 
 
-def test_no_failure_no_retry(fake_rdkit, fake_renderers, monkeypatch):
+def test_no_failure_no_retry(fake_rdkit, fake_renderers, no_aux_calls,
+                              monkeypatch):
     calls = []
     monkeypatch.setattr(
-        "app.ask_llm", lambda *a, **k: calls.append(a[0] if a else None) or "苯是 [STRUCT:c1ccccc1]。")
+        "app.ask_llm", lambda *a, **k: calls.append(a[0] if a else None) or _res("苯是 [STRUCT:c1ccccc1]。"))
     result = process_question("画苯", max_corrections=1)
     assert len(calls) == 1, "无失败不应触发修正重试"
     assert "RENDERED:c1ccccc1" in result
 
 
 def test_correction_after_validation_failure(fake_rdkit, fake_renderers,
-                                             monkeypatch):
+                                             monkeypatch,
+                                                no_aux_calls,):
     calls = []
     answers = [
         "苯是 [STRUCT:XYZABC]。",      # 非法 SMILES → 校验拦截 → 触发修正
@@ -50,7 +133,7 @@ def test_correction_after_validation_failure(fake_rdkit, fake_renderers,
     # 禁用 PubChem 翻译（避免消耗 ask_llm 调用序列）
     monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
     monkeypatch.setattr(
-        "app.ask_llm", lambda *a, **k: calls.append(a[0] if a else None) or answers.pop(0))
+        "app.ask_llm", lambda *a, **k: calls.append(a[0] if a else None) or _res(answers.pop(0)))
     result = process_question("画苯", max_corrections=1)
     assert len(calls) == 2, "应触发一次修正重试"
     assert "RENDERED:c1ccccc1" in result
@@ -59,7 +142,8 @@ def test_correction_after_validation_failure(fake_rdkit, fake_renderers,
 
 
 def test_correction_after_render_failure(fake_rdkit, flawed_renderers,
-                                         monkeypatch):
+                                         monkeypatch,
+                                                no_aux_calls,):
     calls = []
     answers = [
         "看 [STRUCT:CCl]。",            # CCl 合法但渲染器失败 → 触发修正
@@ -67,7 +151,7 @@ def test_correction_after_render_failure(fake_rdkit, flawed_renderers,
     ]
     monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
     monkeypatch.setattr(
-        "app.ask_llm", lambda *a, **k: calls.append(a[0] if a else None) or answers.pop(0))
+        "app.ask_llm", lambda *a, **k: calls.append(a[0] if a else None) or _res(answers.pop(0)))
     result = process_question("画苯", max_corrections=1)
     assert len(calls) == 2
     assert "RENDERED:c1ccccc1" in result
@@ -75,26 +159,31 @@ def test_correction_after_render_failure(fake_rdkit, flawed_renderers,
 
 
 def test_correction_exhausted_degrades(fake_rdkit, fake_renderers,
-                                       monkeypatch):
+                                       no_aux_calls, monkeypatch):
+    """修正耗尽 → 降级（不无限重试）。
+
+    本用例屏蔽了辅助重写路径（`no_aux_calls`），因此调用序列为
+    "主生成 + 1 次常规修正"；含手术式重写的完整序列见
+    `test_p3_escape_still_works_single_model` 与 tests/test_struct_rewrite.py。
+    """
     calls = []
     monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
     monkeypatch.setattr(
-        "app.ask_llm", lambda *a, **k: calls.append(a[0] if a else None) or "苯是 [STRUCT:XYZABC]。")
+        "app.ask_llm", lambda *a, **k: calls.append(a[0] if a else None) or _res("苯是 [STRUCT:XYZABC]。"))
     result = process_question("画苯", max_corrections=1)
-    # 20260828 起 SMILES 级错误先试一次手术式结构重写（去锚定微任务），
-    # 失败再走常规修正：主生成 + 手术 + 常规 = 3 次，均失败 → 降级
-    assert len(calls) == 3, "手术重写 + 最多一次常规修正，不应无限重试"
+    assert len(calls) == 2, "主生成 + 最多一次常规修正，不应无限重试"
     assert "图示无法渲染" in result
 
 
 def test_diagnostics_resolved_after_correction(fake_rdkit, fake_renderers,
-                                               monkeypatch):
+                                               monkeypatch,
+                                                no_aux_calls,):
     """修正救回：diagnostics 记录失败轮（round=0），resolved=True。"""
     calls = []
     answers = ["苯是 [STRUCT:XYZABC]。", "苯是 [STRUCT:c1ccccc1]。"]
     monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
     monkeypatch.setattr(
-        "app.ask_llm", lambda *a, **k: calls.append(a[0] if a else None) or answers.pop(0))
+        "app.ask_llm", lambda *a, **k: calls.append(a[0] if a else None) or _res(answers.pop(0)))
     diag = []
     result = process_question("画苯", max_corrections=1, diagnostics=diag)
     assert len(diag) == 1
@@ -105,19 +194,94 @@ def test_diagnostics_resolved_after_correction(fake_rdkit, fake_renderers,
     assert "RENDERED:c1ccccc1" in result
 
 
+def test_translate_name_uses_user_model(monkeypatch):
+    """★ 20260830 实测病例回归：辅助调用（中文化学名→英文翻译）**必须用用户的模型**。
+
+    病例：网页填 `deepseek-flash`，但日志里出现 `.env` 的 `gemini-3.7-flash`
+    ——根因是 `_build_correction_prompt → _fetch_pubchem_references →
+    _translate_name_zh2en` 三层都没把 `model` 穿下去，翻译调用回退到了
+    服务器 `.env` 的模型（用户既未授权、也可能无权访问）。
+
+    本用例钉住整条链：修正 prompt 构造时，翻译调用收到的 `model` 必须是用户那个。
+    """
+    import types
+    seen = {}
+
+    def fake_ask(text, **kw):
+        seen["model"] = kw.get("model")
+        seen["user_scoped"] = kw.get("user_scoped")
+        return _res("benzene")
+
+    monkeypatch.setattr("app.ask_llm", fake_ask)
+    monkeypatch.setattr("app.name_to_smiles", lambda name: "c1ccccc1",
+                        raising=False)
+    monkeypatch.setattr("utils.name_resolver.name_to_smiles",
+                        lambda name: "c1ccccc1")
+    # 隔离 PubChem 失败缓存（按凭证指纹分桶，避免跨用例串味）
+    import app as app_mod
+    app_mod._PUBCHEM_FAIL_CACHE.clear()
+
+    failures = [(types.SimpleNamespace(type="STRUCT", args=["XYZABC", "苯"],
+                                       raw="[STRUCT:XYZABC,label=苯]",
+                                       start_pos=0), "无效 SMILES")]
+    with credentials.user_credentials({"api_key": "sk-user",
+                                       "model": "deepseek-flash"}):
+        app_mod._build_correction_prompt("画出苯", "苯是 [STRUCT:XYZABC]。",
+                                         failures, model=None)
+    assert seen.get("model") is None, "传 None 时由凭证层解析为用户模型"
+    assert seen.get("user_scoped") is True, "★ 必须标记为用户作用域（禁止回退服务器模型）"
+    # 凭证层在该作用域下解析出的就是用户模型
+    with credentials.user_credentials({"api_key": "sk-user",
+                                       "model": "deepseek-flash"}):
+        assert credentials.llm_config().model_name == "deepseek-flash"
+
+
+def test_translate_name_never_falls_back_to_server_model(fake_rdkit,
+                                                         monkeypatch):
+    """★ 用户作用域内、又没有可用模型名时：**拒绝**用服务器模型（宁可不翻译）。"""
+    import types
+    import core.llm_client as lc
+
+    calls = []
+
+    def fake_stream(url, headers, payload, on_piece=None):
+        calls.append(dict(payload))
+        return "benzene", "stop", 0, False
+
+    monkeypatch.setattr(lc, "_stream_chat", fake_stream)
+    # 服务器配置：模型名留空 + 端点/密钥给全（模拟"凭证齐全但没有模型名"）
+    base = credentials.base_settings()
+    credentials.set_base_settings_for_tests(
+        dataclasses.replace(
+            base, llm=dataclasses.replace(base.llm, model_name="",
+                                          base_url="http://x", api_key="k")))
+    try:
+        with credentials.user_credentials({"api_key": "sk-user"}):
+            out = lc.ask_llm("苯", system_prompt="x", thinking="disabled",
+                             user_scoped=True)
+        assert out is None, "不应偷偷用服务器模型"
+        assert not calls, "不应发起任何上游调用"
+    finally:
+        credentials.set_base_settings_for_tests(None)
+
+
 def test_diagnostics_include_final_round_unresolved(fake_rdkit,
                                                     fake_renderers,
+                                                    no_aux_calls,
                                                     monkeypatch):
     """修正救不回：diagnostics 含最后一轮（round=1，即 max），resolved=False
-    ——后端拿到完整失败反馈（含最后一次），前端只见友好降级。"""
+    ——后端拿到完整失败反馈（含最后一次），前端只见友好降级。
+
+    （辅助重写路径被 `no_aux_calls` 屏蔽，故调用序列为 主生成 + 1 次常规修正。）
+    """
     calls = []
     monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
     monkeypatch.setattr(
         "app.ask_llm",
-        lambda *a, **k: calls.append(a[0] if a else None) or "苯是 [STRUCT:XYZABC]。")
+        lambda *a, **k: calls.append(a[0] if a else None) or _res("苯是 [STRUCT:XYZABC]。"))
     diag = []
     result = process_question("画苯", max_corrections=1, diagnostics=diag)
-    assert len(calls) == 3                       # 主生成 + 手术重写 + 常规修正
+    assert len(calls) == 2                       # 主生成 + 一次常规修正
     assert len(diag) == 2                       # 两轮失败都被记录（含最后一次）
     assert [d["round"] for d in diag] == [0, 1]
     assert all(d["resolved"] is False for d in diag)
@@ -194,7 +358,8 @@ def test_correction_prompt_inorganic_salt_guidance():
 
 
 def test_retry_succeeds_after_smiles_fix(fake_rdkit, fake_renderers,
-                                         monkeypatch):
+                                         monkeypatch,
+                                                no_aux_calls,):
     """修正重试成功闭环：首次无效 SMILES 校验拦截 → 修正版渲染成功。
 
     注：fake_rdkit 的 _FakeMol 无元素计数，ARROW/REACTION 的守恒校验
@@ -209,159 +374,175 @@ def test_retry_succeeds_after_smiles_fix(fake_rdkit, fake_renderers,
     ]
     monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
     monkeypatch.setattr(
-        "app.ask_llm", lambda *a, **k: calls.append(a[0] if a else None) or answers.pop(0))
+        "app.ask_llm", lambda *a, **k: calls.append(a[0] if a else None) or _res(answers.pop(0)))
     result = process_question("写出乙醛发生银镜反应的化学方程式。", max_corrections=1)
     assert len(calls) == 2, "首次失败应触发一次修正重试"
     assert "RENDERED:CCO" in result                # 修正版已渲染
     assert "无法渲染" not in result                # 无降级提示
 
 
-# ---------- flash 首跑 + 失败升级 pro 路由 ----------
+# ---------- 单模型：不再有"升级/回退模型"路由（20260830 重构） ----------
 
-def _enable_route(monkeypatch, upgrade_model="deepseek-v4-pro"):
-    """启用路由：替换 app.settings.llm.upgrade_model_name。"""
-    import types
-    monkeypatch.setattr(
-        "app.settings",
-        types.SimpleNamespace(
-            llm=types.SimpleNamespace(upgrade_model_name=upgrade_model)))
-
-
-def test_route_keyword_direct_upgrade(fake_rdkit, fake_renderers,
-                                      monkeypatch):
-    """命中难题关键词（如"机理"）→ 跳过主模型首跑，直接升级模型。"""
-    _enable_route(monkeypatch)
+def test_single_model_used_for_all_calls(fake_rdkit, fake_renderers, base_env,
+                                         no_aux_calls, monkeypatch):
+    """全程单模型：主生成与后续修正**都用同一个模型**，且不显式覆盖 model。"""
+    base_env(model_name="deepseek-flash")
     calls = []
+    answers = ["苯是 [STRUCT:XYZABC]。", "[STRUCT:c1ccccc1]"]
     monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
     monkeypatch.setattr(
-        "app.ask_llm",
-        lambda *a, **k: calls.append(k) or "SN1 机理是 [STRUCT:c1ccccc1]。")
-    diag = []
-    result = process_question("介绍 SN1 反应的机理", max_corrections=1,
-                              diagnostics=diag)
-    assert len(calls) == 1, "命中关键词应直接 pro（无 flash 首跑）"
-    assert calls[0].get("model") == "deepseek-v4-pro"
+        "app.ask_llm", lambda *a, **k: calls.append(k) or _res(answers.pop(0)))
+    result = process_question("画苯", max_corrections=1)
+    assert len(calls) == 2
+    # 两次调用都不覆盖 model（由凭证层统一解析为同一模型）
+    assert all(c.get("model") is None for c in calls)
+    # 修正调用是辅助调用：关思考 + 收紧的 max_tokens
+    assert calls[1].get("thinking") == "disabled"
+    assert calls[1].get("max_tokens") == 2048
     assert "RENDERED:c1ccccc1" in result
-    assert not diag                              # pro 一遍过，无失败诊断
 
 
-def test_route_keyword_custom_list(fake_rdkit, fake_renderers, monkeypatch):
-    """自定义 UPGRADE_KEYWORDS 生效；未命中词汇仍走主模型首跑。"""
-    import types
-    monkeypatch.setattr(
-        "app.settings",
-        types.SimpleNamespace(
-            llm=types.SimpleNamespace(
-                upgrade_model_name="deepseek-v4-pro",
-                upgrade_keywords=("卤代",))),)  # 仅"卤代"算难题
-    calls = []
-    answers = ["苯是 [STRUCT:XYZABC]。", "苯是 [STRUCT:c1ccccc1]。"]
-    monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
-    monkeypatch.setattr(
-        "app.ask_llm", lambda *a, **k: calls.append(k) or answers.pop(0))
-    # "画苯"不含"卤代" → 主模型首跑 → 失败升级 pro
-    process_question("画苯", max_corrections=1)
-    assert [c.get("model") for c in calls] == [None, "deepseek-v4-pro"]
+def test_mechanism_question_does_not_switch_model(fake_rdkit, fake_renderers,
+                                                  base_env, monkeypatch):
+    """★ 20260830 用户病例回归：机理题**不得**被换成另一个模型。
 
-
-def test_route_pass_no_upgrade(fake_rdkit, fake_renderers, monkeypatch):
-    """主模型一遍过 → 不触发升级（ask_llm 仅 1 次，model 不覆盖）。"""
-    _enable_route(monkeypatch)
+    旧实现里"机理"命中关键词路由 → 把 .env 的升级模型发到上游
+    （用户既未授权、也可能无权访问该模型名）。单模型后必须彻底消失。
+    """
+    base_env(model_name="server-model")
     calls = []
     monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
     monkeypatch.setattr(
         "app.ask_llm",
-        lambda *a, **k: calls.append(k) or "苯是 [STRUCT:c1ccccc1]。")
-    diag = []
-    result = process_question("画苯", max_corrections=1, diagnostics=diag)
+        lambda *a, **k: calls.append(k) or _res("机理是 [STRUCT:c1ccccc1]。"))
+    with credentials.user_credentials({"api_key": "sk-user",
+                                       "model": "deepseek-flash"}):
+        result = process_question("介绍 SN1 反应的机理", max_corrections=1)
     assert len(calls) == 1
-    assert calls[0].get("model") is None          # 主模型默认配置
-    assert not diag                                # 无失败 → 无诊断
+    assert all(c.get("model") is None for c in calls), "不再有显式模型切换"
     assert "RENDERED:c1ccccc1" in result
 
 
-def test_route_upgrade_on_failure(fake_rdkit, fake_renderers, monkeypatch):
-    """主模型失败 → 升级模型只做部分修正（不重跑全文），修正后一遍过。"""
-    _enable_route(monkeypatch)
+def test_user_model_resolved_through_credentials(base_env):
+    """凭证层：用户模型优先于服务器 .env 的模型。"""
+    base_env(model_name="server-model")
+    with credentials.user_credentials({"api_key": "sk-user",
+                                       "model": "deepseek-flash"}):
+        assert credentials.user_model() == "deepseek-flash"
+        assert credentials.llm_config().model_name == "deepseek-flash"
+
+
+def test_thinking_params_forwarded_to_main_generation(fake_rdkit,
+                                                      fake_renderers,
+                                                      monkeypatch):
+    """网页传入的思考开关/强度/最大输出必须透传到主生成调用。"""
+    calls = []
+    monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
+    monkeypatch.setattr(
+        "app.ask_llm", lambda *a, **k: calls.append(k) or _res("苯是 [STRUCT:c1ccccc1]。"))
+    process_question("画苯", max_corrections=1, thinking="off",
+                     effort="high", max_tokens=12345)
+    assert calls[0].get("thinking") == "off"
+    assert calls[0].get("effort") == "high"
+    assert calls[0].get("max_tokens") == 12345
+
+
+def test_main_generation_uses_call_site_max_tokens(fake_rdkit, fake_renderers,
+                                                   monkeypatch):
+    """未指定 max_tokens 时用调用点常量（32768），而不是继承配置的旧默认。"""
+    from core.llm_client import MAX_TOKENS_MAIN
+    calls = []
+    monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
+    monkeypatch.setattr(
+        "app.ask_llm", lambda *a, **k: calls.append(k) or _res("苯是 [STRUCT:c1ccccc1]。"))
+    process_question("画苯", max_corrections=1)
+    assert calls[0].get("max_tokens") == MAX_TOKENS_MAIN
+
+
+def test_p3_escape_still_works_single_model(fake_rdkit, fake_renderers,
+                                            monkeypatch):
+    """单模型下 P3 逃生仍生效：同错误重犯 → 不再烧满修正轮次。"""
     calls = []
     answers = [
-        "苯是 [STRUCT:XYZABC]。",      # flash 首跑失败（不做 flash 修正）
-        "[STRUCT:c1ccccc1]",            # pro 部分修正只输出修正标记
+        "苯是 [STRUCT:XYZABC]。",       # 首跑失败
+        "（手术重写失败：无有效标记）",    # 手术式结构重写尝试（仍坏）
+        "[STRUCT:XYZABC]",               # 常规修正原样重犯（同 fingerprint）
     ]
     monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
     monkeypatch.setattr(
-        "app.ask_llm", lambda *a, **k: calls.append(k) or answers.pop(0))
-    diag = []
-    result = process_question("画苯", max_corrections=1, diagnostics=diag)
-    assert len(calls) == 2, "flash 失败应直接升级 pro 部分修正"
-    assert calls[0].get("model") is None           # flash（默认配置）
-    assert calls[1].get("model") == "deepseek-v4-pro"  # 升级 pro
-    assert calls[1].get("thinking") == "disabled"  # 修正调用关思考（非全文重跑）
-    assert "RENDERED:c1ccccc1" in result
-    # 诊断：flash 失败在 main 与 upgrade（修正前重新校验）各记一条，最终被解决
-    assert len(diag) == 2
-    assert [d["stage"] for d in diag] == ["main", "upgrade"]
-    assert all(d["resolved"] is True for d in diag)
-
-
-def test_route_upgrade_then_correction(fake_rdkit, fake_renderers,
-                                       monkeypatch):
-    """flash 失败 → 升级 pro 部分修正仍失败（相同错误）→ P3 逃生不再烧轮次。"""
-    _enable_route(monkeypatch)
-    calls = []
-    answers = [
-        "苯是 [STRUCT:XYZABC]。",      # flash 首跑失败
-        "（手术重写失败：无有效标记）",   # pro 手术式结构重写尝试（仍坏）
-        "[STRUCT:XYZABC]",              # pro 常规修正原样重犯（同 fingerprint）
-    ]
-    monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
-    monkeypatch.setattr(
-        "app.ask_llm", lambda *a, **k: calls.append(k) or answers.pop(0))
+        "app.ask_llm", lambda *a, **k: calls.append(k) or _res(answers.pop(0)))
     result = process_question("画苯", max_corrections=2)
-    # P3：修正后失败原因与上轮完全相同 → 跳过剩余修正轮次（20260821）；
-    # 20260828 起 SMILES 级错误在常规修正前先试一次手术重写
     assert len(calls) == 3
-    assert calls[0].get("model") is None
-    assert calls[1].get("model") == "deepseek-v4-pro"
-    assert calls[2].get("model") == "deepseek-v4-pro"
-    assert calls[2].get("thinking") == "disabled"   # 修正调用关思考
+    assert all(c.get("model") is None for c in calls)
     assert "RENDERED" not in result                  # 未救回 → 降级文本
 
 
-def test_route_correction_continues_on_new_error(fake_rdkit, fake_renderers,
-                                                 monkeypatch):
+def test_correction_continues_on_new_error(fake_rdkit, fake_renderers,
+                                           monkeypatch):
     """修正后失败原因**变化**（fingerprint 不同）→ 不触发 P3，继续修正救回。"""
-    _enable_route(monkeypatch)
     calls = []
     answers = [
-        "苯是 [STRUCT:XYZABC]。",      # flash 首跑失败
-        "[STRUCT:XYZABD]",              # pro 第 1 次修正仍失败（不同原因串）
-        "[STRUCT:c1ccccc1]",            # pro 第 2 次修正成功
+        "苯是 [STRUCT:XYZABC]。",      # 首跑失败
+        "[STRUCT:XYZABD]",              # 第 1 次修正仍失败（不同原因串）
+        "[STRUCT:c1ccccc1]",            # 第 2 次修正成功
     ]
     monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
     monkeypatch.setattr(
-        "app.ask_llm", lambda *a, **k: calls.append(k) or answers.pop(0))
+        "app.ask_llm", lambda *a, **k: calls.append(k) or _res(answers.pop(0)))
     result = process_question("画苯", max_corrections=2)
     assert len(calls) == 3
-    assert calls[2].get("model") == "deepseek-v4-pro"
     assert "RENDERED:c1ccccc1" in result
 
 
-def test_route_upgrade_unresolved(fake_rdkit, fake_renderers, monkeypatch):
-    """flash 失败 → 升级 pro 仍失败且修正救不回 → 降级；诊断含 stage。"""
-    _enable_route(monkeypatch)
+def test_unresolved_failure_diagnostics_single_stage(fake_rdkit,
+                                                     fake_renderers,
+                                                     monkeypatch):
+    """修正救不回 → 降级；诊断的 stage 现在恒为 main（无 upgrade 阶段）。"""
     calls = []
     monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
     monkeypatch.setattr(
         "app.ask_llm",
-        lambda *a, **k: calls.append(k) or "苯是 [STRUCT:XYZABC]。")
+        lambda *a, **k: calls.append(k) or _res("苯是 [STRUCT:XYZABC]。"))
     diag = []
     result = process_question("画苯", max_corrections=1, diagnostics=diag)
     assert "图示无法渲染" in result
     assert "无效 SMILES" not in result               # 前端友好
-    stages = [d["stage"] for d in diag]
-    assert "main" in stages and "upgrade" in stages  # 两阶段失败都记录
-    assert all(d["resolved"] is False for d in diag)
+    assert diag
+    assert {d["stage"] for d in diag if d.get("type") != "NOTICE"} == {"main"}
+    assert all(d["resolved"] is False for d in diag if d.get("type") != "NOTICE")
+
+
+# ---------- 思考档位被静默改写时的诚实上报（§4.5.5） ----------
+
+def test_effort_notice_appended_once(fake_rdkit, fake_renderers, monkeypatch):
+    """端点强制思考时：回答末尾追加一次提示，且同会话不重复。"""
+    class _Res:
+        text = "苯是 [STRUCT:c1ccccc1]。"
+        downgraded = True
+        notice = "（该模型始终思考，无法关闭；本次按「低」执行）"
+
+    calls = []
+    monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
+    monkeypatch.setattr("app.ask_llm", lambda *a, **k: calls.append(k) or _Res())
+    diag = []
+    r1 = process_question("画苯", max_corrections=1, diagnostics=diag)
+    assert _Res.notice in r1
+    assert any(d.get("type") == "NOTICE" for d in diag)
+    # 第二次提问：不再追加（同会话去重）
+    r2 = process_question("画苯", max_corrections=1)
+    assert _Res.notice not in r2
+
+
+def test_no_notice_when_not_downgraded(fake_rdkit, fake_renderers, monkeypatch):
+    class _Res:
+        text = "苯是 [STRUCT:c1ccccc1]。"
+        downgraded = False
+        notice = ""
+
+    monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
+    monkeypatch.setattr("app.ask_llm", lambda *a, **k: _Res())
+    r = process_question("画苯", max_corrections=1)
+    assert "无法关闭" not in r
 
 
 # ---------- 部分降级：COMPOSITE 仅 MECHARROW 报错时剔除箭头保留分子 ----------

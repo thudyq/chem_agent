@@ -41,9 +41,14 @@ def _rotate_if_needed(p: Path, max_bytes: int) -> None:
 
 def log_request(question: str, cid: str, diag: list = None,
                 raw_answer: str = None, path=None,
-                max_bytes: int = _MAX_BYTES) -> None:
+                max_bytes: int = _MAX_BYTES,
+                credential: str = "default") -> None:
     """落盘一次请求的完整诊断。diag 为 process_question 的 diagnostics
-    列表（可为空）；raw_answer 为最终采用的原始标记文本（可无）。"""
+    列表（可为空）；raw_answer 为最终采用的原始标记文本（可无）。
+
+    credential: 凭证指纹（`core.credentials.fingerprint()`，**不含密钥本身**）
+    ——BYOK 网页路径用它区分不同用户来源，便于按 key 归因失败模式。
+    """
     try:
         p = _resolve_path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -52,6 +57,7 @@ def log_request(question: str, cid: str, diag: list = None,
         for d in diag or []:
             lines.append(json.dumps({
                 "ts": ts, "cid": cid, "type": "failure",
+                "credential": credential,
                 "question": question,
                 "round": d.get("round"), "stage": d.get("stage"),
                 "tag_type": d.get("type"), "resolved": d.get("resolved"),
@@ -61,6 +67,7 @@ def log_request(question: str, cid: str, diag: list = None,
         if raw_answer:
             lines.append(json.dumps({
                 "ts": ts, "cid": cid, "type": "answer",
+                "credential": credential,
                 "question": question, "raw": raw_answer,
             }, ensure_ascii=False))
         if not lines:

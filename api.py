@@ -22,9 +22,10 @@ import json
 import queue
 import re
 import socket
-import tempfile
+import sys
 import threading
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -35,10 +36,99 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from app import process_question
 from core.attachments import build_attachments, replace_code_blocks_with_images
-from core import answer_cache, diaglog
+from core import answer_cache, credentials, diaglog
 from core.config import settings
+from core.web_api import cleanup_expired_sessions
+from utils.tempdir import work_dir
+from utils import tempdir
 
-app = FastAPI(title="Chem_Agent", version="1.0.0")
+# ── 控制台/日志编码兜底（20260830）──────────────────────────────────────────
+# Windows 默认代码页常见 GBK，而日志里难免出现它转不了的字符（`⚠` `✓` `⁻`
+# `⇌` 等化学符号尤其多）。`print` 遇到这种字符会抛 UnicodeEncodeError——
+# 实测把**启动横幅**直接打成 `ERROR: Application startup failed. Exiting.`，
+# 服务整个起不来。
+#
+# 这里只放宽**错误处理**（转不了的字符降级成 `?`），**不改 encoding**：
+# 保留原编码，中文在 GBK 控制台照旧正常显示，不会变乱码。
+# `reconfigure` 在 pytest 等已接管 stdout 的场景不可用，静默跳过即可。
+try:
+    sys.stdout.reconfigure(errors="replace")
+    sys.stderr.reconfigure(errors="replace")
+except (AttributeError, OSError, ValueError):     # 非 TextIOWrapper / 已接管
+    pass
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """应用生命周期：启动时拉起网页会话清理线程 + 打印生效配置。
+
+    启动横幅（20260830 诊断）：把**实际生效**的服务器模型/端点/思考参数打出来，
+    便于一眼核对"重启后是不是加载了新配置"——此前排查
+    "网页填了 A、日志却是 .env 的 B" 时无法确认这一点。
+    只打指纹，**绝不打完整密钥**。
+    """
+    _web_session_janitor()
+    llm = settings.llm
+    parts = [f"model={llm.model_name or '(空)'}",
+             f"endpoint={llm.base_url or '(空)'}",
+             f"key={credentials.redact(llm.api_key)}",
+             f"thinking={llm.thinking_default}/{llm.effort_default}",
+             f"max_tokens={llm.max_tokens}"]
+    vis = settings.vision
+    parts.append("vision=" + (vis.model_name if vis.model_name else "(空 → 用主模型)"))
+    print("[startup] 生效配置：" + "  ".join(parts))
+    # 临时目录单独一行：LaTeX 编译失败最常见的原因就是它不可写，而症状只是
+    # 回答里出现"（图示未能渲染）"，不带这行日志很容易查错方向
+    print("[startup] 临时目录：" + tempdir.describe())
+    _tmp_problem = tempdir.probe()
+    if _tmp_problem:
+        print("[startup] 警告：" + _tmp_problem)
+    yield
+
+
+app = FastAPI(title="Chem_Agent", version="1.0.0", lifespan=_lifespan)
+
+# 公开网页（BYOK：任何用户填自己的 API Key 即可用）——独立 router，与
+# 清小搭 /v1 契约完全分离（见 core/web_api.py）。页面挂 `/` 与 `/web`。
+from core.web_api import router as web_router  # noqa: E402  （需先建 app）
+
+app.include_router(web_router)
+
+
+def _web_session_janitor() -> None:
+    """后台守护线程：周期性清理过期的网页会话附件目录（BYOK 页面用）。
+
+    只清理 `data/web_sessions/` 下超过 TTL（默认 24h）未使用的会话目录——
+    清小搭路径的附件（`data/attachments/`）是长期保留的，不在清理范围。
+    线程为 daemon：不阻塞退出，异常静默（清理失败不影响服务）。
+
+    用**模块级标志**保证只启动一次；由 lifespan 在应用启动时调用
+    （不在导入时启动——否则测试 import api 就会起后台线程）。
+    """
+    global _JANITOR_STARTED
+    if _JANITOR_STARTED:
+        return
+    _JANITOR_STARTED = True
+    import threading as _threading
+    import time as _time
+
+    def _loop():
+        while True:
+            _time.sleep(3600)
+            try:
+                cleanup_expired_sessions()
+            except Exception as e:
+                print(f"[web] 会话清理异常（已忽略）: {e}")
+
+    _threading.Thread(target=_loop, daemon=True,
+                      name="web-session-janitor").start()
+    try:                      # 启动时先清一次（重启后回收上次遗留）
+        cleanup_expired_sessions()
+    except Exception as e:
+        print(f"[web] 启动清理跳过: {e}")
+
+
+_JANITOR_STARTED = False
 
 # 清小搭网关为服务端调用，CORS 仅供浏览器直连调试；密钥保护下放开无妨
 app.add_middleware(
@@ -398,11 +488,14 @@ def _build_question(text: str, images: list, audios: list, files: list,
     """
     parts = [text] if text else []
     if images:
-        if not settings.vision.is_configured:
-            print("[api] 收到图片但未配置 VISION_MODEL/VISION_BASE_URL/VISION_API_KEY")
+        # 视觉可用性经凭证层判定：`.env` 没配 VISION_* 时**回退用主模型**
+        # （原生多模态模型自带视觉，见 Model-Config-Refactor §4.9）。
+        if not credentials.vision_config().is_configured:
+            print("[api] 收到图片，但视觉模型与主模型凭证都不可用")
             parts.append(
-                "（用户上传了图片，但服务未配置视觉模型（VISION_MODEL 等），"
-                "无法识别图片内容，请提示用户先描述结构或联系管理员配置视觉模型）"
+                "（用户上传了图片，但服务未配置可用的视觉模型（VISION_MODEL 等，"
+                "或可识图的主模型），无法识别图片内容，请提示用户先描述结构"
+                "或联系管理员配置视觉模型）"
             )
         else:
             from utils.ocr_utils import describe_image
@@ -560,7 +653,15 @@ def _sse_stream(question: str, history: list, cid: str, created: int,
         answer_q.put(display)
         result_q.put(attachments)
 
-    threading.Thread(target=work, daemon=True).start()
+    # 把当前请求的 contextvars 显式带进工作线程（新线程**不自动继承**）。
+    # `/v1` 走的是服务器 `.env` 配置、本就不设用户凭证，这里只是保持
+    # "请求上下文完整传递"的约定，避免将来在此挂载 BYOK 时静默丢失配置。
+    # ★ 注意：若将来 `/v1` 要支持 BYOK，凭证必须在 `work()` **内部** set，
+    # 不能依赖生成器迭代处 set —— Starlette 逐块迭代时每次 `next()` 都从
+    # 请求上下文重新拷贝一份 Context，迭代处 set 的值传不到后续迭代。
+    import contextvars as _contextvars
+    _ctx = _contextvars.copy_context()
+    threading.Thread(target=lambda: _ctx.run(work), daemon=True).start()
     last_flush = time.time()
     while True:
         try:
@@ -661,7 +762,9 @@ async def chat_completions(request: Request, authorization: str | None = Header(
     created = int(time.time())
     public_base = _public_base(request)
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
+    # 请求级临时目录（图片/附件落盘）；`work_dir` 支持 CHEM_AGENT_TMPDIR
+    # 覆盖，且在收尾删除失败时只记日志、不让整请求失败
+    with work_dir(prefix="chemreq_") as tmp_dir:
         question = _build_question(text, images, audios, files, tmp_dir)
         question = _maybe_add_correction_directive(
             question, text, body.get("messages") or [])

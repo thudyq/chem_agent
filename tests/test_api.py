@@ -429,13 +429,25 @@ def test_serve_attachment(client, tmp_path, monkeypatch):
 
 
 def test_image_without_vision_config(client, monkeypatch):
-    """收到图片但未配置视觉模型：回答中明确说明原因，不静默忽略。"""
+    """收到图片但视觉不可用：回答中明确说明原因，不静默忽略。
+
+    注（20260830 重构）：视觉可用性由 `credentials.vision_config()` 判定
+    （`.env` 未配 `VISION_*` 时**回退用主模型**）。因此：
+    - 本用例把视觉判为不可用（模拟"主模型也不支持视觉"）；
+    - 必须 monkeypatch 掉 `describe_image`，否则会**真实联网**打用户配置的
+      视觉端点（实测因此吃到 429 余额错误）。
+    """
     import types
-    monkeypatch.setattr(api, "settings", types.SimpleNamespace(
-        vision=types.SimpleNamespace(is_configured=False),
-        service=types.SimpleNamespace(public_base_url="", attachment_dir=None,
-                                      attachment_ttl=0),
-    ))
+    from core import credentials as cred
+
+    monkeypatch.setattr(
+        cred, "vision_config",
+        lambda: types.SimpleNamespace(is_configured=False,
+                                      model_name="", base_url="", api_key=""))
+    import utils.ocr_utils as ocr
+    monkeypatch.setattr(ocr, "describe_image",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("视觉不可用时不应调用 describe_image")))
     captured = {}
     monkeypatch.setattr(api, "process_question",
                         lambda *a, **k: captured.setdefault("q", a[0] if a else None) or FAKE_ANSWER)
@@ -445,7 +457,38 @@ def test_image_without_vision_config(client, monkeypatch):
     ]}]}
     resp = client.post("/v1/chat/completions", json=payload, headers=AUTH)
     assert resp.status_code == 200
-    assert "VISION_MODEL" in captured["q"]
+    assert "视觉模型" in captured["q"]
+    assert "无法识别" in captured["q"]
+
+
+def test_image_uses_main_model_when_vision_unset(client, monkeypatch):
+    """`.env` 未配视觉模型时，图片识别**回退用主模型**（不再判"未配置"）。"""
+    import types
+    from core import credentials as cred
+
+    main = types.SimpleNamespace(is_configured=True, model_name="deepseek-flash",
+                                 base_url="https://api.deepseek.com/v1",
+                                 api_key="sk-main", thinking="", effort="")
+    monkeypatch.setattr(cred, "vision_config", lambda: main)
+    # ★ patch 目标必须是 `utils.ocr_utils.describe_image`：`api._build_question`
+    # 内部是 `from utils.ocr_utils import describe_image`（延迟导入），
+    # patch `api.describe_image` 不会生效（会真实联网）。
+    import utils.ocr_utils as ocr
+    monkeypatch.setattr(ocr, "describe_image",
+                        lambda *a, **k: {"type": "结构式", "content": "苯，SMILES: c1ccccc1",
+                                         "smiles_ok": True, "downgraded": False})
+    monkeypatch.setattr(api, "_fetch_image_to_temp",
+                        lambda url, tmp_dir: __file__)
+    captured = {}
+    monkeypatch.setattr(api, "process_question",
+                        lambda *a, **k: captured.setdefault("q", a[0] if a else None) or FAKE_ANSWER)
+    payload = {"messages": [{"role": "user", "content": [
+        {"type": "text", "text": "看图"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+    ]}]}
+    resp = client.post("/v1/chat/completions", json=payload, headers=AUTH)
+    assert resp.status_code == 200
+    assert "c1ccccc1" in captured["q"]
 
 
 def test_validate_download_url_ssrf(monkeypatch):
@@ -687,3 +730,40 @@ def test_stream_registers_answer_cache(client, monkeypatch):
     # 直接查缓存验证登记成功
     assert answer_cache.lookup(content) is not None
     assert "[COMPOSITE" in answer_cache.lookup(content)
+
+
+# ─────────────────────────────────────────── 启动健壮性（控制台编码）
+
+def test_startup_banner_survives_gbk_console():
+    """★ 回归：Windows 默认代码页（GBK）下，打印日志不得把服务打崩。
+
+    20260830 实测：启动横幅里放了个 `⚠`（U+26A0），GBK 编码不了，
+    `print` 抛 `UnicodeEncodeError` → 进程直接
+    `ERROR: Application startup failed. Exiting.`，**服务完全起不来**。
+
+    修法两条：① 文案只用 GBK 可编码的字符；② `api.py` 给 stdout/stderr
+    装 `errors="replace"` 兜底（只放宽错误处理，**不改编码**，中文照旧可读）。
+
+    这里用**真子进程 + `PYTHONIOENCODING=gbk`** 端到端验证——断言"某个字符
+    能不能编码"不如直接复现用户环境跑一遍。用例里的 `\\u26a0` 是故意的：
+    将来若有人去掉兜底、又往日志里塞异体字符，这条就会变红。
+    """
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    code = (
+        "import sys, api\n"
+        r"print('[startup] \u26a0\u2713\u207b gbk-unsafe')" + "\n"
+        "print('ENCODING_OK', sys.stdout.encoding, sys.stdout.errors)\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", code], cwd=str(root),
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=180, env={**os.environ, "PYTHONIOENCODING": "gbk"})
+    assert proc.returncode == 0, (
+        f"GBK 控制台下导入/打印即崩：\n{proc.stderr[-1000:]}")
+    assert "ENCODING_OK" in proc.stdout
+    assert "replace" in proc.stdout, "stdout 未装 errors='replace' 兜底"

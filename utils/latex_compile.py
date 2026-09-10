@@ -22,9 +22,10 @@ import platform
 import shutil
 import subprocess
 import sys
-import tempfile
 from functools import lru_cache
 from typing import Optional
+
+from utils.tempdir import work_dir
 
 __all__ = ["compile_tikz_to_png", "detect_backends"]
 
@@ -305,7 +306,7 @@ def _compile_doc_to_png(latex_doc: str, dpi: int) -> Optional[bytes]:
     engine = _find_latex_engine()
     if not engine:
         return None
-    with tempfile.TemporaryDirectory(prefix="chemtex_") as work:
+    with work_dir(prefix="chemtex_") as work:
         tex_path = os.path.join(work, "fig.tex")
         with open(tex_path, "w", encoding="utf-8") as f:
             f.write(latex_doc)

@@ -119,58 +119,44 @@ def evaluate_compliance(questions: list, *, max_corrections: int = 1) -> dict:
 
 
 def evaluate_route(questions: list, max_corrections: int = 2) -> dict:
-    """端到端路由评估：每问题走 process_question（含关键词预判直 pro /
-    flash 首跑失败升级 / 部分修正闭环），统计路由效果。
+    """端到端管线评估（单模型）：每问题走 `process_question`，统计最终结果。
 
-    与 evaluate_compliance 的区别：后者只测单模型（MODEL_NAME）首次输出
-    质量（prompt 基线）；本函数测真实管线（路由 + 修正 + 降级）的最终结果，
-    回答的是"路由把哪些题救回来了、还剩多少降级"。
+    与 evaluate_compliance 的区别：后者只测**首次 LLM 输出**的标记质量
+    （prompt 基线，不含修正闭环）；本函数测真实管线的最终结果，回答的是
+    "修正闭环把哪些题救回来了、还剩多少降级"。
+
+    > 20260830 重构：**模型路由已删除**（整个服务只用一个模型），因此不再有
+    > `upgrade_triggered` / `keyword_direct` 维度；降级发生在同一模型内部
+    > （思考档位逐级下降），评估口径相应简化为"是否仍降级 / 是否仍失败"。
 
     统计口径：
-    - main_pass: flash 一遍过（无失败，未升级）
-    - upgrade_triggered: 命中难题关键词直 pro，或 flash 首跑失败升级
-    - keyword_direct: 其中命中关键词直接走 pro 的题数
+    - total: 问题数
+    - clean_pass: 首轮无失败且未降级（"一遍过"）
+    - corrections_used: 触发了修正闭环的题数（存在任何 diag 记录）
     - unresolved_tags: 最终回答中未正常渲染的标记数——按最终文本中的降级
-      标记计数（「图示无法渲染」/「反应箭头无法渲染」/渲染器错误串
-      「渲染失败：」，每个未正常渲染的标记恰好出现一次）；不用 diag 轮次
-      记录数（同一标记多轮失败/修正改写法都会虚增）
+      标记计数（「无法渲染」/「渲染失败：」）；不用 diag 轮次记录数
+      （同一标记多轮失败会虚增）
     - degraded_answers: 输出文本含"图示无法渲染"（降级）的回答数
-    - corrections_after_upgrade: 升级后修正仍失败的题数——存在 round>=1 且
-      未解决的标记（修正尝试后仍失败；仅首轮失败但修正成功的题不计入）
+    - corrections_failed_after: 修正尝试后仍失败的题数（round>=1 且未解决）
     """
-    from .config import settings
-    import app as _app
     from app import process_question
-
-    keywords = getattr(settings.llm, "upgrade_keywords", None) \
-        or _app._DEFAULT_UPGRADE_KEYWORDS
-    has_route = bool((settings.llm.upgrade_model_name or "").strip())
 
     stats = {
         "total": len(questions),
-        "main_pass": 0,
-        "upgrade_triggered": 0,
-        "keyword_direct": 0,
+        "clean_pass": 0,
+        "corrections_used": 0,
         "unresolved_tags": 0,
         "degraded_answers": 0,
-        "corrections_after_upgrade": 0,
+        "corrections_failed_after": 0,
         "responses": [],
     }
     for q in questions:
         diag = []
-        resp_out = []   # 各阶段原始 LLM 输出（标记文本，渲染前）
+        resp_out = []   # 原始 LLM 输出（标记文本，渲染前）
         text = process_question(q, max_corrections=max_corrections,
                                 diagnostics=diag, responses=resp_out)
-        keyword_hit = has_route and any(k and k in q for k in keywords)
-        # 升级判定：关键词直 pro / 有 main 失败（flash 失败必升级）/
-        # 有 upgrade 阶段失败记录
-        upgrade_triggered = (keyword_hit
-                             or any(d["stage"] == "main" for d in diag)
-                             or any(d["stage"] == "upgrade" for d in diag))
-        # 未解决标记 = 最终回答中未正常渲染的标记数（以最终文本为准，
-        # 不用 diag 轮次记录）：
-        # 「图示无法渲染」= 校验降级/部分降级（去机理箭头）；「渲染失败：」=
-        # 渲染器错误串注入——每种未正常渲染的标记恰好各出现一次
+        # 未解决标记 = 最终回答中未正常渲染的标记数（以最终文本为准）：
+        # 「无法渲染」= 校验降级/部分降级；「渲染失败：」= 渲染器错误串注入
         unresolved_count = (
             text.count("无法渲染") + text.count("渲染失败：")) if text else 0
         degraded = bool(text) and "图示无法渲染" in text
@@ -180,26 +166,22 @@ def evaluate_route(questions: list, max_corrections: int = 2) -> dict:
             d.get("round", 0) >= 1 and d.get("resolved") is False
             for d in diag)
 
-        if keyword_hit:
-            stats["keyword_direct"] += 1
-        if upgrade_triggered:
-            stats["upgrade_triggered"] += 1
-        else:
-            stats["main_pass"] += 1
         stats["unresolved_tags"] += unresolved_count
         if degraded:
             stats["degraded_answers"] += 1
         if corrections_failed_after:
-            stats["corrections_after_upgrade"] += 1
+            stats["corrections_failed_after"] += 1
+        if not diag:                    # 首轮无任何失败记录
+            stats["clean_pass"] += 1
+        else:
+            stats["corrections_used"] += 1
         stats["responses"].append({
             "question": q,
-            "keyword_hit": keyword_hit,
-            "upgrade_triggered": upgrade_triggered,
             "degraded": degraded,
             "corrections_failed_after": corrections_failed_after,
             "unresolved": unresolved_count,
             "text": text or "",          # 最终回答全文（含渲染后 TikZ/降级提示）
-            "llm_outputs": resp_out,     # 各阶段原始 LLM 输出（标记文本，渲染前）
+            "llm_outputs": resp_out,     # 原始 LLM 输出（标记文本，渲染前）
             "diag": [
                 {"round": d.get("round"), "stage": d.get("stage"),
                  "resolved": d.get("resolved"),
@@ -212,16 +194,14 @@ def evaluate_route(questions: list, max_corrections: int = 2) -> dict:
 
 def format_route_report(stats: dict) -> str:
     total = stats["total"]
-    mp = stats["main_pass"]
-    up = stats["upgrade_triggered"]
+    cp = stats["clean_pass"]
     return "\n".join([
-        "路由评估报告",
-        "============",
+        "端到端管线评估报告（单模型）",
+        "============================",
         f"问题数: {total}",
-        f"主模型（flash）一遍过: {mp}（{_pct(mp, total)}）",
-        f"升级触发: {up}（{_pct(up, total)}）"
-        f"，其中关键词直 pro: {stats['keyword_direct']}",
-        f"升级后修正仍失败: {stats['corrections_after_upgrade']}",
+        f"一遍过（首轮无失败）: {cp}（{_pct(cp, total)}）",
+        f"触发修正闭环: {stats['corrections_used']}",
+        f"修正后仍失败: {stats['corrections_failed_after']}",
         f"最终未解决标记: {stats['unresolved_tags']}",
         f"降级回答数: {stats['degraded_answers']}"
         f"（{_pct(stats['degraded_answers'], total)}）",
@@ -229,19 +209,15 @@ def format_route_report(stats: dict) -> str:
 
 
 def format_route_detail(stats: dict, output_limit: int = 300) -> str:
-    lines = ["逐问题路由详情", "=============="]
+    lines = ["逐问题管线详情", "=============="]
     for i, r in enumerate(stats["responses"], 1):
         flags = []
-        if r["keyword_hit"]:
-            flags.append("关键词直 pro")
-        elif r["upgrade_triggered"]:
-            flags.append("flash 失败升级")
         if r["corrections_failed_after"]:
-            flags.append("升级后修正仍失败")
+            flags.append("修正后仍失败")
         if r["degraded"]:
             flags.append("降级")
         lines.append(f"\n[{i}] 问题：{r['question']}")
-        lines.append(f"    状态：{'、'.join(flags) if flags else 'flash 一遍过'}"
+        lines.append(f"    状态：{'、'.join(flags) if flags else '一遍过'}"
                      f"（未解决 {r['unresolved']}）")
         for d in r["diag"]:
             lines.append(f"    ✗ round {d['round']}[{d['stage']}]"
@@ -398,8 +374,8 @@ if __name__ == "__main__":
         print("      python -m core.metrics --questions-file questions.txt")
         print("      --detail-file FILE 把每条 LLM 完整输出写入文件（终端仍打印摘要）")
         print("      --report-only 终端只打印统计报告，不打印逐问题详情")
-        print("      --route 端到端路由评估（process_question 含关键词直 pro /")
-        print("              flash 失败升级 / 部分修正；默认模式为单模型首次输出基线）")
+        print("      --route 端到端管线评估（process_question，含修正闭环）；")
+        print("              默认模式为单模型首次输出基线）")
         sys.exit(1)
     if route_mode:
         stats = evaluate_route(questions)

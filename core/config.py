@@ -15,7 +15,6 @@
     print(settings.llm.api_key)
     print(settings.vision.model_name)
 """
-
 from __future__ import annotations
 
 import os
@@ -68,58 +67,114 @@ def _get_str_fallback(*names: str, default: str = "") -> str:
     return default
 
 
+# ---------------------------------------------------------------------------
+# 思考参数的取值与归一（模型与思考参数重构 §4.4 / §4.5.3）
+# ---------------------------------------------------------------------------
+
+# 思考开关
+THINKING_ON = "on"
+THINKING_OFF = "off"
+THINKING_CHOICES = (THINKING_ON, THINKING_OFF)
+
+# 思考强度（低 → 高）；别名按官方归一化映射（F5）：
+#   minimal→low / medium→high / xhigh→high / ultra→max
+EFFORT_LOW, EFFORT_MEDIUM, EFFORT_HIGH, EFFORT_MAX = "low", "medium", "high", "max"
+EFFORT_CHOICES = (EFFORT_LOW, EFFORT_MEDIUM, EFFORT_HIGH, EFFORT_MAX)
+_EFFORT_ALIASES = {
+    "minimal": EFFORT_LOW, "low": EFFORT_LOW,
+    "medium": EFFORT_MEDIUM, "high": EFFORT_HIGH,
+    "xhigh": EFFORT_HIGH, "max": EFFORT_MAX, "ultra": EFFORT_MAX,
+}
+# 强度由低到高（降级链与"就近换档"都依赖这个顺序）
+EFFORT_ORDER = (EFFORT_LOW, EFFORT_MEDIUM, EFFORT_HIGH, EFFORT_MAX)
+
+# 面向用户的档位标签（前端与提示文案共用，避免各处自己写映射）
+EFFORT_LABELS = {EFFORT_LOW: "低", EFFORT_MEDIUM: "中",
+                 EFFORT_HIGH: "高", EFFORT_MAX: "最大"}
+THINKING_LABELS = {THINKING_ON: "开", THINKING_OFF: "关"}
+
+_DEPRECATION_WARNED: set = set()
+
+
+def _warn_deprecated(old: str, new: str) -> None:
+    """废弃变量提示（每项进程内只提示一次，避免刷屏）。"""
+    if old in _DEPRECATION_WARNED:
+        return
+    _DEPRECATION_WARNED.add(old)
+    print(f"[config] {old} 已废弃，请改用 {new}（本次仍按旧值生效）")
+
+
+def normalize_thinking(value: str, default: str = THINKING_ON) -> str:
+    """思考开关归一：on/off（大小写、true/false、enabled/disabled 均接受）。"""
+    v = (value or "").strip().lower()
+    if v in ("on", "true", "1", "yes", "enabled", "enable"):
+        return THINKING_ON
+    if v in ("off", "false", "0", "no", "disabled", "disable"):
+        return THINKING_OFF
+    return default
+
+
+def normalize_effort(value: str, default: str = EFFORT_LOW) -> str:
+    """思考强度归一（含官方别名 minimal/medium/xhigh/ultra）；无法识别用 default。"""
+    v = (value or "").strip().lower()
+    return _EFFORT_ALIASES.get(v, default)
+
+
+def _thinking_default_env() -> str:
+    """`THINKING_DEFAULT`，带**过渡期兼容**读取旧 `THINKING_MODE`。
+
+    理由（重构方案 §4.1）：`THINKING_MODE=disabled` 的用户若被静默改成"开思考"，
+    会变慢变贵且没有任何提示——直接影响成本，因此给一条迁移桥 + 废弃告警。
+    """
+    new = _get_str("THINKING_DEFAULT")
+    if new:
+        return normalize_thinking(new)
+    old = _get_str("THINKING_MODE")
+    if old:
+        _warn_deprecated("THINKING_MODE", "THINKING_DEFAULT")
+        return normalize_thinking(old)
+    return THINKING_ON
+
+
+def _effort_default_env() -> str:
+    """`EFFORT_DEFAULT`，带过渡期兼容读取旧 `REASONING_EFFORT`。"""
+    new = _get_str("EFFORT_DEFAULT")
+    if new:
+        return normalize_effort(new)
+    old = _get_str("REASONING_EFFORT")
+    if old:
+        _warn_deprecated("REASONING_EFFORT", "EFFORT_DEFAULT")
+        return normalize_effort(old)
+    return EFFORT_LOW
+
+
 @dataclass(frozen=True)
 class LLMConfig:
-    """主 LLM 配置（OpenAI 兼容接口）。"""
+    """主 LLM 配置（OpenAI 兼容接口）。
+
+    「模型与思考参数重构」后的形态：**只有一个模型**，思考由"开关 + 强度"两个
+    正交参数表达；不再有 fallback / upgrade / 关键词路由（见
+    instructions/Model-Config-Refactor.md）。
+    """
 
     api_key: str = field(default_factory=lambda: _get_str("API_KEY"))
     base_url: str = field(default_factory=lambda: _get_str("BASE_URL").rstrip("/"))
     model_name: str = field(default_factory=lambda: _get_str_fallback("MODEL_NAME", "MODEL"))
-    # 回退模型（FALLBACK_MODEL_NAME）：主模型（常为带思考的推理模型）思考过长
-    # 只输出 reasoning_content 而无正式回答时，先在同模型上渐进降级思考强度，
-    # 仍失败再切换到此模型重试（回退调用强制 thinking=disabled）。
-    # 建议填轻量模型（如 deepseek-v4-flash）。留空则不回退。
-    fallback_model_name: str = field(
-        default_factory=lambda: _get_str("FALLBACK_MODEL_NAME")
-    )
-    # 升级模型（UPGRADE_MODEL_NAME，可选）：flash 首跑 + 失败升级 pro 路由用。
-    # 主模型（MODEL_NAME，通常 flash）首次输出校验失败时**不做主模型修正**，
-    # 直接用此模型重新生成完整回答（升级后可带修正闭环）——简单题 flash 便宜、
-    # 难题（SMILES 化学构造错误等）flash 修正救不回时直接交 pro。留空则关闭
-    # 路由（保持"主模型 + 修正闭环"原行为）。
-    upgrade_model_name: str = field(
-        default_factory=lambda: _get_str("UPGRADE_MODEL_NAME")
-    )
-    # 难题预判关键词（UPGRADE_KEYWORDS，逗号分隔，可选）：用户问题命中任一
-    # 关键词时跳过主模型首跑、**直接走升级模型**——适用于机理类难题占比高的
-    # 场景，省一次主模型（flash）调用与串行延迟。留空用 app.py 内置默认
-    # （机理/箭头/SN/自由基/共振/势能面等词汇）。
-    upgrade_keywords: tuple = field(
-        default_factory=lambda: tuple(
-            k.strip() for k in _get_str("UPGRADE_KEYWORDS").split(",") if k.strip())
-    )
-    # 思考模式（THINKING_MODE）：enabled / disabled / 空（不传，用 API 默认）。
-    # DeepSeek 官方：请求体加 {"thinking": {"type": "enabled/disabled"}} 开关；
-    # 思考模式下 temperature/top_p 等参数不生效（设置了也被忽略）。
-    thinking_mode: str = field(
-        default_factory=lambda: _get_str("THINKING_MODE").strip().lower()
-    )
-    # 思考强度（REASONING_EFFORT）：low / high / max，仅思考模式开启时生效
-    # （THINKING_MODE=disabled 时不发送）；留空则不传，用 API 默认（high）。
-    # 映射：deepseek-v4-flash → low/high/max；deepseek-v4-pro → high/xhigh/max。
-    reasoning_effort: str = field(
-        default_factory=lambda: _get_str("REASONING_EFFORT").strip().lower()
-    )
-    # 并发 LLM 调用上限（MAX_CONCURRENT_LLM，默认 4）：信号量限制同时进行的调用数，
-    # 超出的请求排队等待——避免多用户并发打爆 LLM API 限流与本地资源。
+    # 思考开关（THINKING_DEFAULT）：on / off。仅当调用方（网页请求头）未指定时生效。
+    thinking_default: str = field(default_factory=_thinking_default_env)
+    # 思考强度（EFFORT_DEFAULT）：low / medium / high / max。
+    effort_default: str = field(default_factory=_effort_default_env)
+    # 最大输出上限（MAX_TOKENS）：**上限不是预留**，按实际用量计费。
+    # 思考与正式回答共享该额度，设小会导致截断（§4.2.1）。
+    max_tokens: int = field(default_factory=lambda: int(_get_str("MAX_TOKENS") or 32768))
+    # 并发 LLM 调用上限（MAX_CONCURRENT_LLM，默认 4）：按**凭证指纹**分桶，
+    # 同一把 Key 最多同时进行这么多调用，避免打爆上游限流。
     max_concurrent: int = field(
         default_factory=lambda: int(_get_str("MAX_CONCURRENT_LLM") or 4)
     )
     temperature: float = 0.2
-    # 思考模式下 reasoning_content + content 共享 max_tokens 预算；
-    # 2048 会被长思考链吃光导致 content 为空/截断，提到 8192。
-    max_tokens: int = 8192
-    # 生成 8192 tokens 需要 1~3 分钟，60s 会误杀正常生成（实测 Read timed out）。
+    # 生成 32768 tokens 需要数分钟；SSE 下 timeout 只作用于"两块数据间隔"，
+    # 因此 180s 是"多久没吐字算超时"，而非总时长限制。
     timeout: int = 180
     retries: int = 3
 
@@ -127,22 +182,29 @@ class LLMConfig:
     def is_configured(self) -> bool:
         return bool(self.api_key and self.base_url and self.model_name)
 
+    @property
+    def thinking_on(self) -> bool:
+        return normalize_thinking(self.thinking_default) == THINKING_ON
+
 
 @dataclass(frozen=True)
 class VisionConfig:
-    """视觉模型配置（图片识别结构式）。未独立配置时回退到主 LLM。"""
+    """视觉模型配置（图片识别）。
 
-    api_key: str = field(
-        default_factory=lambda: _get_str_fallback("VISION_API_KEY", "API_KEY")
-    )
+    定位（重构 §4.9）：视觉是**可能完全独立**的一个模型（另一厂商、另一把 Key、
+    另一套思考参数）。三项都留空 = 用主模型识图；只填模型名 = 该模型 + 主模型端点/Key。
+    原生多模态模型（deepseek-flash / Gemini / GLM 视觉版）自带视觉，通常整组留空即可。
+    """
+
+    api_key: str = field(default_factory=lambda: _get_str("VISION_API_KEY"))
     base_url: str = field(
-        default_factory=lambda: _get_str_fallback("VISION_BASE_URL", "BASE_URL").rstrip("/")
-    )
-    model_name: str = field(
-        default_factory=lambda: _get_str_fallback(
-            "VISION_MODEL", "MODEL_NAME", "MODEL"
-        )
-    )
+        default_factory=lambda: _get_str("VISION_BASE_URL").rstrip("/"))
+    model_name: str = field(default_factory=lambda: _get_str("VISION_MODEL"))
+    # 视觉的思考参数（VISION_THINKING / VISION_EFFORT）：
+    # **留空 = 自动** —— 视觉与主模型是同一个（host+model+key 全同）时复用主模型设置，
+    # 否则用 off（识图要快、要省，不需要长思考）。
+    thinking: str = field(default_factory=lambda: _get_str("VISION_THINKING"))
+    effort: str = field(default_factory=lambda: _get_str("VISION_EFFORT"))
 
     @property
     def is_configured(self) -> bool:
@@ -222,7 +284,9 @@ if __name__ == "__main__":
     print(f"project_root: {settings.project_root}")
     print(f"llm configured: {settings.llm.is_configured}")
     print(f"model_name: {settings.llm.model_name}")
-    print(f"vision configured: {settings.vision.is_configured}")
-    print(f"vision model_name: {settings.vision.model_name}")
+    print(f"thinking: {settings.llm.thinking_default} / effort: {settings.llm.effort_default}")
+    print(f"max_tokens: {settings.llm.max_tokens}")
+    print(f"vision configured: {settings.vision.is_configured} "
+          f"(model={settings.vision.model_name or '（空=用主模型）'})")
     print(f"prompt path: {settings.prompt.system_prompt_path}")
     print(f"comptox configured: {settings.comptox.is_configured}")

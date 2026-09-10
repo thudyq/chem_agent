@@ -1,0 +1,34 @@
+# systemd 单元参考：Chem_Agent（清小搭接入 + 公开网页，同一进程）
+#
+# 与仓库内既有的 chem_agent 单元等价，作为新机器/重建时的模板。
+# 安装：
+#   sudo cp deploy/chem-agent.service /etc/systemd/system/chem_agent.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now chem_agent
+#
+# 注意：
+# - WorkingDirectory 必须是项目根目录（core.config 以 __file__ 推导根目录，
+#   附件与会话目录都落在 <root>/data 下）。
+# - .env 由应用自己从项目根目录读取（core/config.py），无需 EnvironmentFile。
+# - 只监听 127.0.0.1，公网入口交给 Nginx（见 deploy/nginx-chem-agent.conf）。
+
+[Unit]
+Description=Chem_Agent — chemistry visualization agent (OpenAI-compatible API + BYOK web page)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/var/www/chem_agent
+Environment=PYTHONUNBUFFERED=1
+# 依实际虚拟环境调整（示例为项目内 venv）
+ExecStart=/var/www/chem_agent/venv/bin/python -m uvicorn api:app \
+    --host 127.0.0.1 --port 8000 --workers 1 --timeout-keep-alive 75
+Restart=always
+RestartSec=5
+# 机理题生成 + LaTeX 编译较吃内存，可按机器配置调整
+MemoryMax=3G
+
+[Install]
+WantedBy=multi-user.target

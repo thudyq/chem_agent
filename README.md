@@ -72,7 +72,9 @@ graph LR
 
 - **契约校验层**：渲染前拦截非法 SMILES、原子/电荷不守恒、越界引用、格式错误；
 - **失败回传修正**：失败标记连同原因回传 LLM 部分修正（不重写全文），修正耗尽则友好降级（宁可不画，不画错）；
-- **模型路由**：简单题走 flash、难题关键词直 pro、flash 失败自动升级 pro 修正，控制成本。
+- **单模型 + 思考档位**：整个服务只用一个模型（DeepSeek V4.1 Flash 已在性能/成本上全面超越 V4 Pro）；
+  成本与延迟由用户可见的两个正交开关控制——**思考开关**（开/关）与**思考强度**（低/中/高/最大）；
+  端点不配合（强制思考、不认某档位）时自动摘字段适配并如实告知，不静默照做。
 
 ---
 
@@ -84,14 +86,17 @@ graph LR
 ├── app.py                     # 端到端管线：LLM → 解析 → 校验 → 修正 → 渲染 → 注入
 ├── streamlit_app.py           # Streamlit 网页入口
 ├── core/
-│   ├── config.py              # 统一配置入口
-│   ├── llm_client.py          # LLM API 调用封装（流式、思考参数降级、回退链）
+│   ├── config.py              # 统一配置入口（模型 + 思考开关/强度/最大输出 + 视觉组）
+│   ├── credentials.py         # 每请求凭证与参数（BYOK）：请求头 → contextvar
+│   ├── capabilities.py        # 端点能力表（思考参数的学习与记忆，按 端点+模型 分键）
+│   ├── llm_client.py          # LLM API 调用封装（流式、思考档位映射与降级、字段自适应）
 │   ├── tag_parser.py          # 标记解析器
 │   ├── tag_validator.py       # 标记契约校验层
 │   ├── tag_injector.py        # 标记→TikZ 注入替换
 │   ├── prompt_manager.py      # System Prompt 管理
 │   ├── attachments.py         # TikZ→PNG 附件构建（编译、托管、TTL 清理）
-│   └── metrics.py             # 基线评测（标记遵循率 / 路由评估）
+│   ├── web_api.py             # 公开网页后端（/api/chat、BYOK 凭证、限流、会话附件）
+│   └── metrics.py             # 基线评测（标记遵循率 / 端到端管线）
 ├── renderers/
 │   ├── registry.py            # 标记调度表
 │   ├── layout.py              # 统一坐标布局引擎
@@ -110,7 +115,10 @@ graph LR
 ├── prompts/
 │   ├── system_prompt.txt      # 核心 System Prompt
 │   └── Instruction-for-SMILES.md   # SMILES 书写规范
-├── tests/                     # 单元测试（500+ 项，含示例一致性审计）
+├── web/
+│   └── index.html             # 公开网页（BYOK，自包含单文件，无需构建）
+├── deploy/                    # 部署模板（systemd 单元 + Nginx 反代）
+├── tests/                     # 单元测试（700+ 项，含示例一致性审计）
 ├── legacy/                    # MVP 旧代码（存档保留）
 └── requirements.txt
 ```
@@ -142,9 +150,16 @@ pip install -r requirements.txt
 
 # 4. 配置环境变量
 cp .env.example .env
-# 编辑 .env，填入你的 API_KEY / BASE_URL / MODEL_NAME
-# 可选：FALLBACK_MODEL_NAME（回退模型）、UPGRADE_MODEL_NAME（升级模型，路由用）
+# 编辑 .env，填入 API_KEY / BASE_URL / MODEL_NAME
+#   MODEL_NAME=deepseek-flash      ← 整个服务只用一个模型（旧名 v4-flash/v4-pro 已退役）
+#   THINKING_DEFAULT=on            ← 思考开关 on/off（网页用户可各自覆盖）
+#   EFFORT_DEFAULT=low             ← 思考强度 low/medium/high/max
+#   MAX_TOKENS=32768               ← 上限而非预留，按实际用量计费
+# 可选：VISION_*（仅当主模型不支持图片识别时才需要；原生多模态模型留空即可）
+# 可选：CHEM_AGENT_TMPDIR（只读 /tmp 的容器里指定可写临时目录；见 DEPLOY.md §2.2）
 # 接入清小搭时还需设置 SERVICE_API_KEY（服务端密钥）
+# 已废弃：FALLBACK_MODEL_NAME / UPGRADE_MODEL_NAME / UPGRADE_KEYWORDS /
+#         THINKING_MODE / REASONING_EFFORT（旧 .env 仍可保留，代码不再读取）
 
 # 5. 验证安装
 python -c "from utils.rdkit_utils import validate_smiles; print(validate_smiles('C'))"
@@ -175,6 +190,35 @@ curl -X POST http://localhost:8000/v1/chat/completions \
 
 服务特性：Bearer 鉴权、SSE 流式、多模态图片/音频/文件输入（OCR 理解结构式图片）、`x_soda.attachments` 图片附件输出（TikZ→PNG 编译 + 托管下载）。
 
+### 公开网页（BYOK：用户填自己的 API Key）
+
+除清小搭接入外，服务同时提供**面向任意用户的公开网页**——不需要服务器提供任何
+密钥，访问者填自己的 OpenAI 兼容凭证即可使用，由他自己的账号计费：
+
+```bash
+uvicorn api:app --host 0.0.0.0 --port 8000
+# 浏览器打开：http://localhost:8000/chat
+```
+
+- **界面**：自包含单页（`web/index.html`，零构建、零 CDN 依赖）——设置面板填
+  `API Key / 接口地址 / 模型` 与两个思考控件 `思考（开/关）`、`思考强度（低/中/高/最大）`，
+  可选 `最大输出`、`视觉模型`（**留空即用主模型识图**）、`视觉端点/Key/思考参数`；
+  「测试连接」会顺带**探测该端点的思考能力**（能否关闭、是否接受档位）并显示结论。
+  对话流式输出，图示以 PNG 内联显示，支持上传结构式图片、多轮追问、会话本地保留。
+- **密钥处理**：只存在浏览器 `sessionStorage`（关标签页即失效），随请求头
+  `X-Chem-*` 一次性发给服务端，**服务端不写日志、不落盘、不回显**（日志只打
+  `sk-abc…f3d2` 形式的指纹）。凭证经 `core/credentials.py` 放进请求作用域的
+  contextvar，整条管线（生成 → 校验 → 修正 → 渲染）全程只用该用户的凭证。
+- **安全**：用户自定义的接口地址做 SSRF 校验（拒绝内网/回环/云元数据地址）、
+  每 IP 限流（默认 20 次/分钟）、问题长度与图片数上限；BYOK 路径**绝不继承**
+  服务器 `.env` 的模型/端点/视觉配置（不会把服务器配置静默施加到用户自己的 key）。
+- **与清小搭互不影响**：`/v1/*` 契约与鉴权一字未改，两类调用方共用同一条
+  化学渲染与契约校验管线。
+- 端点：`GET /chat`（或 `/web`）页面、`POST /api/chat`（`stream=true` 走 SSE）、
+  `GET /api/web-config`、`GET /api/session/{会话}/{uuid}.png`。
+
+部署（Nginx/HTTPS/systemd 与验收清单）见 `DEPLOY.md`。
+
 ---
 
 ## 📦 核心依赖
@@ -200,6 +244,8 @@ curl -X POST http://localhost:8000/v1/chat/completions \
 | **Phase 2** | FastAPI 适配 + 清小搭接入 | ✅ 已完成 |
 | **Phase 3** | 标记面收敛（STRUCT 家族 + COMPOSITE）+ 可靠性工程（契约校验 / 修正闭环 / 模型路由） | ✅ 已完成 |
 | **Phase 4** | 化学正确性增强（确定性化学规则校验、LLM 复审、机理箭头样式优化） | 🚧 进行中 |
+| **Phase 5** | 开放使用形态：公开网页 BYOK（用户自带 API Key）+ 每请求凭证隔离 + 部署模板 | ✅ 已完成 |
+| **Phase 6** | 模型与思考参数重构：单模型（删 fallback/upgrade/关键词路由）+ 思考开关×强度暴露给用户 + 端点能力表与参数自适应 + 视觉组独立配置 | ✅ 已完成 |
 
 ---
 

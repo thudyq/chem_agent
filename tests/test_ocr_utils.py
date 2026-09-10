@@ -157,7 +157,12 @@ def test_describe_5xx_retried(fake_vision, monkeypatch):
 
 
 def test_describe_400_not_retried(fake_vision, monkeypatch):
-    """400（模型不支持视觉，配置性错误）不重试，1 次即返回。"""
+    """400（模型不支持视觉，配置性错误）不**整轮重试**。
+
+    注意（20260830 重构）：第一次 400 会先做一次"摘字段重试"（行为判定，
+    见 ocr._describe_once），因此 post 被调用 2 次；但**不会**进入
+    `max_attempts` 的整轮重试（否则会是 3 次）。
+    """
     _, img = fake_vision
     calls = {"n": 0}
 
@@ -167,7 +172,7 @@ def test_describe_400_not_retried(fake_vision, monkeypatch):
 
     monkeypatch.setattr(ocr.requests, "post", bad_post)
     assert ocr.describe_image(img) is None
-    assert calls["n"] == 1
+    assert calls["n"] == 2, "首次 400 + 一次摘字段重试；不做整轮重试"
 
 
 def test_describe_empty_content_retried(fake_vision, monkeypatch):
