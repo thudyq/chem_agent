@@ -20,7 +20,8 @@
   }
   a{color:var(--accent)}
   /* ---------- 布局 ---------- */
-  .app{display:flex;flex-direction:column;height:100vh;max-width:980px;margin:0 auto}
+  .app{display:flex;flex-direction:column;height:100vh;flex:1 1 auto;min-width:0;
+       max-width:980px;margin:0 auto;position:relative}
   header{
     display:flex;align-items:center;gap:12px;padding:12px 18px;
     background:var(--panel);border-bottom:1px solid var(--line);flex:0 0 auto;
@@ -122,22 +123,117 @@
   details.adv summary{cursor:pointer;font-size:13px;font-weight:600;color:var(--accent)}
   .kbd{font-family:ui-monospace,Consolas,monospace;font-size:11.5px;background:#f1f5f9;
        padding:1px 5px;border-radius:5px}
+  /* ---------- 布局：会话侧栏 + 主列 ---------- */
+  .layout{display:flex;height:100vh;overflow:hidden}
+  .sidebar{
+    flex:0 0 258px;display:flex;flex-direction:column;min-width:0;
+    background:#fbfcfe;border-right:1px solid var(--line);
+  }
+  .sidebar.hide{display:none}
+  .side-head{display:flex;align-items:center;gap:8px;padding:13px 12px 10px}
+  .side-head .brand{font-size:14px;font-weight:650;letter-spacing:.2px}
+  .side-head .spacer{flex:1}
+  .side-new{
+    margin:0 12px 10px;padding:9px 12px;border-radius:10px;text-align:center;
+    border:1px dashed #d7dde5;background:#fff;cursor:pointer;font-size:13.5px;
+    color:var(--ink);transition:.15s;
+  }
+  .side-new:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+  .side-list{flex:1;overflow-y:auto;padding:2px 8px 12px}
+  .side-group{font-size:11.5px;color:var(--muted);padding:10px 8px 5px;font-weight:600}
+  .sideitem{
+    display:flex;align-items:center;gap:6px;padding:8px 6px 8px 10px;
+    border-radius:9px;cursor:pointer;font-size:13.5px;
+  }
+  .sideitem:hover{background:#eef2f7}
+  .sideitem.cur{background:var(--accent-soft);color:var(--accent);font-weight:600}
+  .sideitem .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sideitem .m{display:none;gap:1px}
+  .sideitem:hover .m,.sideitem.cur .m{display:flex}
+  .sideitem .m button{
+    border:none;background:transparent;padding:3px 5px;border-radius:6px;
+    font-size:12px;color:var(--muted);line-height:1;
+  }
+  .sideitem .m button:hover{background:#dde3ec;color:var(--ink)}
+  .sideitem input{
+    flex:1;min-width:0;font:inherit;font-size:13.5px;padding:3px 6px;
+    border:1px solid var(--accent);border-radius:6px;outline:none;
+  }
+  .side-foot{border-top:1px solid var(--line);padding:9px 13px;font-size:11.5px;
+             color:var(--muted);line-height:1.7}
+  .scrim{position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:60;display:none}
+  .scrim.show{display:block}
+  @media (min-width:861px){ .scrim{display:none !important} }
+
+  /* ---------- 消息操作条 ---------- */
+  .acts{display:flex;gap:2px;flex-wrap:wrap;margin-top:6px;opacity:0;transition:.15s}
+  .msg:hover .acts,.acts:focus-within{opacity:1}
+  .acts button{
+    border:1px solid transparent;background:transparent;color:var(--muted);
+    padding:3px 8px;border-radius:8px;font-size:12px;
+  }
+  .acts button:hover{background:#f1f3f6;color:var(--ink);border-color:var(--line)}
+  .acts button.done{color:var(--ok);border-color:#c7e7cf;background:#f2fbf4}
+  @media (hover:none){ .acts{opacity:1} }
+
+  /* ---------- 灯箱 / 回到底部 ---------- */
+  .lightbox{
+    position:fixed;inset:0;background:rgba(8,12,20,.86);z-index:80;display:none;
+    flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:24px;
+  }
+  .lightbox.show{display:flex}
+  .lightbox img{max-width:min(96vw,1200px);max-height:80vh;background:#fff;
+                border-radius:10px;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+  .lightbox .bar{display:flex;gap:10px}
+  .lightbox .bar button{background:#fff}
+  .jump{
+    position:absolute;left:50%;transform:translateX(-50%);bottom:118px;z-index:20;
+    display:none;box-shadow:0 6px 18px rgba(2,6,23,.16);background:#fff;
+  }
+  .jump.show{display:block}
+
   @media (max-width:640px){
     header{padding:10px 12px}
     main{padding:12px 12px 4px}
     footer{padding:8px 12px 12px}
     .msg .who{display:none}
+    header .sub{display:none}
+  }
+  @media (max-width:860px){
+    .sidebar{
+      position:fixed;top:0;bottom:0;left:0;width:min(280px,84vw);z-index:70;
+      transform:translateX(-100%);transition:transform .2s;
+      box-shadow:0 0 40px rgba(2,6,23,.25);
+    }
+    .sidebar.open{transform:none}
+    .sidebar.hide{display:flex}     /* 窄屏用 open 控制，不用 hide */
   }
 </style>
 </head>
 <body>
-<div class="app">
+<div class="layout">
+
+  <!-- ================= 会话侧栏 ================= -->
+  <aside class="sidebar" id="sidebar">
+    <div class="side-head">
+      <span class="brand">会话</span>
+      <span class="spacer"></span>
+      <button class="ghost" id="btnCloseSide" title="收起侧栏">«</button>
+    </div>
+    <div class="side-new" id="btnNewSide" title="新建对话（Ctrl+K）">＋ 新对话</div>
+    <div class="side-list" id="sideList"></div>
+    <div class="side-foot" id="sideFoot"></div>
+  </aside>
+  <div class="scrim" id="scrim"></div>
+
+  <div class="app">
   <header>
+    <button class="ghost" id="btnSide" title="会话列表">☰</button>
     <h1>Chem_Agent</h1>
     <span class="sub">化学可视化问答 · 自带 API Key</span>
     <span class="spacer"></span>
     <span class="chip" id="keyChip" title="点击配置">未配置密钥</span>
-    <button class="ghost" id="btnNew" title="清空当前对话">新对话</button>
+    <button class="ghost" id="btnNew" title="新建对话">新对话</button>
   </header>
 
   <main id="stream">
@@ -155,6 +251,8 @@
     </div>
   </main>
 
+  <button class="jump" id="btnJump" title="回到底部">↓ 回到底部</button>
+
   <footer>
     <div class="thumbs" id="thumbs"></div>
     <div class="composer">
@@ -171,6 +269,16 @@
       <span id="hintEndpoint"></span>
     </div>
   </footer>
+  </div><!-- /.app -->
+</div><!-- /.layout -->
+
+<!-- ================= 图示灯箱 ================= -->
+<div class="lightbox" id="lightbox">
+  <img id="lightboxImg" alt="化学图示">
+  <div class="bar">
+    <button id="lbDownload">下载图片</button>
+    <button id="lbClose">关闭（Esc）</button>
+  </div>
 </div>
 
 <!-- ================= 设置面板 ================= -->
@@ -296,16 +404,21 @@
 /* ============================================================
    Chem_Agent 公开网页 · 单文件前端（零依赖、零构建）
    - 密钥：sessionStorage（关标签页即失效）
-   - 其他设置：localStorage（方便下次复用，不含密钥）
-   - 会话：localStorage 保留最近消息，刷新不丢
+   - 设置：localStorage（不含密钥）
+   - 会话：索引在 localStorage，**消息在 IndexedDB**
+     （图片是 base64 dataURL，localStorage 约 5MB 一存就爆且会静默失败）
    ============================================================ */
 
 const LS_SETTINGS = "chem_agent_settings_v1";
 const SS_KEY      = "chem_agent_api_key";
-const LS_SESSION  = "chem_agent_session_v1";
-const LS_CHAT     = "chem_agent_chat_v1";
-const MAX_KEEP    = 60;      // 最多保留的消息条数
+const LS_SESSIONS = "chem_agent_sessions_v2";   // [{id,title,updatedAt}]
+const LS_CURRENT  = "chem_agent_current_v2";
+const LS_SESSION_OLD = "chem_agent_session_v1"; // 旧：单个服务端会话 id
+const LS_CHAT_OLD    = "chem_agent_chat_v1";    // 旧：单会话消息
+const LS_SIDE     = "chem_agent_sidebar";
+const MAX_SESSIONS = 200;    // 会话数上限（超出删最旧的）
 const MAX_IMG     = 4;
+const DB_NAME = "chem_agent_ui", DB_STORE = "chats", DB_VER = 1;
 
 const $ = (id) => document.getElementById(id);
 const elStream = $("stream"), elInput = $("input"), elEmpty = $("empty");
@@ -316,10 +429,368 @@ let serverCfg = {default_base_url:"https://api.deepseek.com/v1",
                  default_max_tokens:32768,
                  allow_private_base_url:false,
                  max_images:MAX_IMG, max_question_chars:8000,
-                 session_ttl_hours:24, rate_limit_per_minute:20};
+                 attachment_max_bytes:0, attachment_max_files:0,
+                 rate_limit_per_minute:20};
 let sending = false;
 let pendingImages = [];      // [{name, dataUrl}]
-let chat = [];               // [{role, content, images?}]  content 为原始 markdown
+
+/* ---------------- 会话模型 ----------------
+   session = {id, serverId, title, updatedAt, messages}
+   id       : 前端会话 id（侧栏 / IndexedDB 主键）
+   serverId : 该会话专属的**服务端**会话 id，用于 /api/session/<serverId>/<图>
+              —— 必须每会话独立，否则附件目录与 TTL 清理会互相影响
+*/
+let sessions = [];           // 索引（不含 messages），同步可用，供侧栏渲染
+let currentId = "";
+let chat = [];               // 当前会话的消息（内存中的副本）
+
+function newId(){
+  const a = new Uint8Array(16);
+  if (crypto.getRandomValues) crypto.getRandomValues(a);
+  else for (let i = 0; i < a.length; i++) a[i] = Math.floor(Math.random()*256);
+  return Array.from(a).map(b => b.toString(16).padStart(2,"0")).join("");
+}
+
+/* ---------------- IndexedDB（消息） ----------------
+   拿不到 IndexedDB（无痕模式 / 被策略禁用）时降级为内存存储，并**明确告知**
+   用户"本次对话不会被保存"——不再像旧实现那样静默失败。 */
+let dbPromise = null, memoryStore = null, storageWarned = false;
+
+function openDB(){
+  if (dbPromise) return dbPromise;
+  dbPromise = new Promise((resolve) => {
+    let req;
+    try { req = indexedDB.open(DB_NAME, DB_VER); }
+    catch(e) { resolve(null); return; }
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(DB_STORE)) db.createObjectStore(DB_STORE);
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => resolve(null);
+    req.onblocked = () => resolve(null);
+  });
+  return dbPromise;
+}
+
+function noteNoStorage(){
+  if (storageWarned) return;
+  storageWarned = true;
+  const f = $("sideFoot");
+  if (f) f.innerHTML = "⚠ 浏览器不允许本地存储，<b>本次对话不会被保存</b>";
+}
+
+async function idbPut(id, value){
+  const db = await openDB();
+  if (!db){ memoryStore.set(id, value); noteNoStorage(); return false; }
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(DB_STORE, "readwrite");
+      tx.objectStore(DB_STORE).put(value, id);
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => { memoryStore.set(id, value); noteNoStorage(); resolve(false); };
+      tx.onabort = () => { memoryStore.set(id, value); noteNoStorage(); resolve(false); };
+    } catch(e){ memoryStore.set(id, value); noteNoStorage(); resolve(false); }
+  });
+}
+
+async function idbGet(id){
+  const db = await openDB();
+  if (!db) return memoryStore.get(id) || null;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(DB_STORE, "readonly");
+      const rq = tx.objectStore(DB_STORE).get(id);
+      rq.onsuccess = () => resolve(rq.result || null);
+      rq.onerror = () => resolve(memoryStore.get(id) || null);
+    } catch(e){ resolve(memoryStore.get(id) || null); }
+  });
+}
+
+async function idbDel(id){
+  const db = await openDB();
+  memoryStore.delete(id);
+  if (!db) return;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(DB_STORE, "readwrite");
+      tx.objectStore(DB_STORE).delete(id);
+      tx.oncomplete = resolve;
+      tx.onerror = resolve;
+    } catch(e){ resolve(); }
+  });
+}
+
+/* ---------------- 会话索引读写 ----------------
+   ★ `sessions` 是**纯索引**：只放 id/serverId/title/updatedAt，**绝不放
+   messages**。消息只在 `chat`（当前会话）与 IndexedDB 里。saveIndex() 也
+   显式投影一份白名单字段 —— 双保险，因为一旦 messages 混进索引对象，
+   localStorage 立刻被 base64 图片撑爆（5MB 配额），而 `setItem` 抛异常
+   很容易被 catch 吞掉，表现为"历史莫名其妙不保存"。
+*/
+const INDEX_FIELDS = ["id", "serverId", "title", "updatedAt"];
+
+function loadIndex(){
+  try {
+    const a = JSON.parse(localStorage.getItem(LS_SESSIONS) || "[]");
+    sessions = Array.isArray(a)
+      ? a.filter(s => s && s.id).map(s => {
+          const o = {};
+          INDEX_FIELDS.forEach(k => { o[k] = s[k]; });
+          return o;
+        })
+      : [];
+  } catch(e){ sessions = []; }
+  try { currentId = localStorage.getItem(LS_CURRENT) || ""; } catch(e){ currentId = ""; }
+}
+function saveIndex(){
+  try {
+    const idx = sessions.map(s => {
+      const o = {};
+      INDEX_FIELDS.forEach(k => { o[k] = s[k]; });
+      return o;
+    });
+    localStorage.setItem(LS_SESSIONS, JSON.stringify(idx));
+    localStorage.setItem(LS_CURRENT, currentId);
+  } catch(e){
+    // 索引很小，走到这里基本只剩"禁用存储"一种可能 —— 说出来，不静默吞
+    noteNoStorage();
+  }
+}
+function findSession(id){ return sessions.find(s => s.id === id) || null; }
+
+/** 当前会话的服务端会话 id（取图与附件目录都靠它）。 */
+function currentServerId(){
+  const s = findSession(currentId);
+  return s && s.serverId ? s.serverId : newId();
+}
+
+/** 用首条用户提问生成标题（**不额外调 LLM**，省 token 与延迟）。 */
+function titleFrom(messages){
+  const u = (messages || []).find(m => m.role === "user" && (m.content || "").trim());
+  if (!u) return "新对话";
+  const t = u.content.replace(/\s+/g, " ").trim();
+  return t.length > 20 ? t.slice(0, 20) + "…" : t;
+}
+
+function newSession(){
+  return {id: newId(), serverId: newId(), title: "新对话",
+          updatedAt: Date.now()};
+}
+
+/** 首条用户提问到了就把"新对话"改成真实标题（只在还没改过时）。 */
+function autoTitle(title, messages){
+  return (title === "新对话" && (messages || []).length)
+    ? titleFrom(messages) : title;
+}
+
+/** 落盘某会话的消息到 IndexedDB（**不阻塞 UI**，调用方不必 await）。
+    messages 由调用方显式传入：索引对象上没有 messages。 */
+async function saveSession(id, messages, title){
+  const s = findSession(id);
+  if (!s) return;
+  if (title) s.title = title;
+  s.updatedAt = Date.now();
+  saveIndex();
+  await idbPut(id, {id: s.id, serverId: s.serverId, title: s.title,
+                    updatedAt: s.updatedAt, messages: messages || []});
+}
+
+/** 保存当前会话（`chat` 就是它的 messages）。 */
+async function saveCurrent(){
+  const s = findSession(currentId);
+  if (!s) return;
+  await saveSession(currentId, chat, autoTitle(s.title, chat));
+}
+
+/** 新建会话并切过去（**旧会话保留**）。
+    切换是同步的：点"新对话"不应等 IndexedDB。旧会话的消息在 prevChat 里，
+    异步落盘时数据不会丢。 */
+function newConversation(){
+  const prevId = currentId, prevChat = chat;
+  const prev = findSession(prevId);
+  const s = newSession();
+  sessions.push(s);
+  currentId = s.id;
+  chat = [];
+  trimSessions();
+  saveIndex();
+  renderSidebar();
+  renderAll();
+  elInput.focus();
+  const prevTitle = prev ? autoTitle(prev.title, prevChat) : "";
+  saveSession(prevId, prevChat, prevTitle).then(() => saveSession(s.id, []));
+}
+
+/** 会话数超上限时删掉最旧的（连同它的消息）。 */
+function trimSessions(){
+  if (sessions.length <= MAX_SESSIONS) return;
+  sessions.sort((a,b) => (b.updatedAt||0) - (a.updatedAt||0));
+  sessions.splice(MAX_SESSIONS).forEach(s => { idbDel(s.id); });
+}
+
+async function switchTo(id){
+  if (id === currentId) return;
+  const s = findSession(id);
+  if (!s) return;
+  const prevId = currentId, prevChat = chat;
+  const prev = findSession(prevId);
+  currentId = id;
+  saveIndex();
+  const rec = await idbGet(id);
+  // 等待期间用户可能又点了别的会话 —— 丢弃过期结果，否则会把 A 的消息
+  // 渲染到 B 的会话上（currentId 与 chat 不一致）
+  if (currentId !== id) return;
+  chat = (rec && Array.isArray(rec.messages)) ? rec.messages : [];
+  // 同样自愈（见 boot 里的说明）：切到哪个会话就顺手修哪个
+  const t = autoTitle(s.title, chat);
+  if (t !== s.title){ s.title = t; saveIndex(); }
+  renderSidebar();
+  renderAll();
+  elInput.focus();
+  const prevTitle = prev ? autoTitle(prev.title, prevChat) : "";
+  saveSession(prevId, prevChat, prevTitle);      // 旧会话异步落盘
+}
+
+async function deleteSession(id){
+  const s = findSession(id);
+  if (!s) return;
+  // 条数不在索引上（索引不含 messages）→ 从 IndexedDB 取一次，仅为文案
+  let n = 0;
+  try {
+    const rec = await idbGet(id);
+    n = ((rec && rec.messages) || []).length;
+  } catch(e){ /* 取不到就不写条数 */ }
+  const msg = `删除会话「${s.title}」？\n\n该会话${n ? `的 ${n} 条消息` : ""}` +
+              `将被永久删除，无法恢复。`;
+  if (!confirm(msg)) return;
+  sessions = sessions.filter(x => x.id !== id);
+  await idbDel(id);
+  if (currentId === id){
+    sessions.sort((a,b) => (b.updatedAt||0) - (a.updatedAt||0));
+    const next = sessions[0];
+    if (next){
+      currentId = next.id;
+      const rec = await idbGet(next.id);
+      if (currentId === next.id){
+        chat = (rec && Array.isArray(rec.messages)) ? rec.messages : [];
+      }
+    } else {
+      const s2 = newSession();
+      sessions.push(s2);
+      currentId = s2.id;
+      chat = [];
+      await idbPut(s2.id, {id: s2.id, serverId: s2.serverId,
+                           title: s2.title, updatedAt: s2.updatedAt,
+                           messages: []});
+    }
+  }
+  saveIndex();
+  renderSidebar();
+  renderAll();
+}
+
+function renameSession(id, name){
+  const s = findSession(id);
+  if (!s) return;
+  s.title = (name || "").trim().slice(0, 30) || "未命名对话";
+  saveIndex();
+  renderSidebar();
+}
+
+/* ---------------- 侧栏渲染 ---------------- */
+function fmtTime(ts){
+  if (!ts) return "";
+  const d = new Date(ts), now = new Date();
+  const pad = (n) => String(n).padStart(2,"0");
+  return d.toDateString() === now.toDateString()
+    ? `${pad(d.getHours())}:${pad(d.getMinutes())}`
+    : `${d.getMonth()+1}/${d.getDate()}`;
+}
+
+function renderSidebar(){
+  const box = $("sideList");
+  box.innerHTML = "";
+  const ordered = sessions.slice().sort((a,b) => (b.updatedAt||0) - (a.updatedAt||0));
+  ordered.forEach(s => {
+    const row = document.createElement("div");
+    row.className = "sideitem" + (s.id === currentId ? " cur" : "");
+    row.title = s.title;
+
+    const t = document.createElement("span");
+    t.className = "t";
+    t.textContent = s.title;
+    row.appendChild(t);
+
+    const meta = document.createElement("span");
+    meta.style.cssText = "font-size:11px;color:var(--muted);flex:0 0 auto";
+    meta.textContent = fmtTime(s.updatedAt);
+    row.appendChild(meta);
+
+    const menu = document.createElement("span");
+    menu.className = "m";
+    const bR = document.createElement("button");
+    bR.textContent = "✏️"; bR.title = "重命名";
+    bR.onclick = (e) => { e.stopPropagation(); startRename(row, s); };
+    const bD = document.createElement("button");
+    bD.textContent = "🗑"; bD.title = "删除";
+    bD.onclick = (e) => { e.stopPropagation(); deleteSession(s.id); };
+    menu.appendChild(bR); menu.appendChild(bD);
+    row.appendChild(menu);
+
+    row.onclick = () => switchTo(s.id);
+    box.appendChild(row);
+  });
+  if (!sessions.length) box.innerHTML = '<div class="side-group">还没有会话</div>';
+  if (!storageWarned){
+    $("sideFoot").textContent =
+      `${sessions.length} 个会话 · 消息存在本机浏览器，不上传服务端`;
+  }
+}
+
+function startRename(row, s){
+  const old = row.querySelector(".t");
+  const inp = document.createElement("input");
+  inp.value = s.title;
+  inp.maxLength = 30;
+  row.replaceChild(inp, old);
+  inp.focus(); inp.select();
+  let done = false;
+  const commit = (save) => {
+    if (done) return;
+    done = true;
+    if (save) renameSession(s.id, inp.value);
+    else renderSidebar();
+  };
+  inp.onkeydown = (e) => {
+    if (e.key === "Enter"){ e.preventDefault(); commit(true); }
+    else if (e.key === "Escape"){ e.preventDefault(); commit(false); }
+  };
+  inp.onblur = () => commit(true);
+  inp.onclick = (e) => e.stopPropagation();
+}
+
+/* ---------------- 侧栏开合（窄屏为抽屉） ---------------- */
+function isNarrow(){ return window.matchMedia("(max-width:860px)").matches; }
+function sidebarVisible(){
+  const sb = $("sidebar");
+  return isNarrow() ? sb.classList.contains("open") : !sb.classList.contains("hide");
+}
+function setSidebar(open){
+  const sb = $("sidebar");
+  if (isNarrow()){
+    sb.classList.toggle("open", open);
+    $("scrim").classList.toggle("show", open);
+  } else {
+    sb.classList.toggle("hide", !open);
+    $("scrim").classList.remove("show");
+    try { localStorage.setItem(LS_SIDE, open ? "1" : "0"); } catch(e){}
+  }
+}
+function sidebarOpen(){
+  try { return localStorage.getItem(LS_SIDE) !== "0"; } catch(e){ return true; }
+}
+
 
 /* ---------------- 设置读写 ---------------- */
 const SETTING_KEYS = ["base","model","thinking","effort","maxTokens",
@@ -360,27 +831,29 @@ function refreshKeyChip(){
   $("hintEndpoint").textContent = s.base ? ("端点：" + s.base) : "";
 }
 
-/* ---------------- 会话 ---------------- */
-function newSessionId(){
-  const a = new Uint8Array(16);
-  (crypto.getRandomValues ? crypto.getRandomValues(a)
-                          : a.forEach((_,i)=>a[i]=Math.floor(Math.random()*256)));
-  return Array.from(a).map(b=>b.toString(16).padStart(2,"0")).join("");
-}
-let sessionId = "";
-try { sessionId = localStorage.getItem(LS_SESSION) || ""; } catch(e){}
-if (!/^[0-9a-f]{8,64}$/.test(sessionId)) {
-  sessionId = newSessionId();
-  try { localStorage.setItem(LS_SESSION, sessionId); } catch(e){}
-}
-function saveChat(){
-  try { localStorage.setItem(LS_CHAT, JSON.stringify(chat.slice(-MAX_KEEP))); }
-  catch(e){ /* 超出配额则丢弃（图片较多时可能超限） */ }
-}
-function loadChat(){
-  try { chat = JSON.parse(localStorage.getItem(LS_CHAT) || "[]") || []; }
-  catch(e){ chat = []; }
-  if (!Array.isArray(chat)) chat = [];
+/* ---------------- 旧版（单会话）迁移 ---------------- */
+async function migrateLegacy(){
+  let legacy = null, oldSid = "";
+  try { legacy = JSON.parse(localStorage.getItem(LS_CHAT_OLD) || "null"); } catch(e){}
+  try { oldSid = localStorage.getItem(LS_SESSION_OLD) || ""; } catch(e){}
+  if (Array.isArray(legacy) && legacy.length){
+    const s = newSession();
+    s.title = titleFrom(legacy);
+    // 旧的服务端会话 id 直接沿用，否则该会话里的旧图会 404
+    if (/^[0-9a-f]{8,64}$/.test(oldSid)) s.serverId = oldSid;
+    s.updatedAt = Date.now();
+    sessions.push(s);
+    currentId = s.id;
+    chat = legacy;
+    // 消息只写进 IndexedDB；索引对象上不留 messages（见 saveIndex 注释）
+    await idbPut(s.id, {id: s.id, serverId: s.serverId, title: s.title,
+                        updatedAt: s.updatedAt, messages: legacy});
+  }
+  // 迁移后立刻清掉旧键，否则每次启动都会重复导入
+  try {
+    localStorage.removeItem(LS_CHAT_OLD);
+    localStorage.removeItem(LS_SESSION_OLD);
+  } catch(e){}
 }
 
 /* ---------------- 极简 Markdown ---------------- */
@@ -458,15 +931,126 @@ function md(src){
   return out.join("");
 }
 
+/* ---------------- 剪贴板 / 下载 / 灯箱 ---------------- */
+
+/** 复制文本：优先 Clipboard API；非安全上下文（http:// 非 localhost）或
+    权限被拒时，降级到隐藏 textarea + execCommand。 */
+async function copyText(text){
+  text = String(text == null ? "" : text);
+  try {
+    if (navigator.clipboard && window.isSecureContext){
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch(e){ /* 落到降级路径 */ }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.cssText = "position:fixed;top:-1000px;left:-1000px;opacity:0";
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, ta.value.length);
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  } catch(e){ return false; }
+}
+
+/** 给按钮挂"复制"行为，成功后短暂反馈。 */
+function wireCopy(btn, getText, label){
+  btn.textContent = label;
+  btn.onclick = async () => {
+    const ok = await copyText(getText());
+    btn.textContent = ok ? "已复制 ✓" : "复制失败";
+    btn.classList.toggle("done", ok);
+    setTimeout(() => { btn.textContent = label; btn.classList.remove("done"); }, 1500);
+  };
+}
+
+function downloadUrl(url, name){
+  const a = document.createElement("a");
+  a.href = url; a.download = name || "chem.png";
+  document.body.appendChild(a); a.click(); a.remove();
+}
+
+let lbUrl = "";
+function openLightbox(url, name){
+  lbUrl = url;
+  $("lightboxImg").src = url;
+  $("lbDownload").onclick = () => downloadUrl(url, name || "化学图示.png");
+  $("lightbox").classList.add("show");
+}
+function closeLightbox(){
+  $("lightbox").classList.remove("show");
+  $("lightboxImg").src = "";
+  lbUrl = "";
+}
+$("lightbox").addEventListener("click", (e) => {
+  if (e.target === $("lightbox")) closeLightbox();
+});
+$("lbClose").onclick = closeLightbox;
+
+/* ---------------- 滚动：只在贴底时自动跟随 ---------------- */
+const NEAR_BOTTOM = 80;
+function nearBottom(){
+  return elStream.scrollHeight - elStream.scrollTop - elStream.clientHeight < NEAR_BOTTOM;
+}
+/** 只有用户本来就在底部时才跟随（否则会被反复拽回去，没法往上翻历史）。 */
+function scrollDown(force){
+  if (force || nearBottom()){
+    elStream.scrollTop = elStream.scrollHeight;
+    $("btnJump").classList.remove("show");
+  } else {
+    $("btnJump").classList.add("show");
+  }
+}
+elStream.addEventListener("scroll", () => {
+  if (nearBottom()) $("btnJump").classList.remove("show");
+});
+$("btnJump").onclick = () => scrollDown(true);
+
 /* ---------------- 渲染消息 ---------------- */
 function renderAll(){
   elStream.querySelectorAll(".msg").forEach(n => n.remove());
-  if (!chat.length){ elEmpty.style.display = ""; return; }
+  if (!chat.length){
+    elEmpty.style.display = "";
+    $("btnJump").classList.remove("show");
+    return;
+  }
   elEmpty.style.display = "none";
   chat.forEach((m, idx) => elStream.appendChild(buildMsg(m, idx)));
-  scrollDown();
+  scrollDown(true);
 }
-function buildMsg(m, idx){
+
+function addActions(bubble, m){
+  const acts = document.createElement("div");
+  acts.className = "acts";
+
+  if (m.content){
+    const bCopy = document.createElement("button");
+    wireCopy(bCopy, () => m.content, "复制");
+    acts.appendChild(bCopy);
+  }
+  if (m.role === "assistant"){
+    // 图示：放大 / 下载（图片是相对 URL，与页面同源）
+    const imgs = bubble.querySelectorAll(".md-body img");
+    if (imgs.length){
+      const bZoom = document.createElement("button");
+      bZoom.textContent = "放大图示";
+      bZoom.onclick = () => openLightbox(imgs[0].getAttribute("src"), "化学图示.png");
+      acts.appendChild(bZoom);
+
+      const bDl = document.createElement("button");
+      bDl.textContent = "下载图示";
+      bDl.onclick = () => downloadUrl(imgs[0].getAttribute("src"), "化学图示.png");
+      acts.appendChild(bDl);
+    }
+  }
+  if (acts.children.length) bubble.appendChild(acts);
+}
+
+function buildMsg(m){
   const wrap = document.createElement("div");
   wrap.className = "msg " + (m.role === "user" ? "user" : "bot");
   const who = document.createElement("div");
@@ -479,6 +1063,8 @@ function buildMsg(m, idx){
       const img = document.createElement("img");
       img.src = src; img.alt = "上传的图片";
       img.style.maxWidth = "220px"; img.style.marginBottom = "8px";
+      img.style.cursor = "zoom-in";
+      img.onclick = () => openLightbox(src, "上传的图片.png");
       bubble.appendChild(img);
     });
     const p = document.createElement("div");
@@ -495,28 +1081,14 @@ function buildMsg(m, idx){
     body.className = "md-body";
     body.innerHTML = md(m.content || "");
     bubble.appendChild(body);
-    if (m.raw){
-      const d = document.createElement("details");
-      d.className = "src";
-      const s = document.createElement("summary");
-      s.textContent = "查看图示 LaTeX 源码";
-      const pre = document.createElement("pre");
-      pre.innerHTML = "<code>" + esc(m.raw) + "</code>";
-      d.appendChild(s); d.appendChild(pre);
-      bubble.appendChild(d);
-    }
-    if (m.meta){
-      const meta = document.createElement("div");
-      meta.className = "meta";
-      meta.textContent = m.meta;
-      bubble.appendChild(meta);
-    }
+    // 注：曾经的 `m.raw`（查看 LaTeX 源码）与 `m.meta` 分支是**死代码**——
+    // send() 里初始化成 "" 后再没被赋值，SSE 帧也不带这两个字段。已删除；
+    // 要恢复请先把数据接上（见 instructions/UI-Redesign.md 第 3/4 批）。
   }
+  // 流式期间不挂操作条（那时内容还不完整、也还没有图）
+  if (!m.streaming) addActions(bubble, m);
   wrap.appendChild(who); wrap.appendChild(bubble);
   return wrap;
-}
-function scrollDown(){
-  elStream.scrollTop = elStream.scrollHeight;
 }
 
 /* ---------------- 发送 ---------------- */
@@ -550,15 +1122,20 @@ async function send(){
   const userMsg = {role:"user", content:text,
                    images: pendingImages.map(p => p.dataUrl)};
   chat.push(userMsg);
-  const node = buildMsg(userMsg, chat.length - 1);
+  const node = buildMsg(userMsg);
   elEmpty.style.display = "none";
   elStream.appendChild(node);
   elInput.value = "";
   autoGrow();
   pendingImages = [];
   renderThumbs();
-  saveChat();
-  scrollDown();
+  // ★ setSending 必须**同步**执行：下面还有 await，若把它放到 await 之后，
+  // "生成中…"与按钮禁用会晚一个任务才生效，连按两次 Enter 就会重复发请求
+  // （`sending` 是防重入闸门，晚置位等于没有闸门 —— 20260910 实测发现）
+  setSending(true);
+  scrollDown(true);
+  await saveCurrent();       // 持久化串行完成，避免与收尾那次写竞争
+  renderSidebar();
 
   // 组装发给服务端的 messages（含多轮历史；助手历史只给纯文本摘要）
   const messages = [];
@@ -576,21 +1153,36 @@ async function send(){
   messages.push({role:"user", content: parts.length > 1 ? parts
                                                  : (text || "（请识别图片）")});
 
-  setSending(true);
   const botMsg = {role:"assistant", content:"", notice:"正在思考并绘制化学图示…",
-                  meta:"", raw:""};
+                  streaming: true};
   chat.push(botMsg);
-  const botNode = buildMsg(botMsg, chat.length - 1);
+  const botNode = buildMsg(botMsg);
   elStream.appendChild(botNode);
   const bubble = botNode.querySelector(".bubble");
   const noticeEl = bubble.querySelector(".note");
   const bodyEl = bubble.querySelector(".md-body");
   let firstChunk = true;
 
+  // ★ 渲染节流：服务端按 _ANSWER_CHUNK=20 字符切块且**背靠背 yield**，
+  // 4000 字的回答会来 200 个 chunk，浏览器可能在一两次 read() 里全收到。
+  // 若每个 chunk 都全量 md()+innerHTML，就是一个循环里 200 次解析，还会把
+  // 已渲染的 <img> 反复销毁重建（闪烁）。用 rAF 合并成一帧一次。
+  let rafPending = false;
+  const scheduleRender = () => {
+    if (rafPending) return;
+    rafPending = true;
+    requestAnimationFrame(() => {
+      rafPending = false;
+      bodyEl.innerHTML = md(botMsg.content);
+      scrollDown(false);
+    });
+  };
+
   try {
     const resp = await fetch("api/chat", {
       method:"POST", headers: buildHeaders(s),
-      body: JSON.stringify({messages: messages, stream: true, session_id: sessionId})
+      body: JSON.stringify({messages: messages, stream: true,
+                            session_id: currentServerId()})
     });
     if (!resp.ok){
       let detail = "HTTP " + resp.status;
@@ -634,12 +1226,12 @@ async function send(){
               noticeEl.style.display = "none";
             }
             botMsg.content += d.content;
-            bodyEl.innerHTML = md(botMsg.content);
-            scrollDown();
+            scheduleRender();
           }
           if (d.session_id){
-            sessionId = d.session_id;
-            try { localStorage.setItem(LS_SESSION, sessionId); } catch(e){}
+            // 服务端可能规范化/回传会话 id → 记到**本会话**上
+            const cur = findSession(currentId);
+            if (cur){ cur.serverId = d.session_id; saveIndex(); }
           }
         }
       }
@@ -650,16 +1242,22 @@ async function send(){
       noticeEl.textContent = botMsg.notice;
       noticeEl.className = "note err";
     }
-    // 图示（PNG）异步加载完成后再滚一次
-    setTimeout(scrollDown, 400);
+    // 收尾：确保 markdown 已按最终内容渲染一遍（rAF 可能还没跑到）
+    bodyEl.innerHTML = md(botMsg.content);
+    // 图示（PNG）异步加载完成后再滚一次（仅当用户仍贴底）
+    setTimeout(() => scrollDown(false), 400);
   } catch (err){
     botMsg.notice = "⚠️ " + (err && err.message ? err.message : "请求失败");
     botMsg.noticeErr = true;
     noticeEl.textContent = botMsg.notice;
     noticeEl.className = "note err";
   } finally {
+    botMsg.streaming = false;
+    // 内容完整后才挂操作条（复制/放大/下载）
+    addActions(bubble, botMsg);
     setSending(false);
-    saveChat();
+    await saveCurrent();
+    renderSidebar();
   }
 }
 
@@ -722,13 +1320,12 @@ elInput.addEventListener("keydown", (e) => {
   }
 });
 $("btnSend").onclick = send;
-$("btnNew").onclick = () => {
-  if (chat.length && !confirm("清空当前对话？")) return;
-  chat = []; sessionId = newSessionId();
-  try { localStorage.setItem(LS_SESSION, sessionId);
-        localStorage.removeItem(LS_CHAT); } catch(e){}
-  renderAll();
-};
+// 新建对话：**旧会话保留**在侧栏（不再询问"清空？"——那是破坏性的）
+$("btnNew").onclick = () => newConversation();
+$("btnNewSide").onclick = () => { newConversation(); if (isNarrow()) setSidebar(false); };
+$("btnSide").onclick = () => setSidebar(!sidebarVisible());
+$("btnCloseSide").onclick = () => setSidebar(false);
+$("scrim").onclick = () => setSidebar(false);
 document.querySelectorAll(".examples button").forEach(b => {
   b.onclick = () => { elInput.value = b.dataset.q; autoGrow(); send(); };
 });
@@ -818,7 +1415,7 @@ async function probeCapability(s){
     const r = await fetch("api/chat", {
       method:"POST", headers:h,
       body: JSON.stringify({messages:[{role:"user", content:"只回复两个字：正常"}],
-                            stream:false, session_id: sessionId})
+                            stream:false, session_id: currentServerId()})
     });
     return r;
   };
@@ -852,7 +1449,7 @@ $("btnProbe").onclick = async () => {
     const r = await fetch("api/chat", {
       method:"POST", headers: buildHeaders(s),
       body: JSON.stringify({messages:[{role:"user", content:"只回复两个字：正常"}],
-                            stream:false, session_id: sessionId})
+                            stream:false, session_id: currentServerId()})
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok){
@@ -871,7 +1468,17 @@ $("btnProbe").onclick = async () => {
 };
 $("overlay").addEventListener("click", (e) => { if (e.target === $("overlay")) closeSheet(); });
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") closeSheet();
+  // Esc 的优先级：灯箱 → 设置面板
+  if (e.key === "Escape"){
+    if ($("lightbox").classList.contains("show")){ closeLightbox(); return; }
+    closeSheet();
+    return;
+  }
+  // Ctrl/Cmd+K：新建对话（与 DeepSeek / ChatGPT 一致）
+  if ((e.ctrlKey || e.metaKey) && (e.key === "k" || e.key === "K")){
+    e.preventDefault();
+    newConversation();
+  }
 });
 
 /* ---------------- 启动 ---------------- */
@@ -880,10 +1487,36 @@ document.addEventListener("keydown", (e) => {
     const r = await fetch("api/web-config");
     if (r.ok) serverCfg = Object.assign(serverCfg, await r.json());
   } catch(e){ /* 用内置默认值 */ }
-  loadChat();
+
+  memoryStore = new Map();
+  loadIndex();
+  await migrateLegacy();
+  if (!sessions.length){
+    const s = newSession();
+    sessions.push(s);
+    currentId = s.id;
+    await idbPut(s.id, {id: s.id, serverId: s.serverId, title: s.title,
+                        updatedAt: s.updatedAt, messages: []});
+  }
+  if (!findSession(currentId)) currentId = sessions[0].id;
+  const rec = await idbGet(currentId);
+  chat = (rec && Array.isArray(rec.messages)) ? rec.messages : [];
+  // ★ 标题自愈：标题只存在 localStorage，而它**最后一次写入可能没落盘**
+  // （浏览器被强杀 / 崩溃 / 断电）——消息在 IndexedDB 里已落盘，于是会出现
+  // "消息都在、侧栏标题却退回『新对话』"。直接从消息重新推导，不依赖那次写。
+  const cur = findSession(currentId);
+  if (cur){
+    const t = autoTitle(cur.title, chat);
+    if (t !== cur.title) cur.title = t;
+  }
+  saveIndex();
+  renderSidebar();
   renderAll();
+  setSidebar(sidebarOpen());
   refreshKeyChip();
   autoGrow();
+  // 窄屏时旋屏/改窗口 → 收掉抽屉，避免半开状态卡住
+  window.addEventListener("resize", () => { if (isNarrow()) setSidebar(false); });
   if (!loadSettings().key) openSheet(true);
   else elInput.focus();
 })();

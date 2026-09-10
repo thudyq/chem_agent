@@ -43,7 +43,6 @@ import ipaddress
 import json
 import queue
 import re
-import shutil
 import threading
 import time
 import uuid
@@ -90,9 +89,21 @@ _MAX_QUESTION_CHARS = 8000
 _MAX_IMAGES = 4
 _MAX_HISTORY_ITEMS = 10
 
-# 会话附件保留时长（秒，默认 24h）。仅清理**过期未再被访问**的会话目录，
-# 是按目录 mtime 的滚动清理——同一会话持续使用则不断续期。
-SESSION_TTL_SECONDS = 24 * 3600
+# 网页附件的**全局**配额。语义与 /v1（core/attachments.py）完全一致：
+# **不按时间删，只在超配额时删最旧的**。差别只在作用域——/v1 是一个扁平目录，
+# 配额天然就是全局；网页是"每会话一个目录"，所以必须在 `web_sessions/` 这一层
+# 再设一道全局上限，否则总磁盘 = 每会话额度 × 会话数，没有上界（网页端点匿名，
+# 点一次"新对话"就多一个目录）。
+#
+# 与 /v1 **各占一份**、互不挤占：共用会让网页的匿名使用把清小搭热链的图删掉，
+# 反之亦然。默认值与 `ServiceConfig.attachment_max_*` 同口径（2GB / 50000）。
+WEB_ATTACHMENT_MAX_BYTES = 2 * 1024 * 1024 * 1024      # 2GB
+WEB_ATTACHMENT_MAX_FILES = 50000
+
+# 清理时**不动**刚写入的文件：清理器是后台线程，可能和一个正在落盘的请求撞上。
+# 这不是"按时间删除"，只是给新文件一道保护窗（超配额时宁超额也不删新图，
+# 与 /v1 的 keep 保护同一取舍）。
+_PRUNE_MIN_AGE = 10 * 60
 
 # 每 IP 限流（滑动窗口）
 RATE_LIMIT_PER_MINUTE = 20
@@ -223,37 +234,96 @@ def _sessions_root() -> Path:
 
 
 def _session_dir(session_id: str) -> Path:
-    """会话附件目录（惰性创建；目录 mtime 即"最近使用时间"，用于 TTL 清理）。"""
+    """会话附件目录（惰性创建）。"""
     d = _sessions_root() / session_id
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
-def cleanup_expired_sessions(ttl_seconds: int = SESSION_TTL_SECONDS) -> int:
-    """删除超过 TTL 未使用的会话附件目录，返回删除数。
+def _within_web_quota(total_bytes: int, total_files: int,
+                      max_bytes: int, max_files: int) -> bool:
+    if max_bytes > 0 and total_bytes > max_bytes:
+        return False
+    if max_files > 0 and total_files > max_files:
+        return False
+    return True
 
-    清小搭路径的附件是**长期保留**（历史对话的图不能失效）；网页路径不同
-    ——会话是本地的、图片靠行内 URL 引用，过期清理可避免匿名使用把磁盘吃满。
+
+def prune_web_attachments(max_bytes: int = WEB_ATTACHMENT_MAX_BYTES,
+                          max_files: int = WEB_ATTACHMENT_MAX_FILES) -> int:
+    """按**全局配额**回收网页附件，返回删除的文件数。
+
+    只在超配额时删最旧的（按文件 mtime），**不按时间 TTL 删**——理由：
+    对话文字存在浏览器里、是永久的，若图先按时间消失，用户看到的是
+    "昨天还好好的图今天裂了"，而且完全无法预期。改成配额后，只有真的顶到
+    磁盘上限才开始回收最冷的图（与 /v1 的取舍一致：宁超额，不删新图）。
+
+    与 `_prune_attachments`（/v1）**不能直接复用**：那个只处理单个扁平目录，
+    这里是每会话一个目录，必须在 `web_sessions/` 这一层跨目录收集。
+
+    * 先统计全部 `*.png` 的字节数与个数，未超配额直接返回 0（常态路径，不删任何东西）；
+    * 超配额 → 按 mtime 升序删，直到两项都达标；`_PRUNE_MIN_AGE` 内的新文件
+      一律跳过（可能正被某个请求写入/引用）；
+    * 顺手删掉因此变空的会话目录（避免 `web_sessions/` 里堆一堆空目录）。
     """
-    if ttl_seconds <= 0:
-        return 0
     root = _SESSIONS_DIR
-    if not root.is_dir():
+    if not root.is_dir() or (max_bytes <= 0 and max_files <= 0):
         return 0
-    deadline = time.time() - ttl_seconds
-    removed = 0
-    for child in root.iterdir():
-        if not child.is_dir():
-            continue
+
+    files = []
+    total_bytes = 0
+    for p in root.rglob("*.png"):
         try:
-            if child.stat().st_mtime < deadline:
-                shutil.rmtree(child, ignore_errors=True)
-                removed += 1
+            if not p.is_file():
+                continue
+            sz = p.stat().st_size
         except OSError:
             continue
+        files.append(p)
+        total_bytes += sz
+
+    if _within_web_quota(total_bytes, len(files), max_bytes, max_files):
+        return 0
+
+    cutoff = time.time() - _PRUNE_MIN_AGE
+    removed, freed = 0, 0
+    for p in sorted(files, key=lambda x: x.stat().st_mtime):
+        if _within_web_quota(total_bytes, len(files), max_bytes, max_files):
+            break
+        try:
+            if p.stat().st_mtime > cutoff:      # 新文件不删
+                continue
+            sz = p.stat().st_size
+            p.unlink()
+        except OSError:
+            continue
+        files.remove(p)
+        total_bytes -= sz
+        removed += 1
+        freed += sz
+
     if removed:
-        print(f"[web] 清理过期会话附件目录 {removed} 个")
+        _drop_empty_session_dirs(root)
+        print(f"[web] 附件超配额，回收最旧图 {removed} 个（约 {freed // 1024} KB）；"
+              f"剩余 {len(files)} 个 / {total_bytes // 1024 // 1024} MB")
     return removed
+
+
+def _drop_empty_session_dirs(root: Path) -> int:
+    """删掉 `web_sessions/` 下的空会话目录（清理后收尾）。"""
+    dropped = 0
+    try:
+        children = list(root.iterdir())
+    except OSError:
+        return 0
+    for child in children:
+        try:
+            if child.is_dir() and not any(child.iterdir()):
+                child.rmdir()
+                dropped += 1
+        except OSError:
+            continue
+    return dropped
 
 
 # ---------------------------------------------------------------- 问题构造
@@ -476,7 +546,9 @@ def web_config():
         "effort_choices": ["low", "medium", "high", "max"],
         "allow_private_base_url": os.environ.get(
             "WEB_ALLOW_PRIVATE_BASE_URL", "").strip() in ("1", "true", "yes"),
-        "session_ttl_hours": SESSION_TTL_SECONDS // 3600,
+        # 附件配额：网页路径与 /v1 同口径（不按时间删），但作用域是全局
+        "attachment_max_bytes": WEB_ATTACHMENT_MAX_BYTES,
+        "attachment_max_files": WEB_ATTACHMENT_MAX_FILES,
         "rate_limit_per_minute": RATE_LIMIT_PER_MINUTE,
         "max_images": _MAX_IMAGES,
         "max_question_chars": _MAX_QUESTION_CHARS,
@@ -814,4 +886,5 @@ def _validate_download_url(url: str) -> bool:
     return _impl(url)
 
 
-__all__ = ["router", "cleanup_expired_sessions", "SESSION_TTL_SECONDS"]
+__all__ = ["router", "prune_web_attachments", "WEB_ATTACHMENT_MAX_BYTES",
+           "WEB_ATTACHMENT_MAX_FILES"]

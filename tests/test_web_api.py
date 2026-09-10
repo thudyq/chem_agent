@@ -543,33 +543,97 @@ def test_history_keeps_user_text_and_summarizes_assistant(web, answered):
     assert "STRUCT" not in history[1]["content"]      # 去锚定：不回喂标记
 
 
-# ---------------------------------------------------------------- 会话清理
+# ---------------------------------------------------------------- 附件配额回收
 
-def test_cleanup_expired_sessions_removes_only_old(tmp_path, monkeypatch):
+def _mkpng(path, size):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"x" * size)
+    return path
+
+
+def test_prune_noop_when_within_quota(tmp_path, monkeypatch):
+    """★ 常态：没超配额就**一个都不删**（这是与旧 24h TTL 最本质的区别）。"""
     root = tmp_path / "web_sessions"
     monkeypatch.setattr(web_api, "_SESSIONS_DIR", root)
-    old = root / "oldsession"
-    fresh = root / "fresh"
-    for d in (old, fresh):
-        d.mkdir(parents=True)
-        (d / "x.png").write_bytes(b"x")
-    stale = time.time() - 48 * 3600
+    a = _mkpng(root / "s1" / "a.png", 100)
+    b = _mkpng(root / "s2" / "b.png", 100)
     import os
+    stale = time.time() - 365 * 24 * 3600          # 一年前的文件也不删
+    os.utime(a, (stale, stale))
+
+    assert web_api.prune_web_attachments(max_bytes=10_000, max_files=100) == 0
+    assert a.is_file() and b.is_file()
+    assert (root / "s1").is_dir() and (root / "s2").is_dir()
+
+
+def test_prune_deletes_oldest_across_sessions(tmp_path, monkeypatch):
+    """超配额 → 跨会话按 mtime 删最旧的；新的留着；空目录收尾掉。"""
+    root = tmp_path / "web_sessions"
+    monkeypatch.setattr(web_api, "_SESSIONS_DIR", root)
+    import os
+    old = _mkpng(root / "s1" / "old.png", 1000)
+    mid = _mkpng(root / "s2" / "mid.png", 1000)
+    new = _mkpng(root / "s3" / "new.png", 1000)
+    t0 = time.time() - 3 * 3600
+    for p, off in ((old, 0), (mid, 3600), (new, 2 * 3600)):
+        os.utime(p, (t0 + off, t0 + off))
+
+    # 配额只容得下 2 个 → 应删掉最旧的 old.png
+    removed = web_api.prune_web_attachments(max_bytes=0, max_files=2)
+    assert removed == 1
+    assert not old.exists()
+    assert mid.is_file() and new.is_file()
+    assert not (root / "s1").is_dir()              # 空目录被收尾
+    assert (root / "s2").is_dir() and (root / "s3").is_dir()
+
+
+def test_prune_by_bytes(tmp_path, monkeypatch):
+    root = tmp_path / "web_sessions"
+    monkeypatch.setattr(web_api, "_SESSIONS_DIR", root)
+    import os
+    a = _mkpng(root / "s1" / "a.png", 800)
+    b = _mkpng(root / "s2" / "b.png", 800)
+    t0 = time.time() - 3 * 3600
+    os.utime(a, (t0, t0))
+    os.utime(b, (t0 + 60, t0 + 60))
+
+    removed = web_api.prune_web_attachments(max_bytes=900, max_files=0)
+    assert removed == 1
+    assert not a.exists() and b.is_file()
+
+
+def test_prune_protects_brand_new_files(tmp_path, monkeypatch):
+    """刚写入（_PRUNE_MIN_AGE 内）的文件不删 —— 可能正被某个请求引用。
+
+    宁超额、不删新图：删完仍超配额就保持现状（与 /v1 的 keep 同一取舍）。
+    """
+    root = tmp_path / "web_sessions"
+    monkeypatch.setattr(web_api, "_SESSIONS_DIR", root)
+    fresh = _mkpng(root / "s1" / "fresh.png", 5000)
+
+    removed = web_api.prune_web_attachments(max_bytes=100, max_files=0)
+    assert removed == 0
+    assert fresh.is_file()
+
+
+def test_prune_disabled_when_limits_zero(tmp_path, monkeypatch):
+    root = tmp_path / "web_sessions"
+    monkeypatch.setattr(web_api, "_SESSIONS_DIR", root)
+    import os
+    old = _mkpng(root / "s1" / "old.png", 5000)
+    stale = time.time() - 3 * 3600
     os.utime(old, (stale, stale))
 
-    removed = web_api.cleanup_expired_sessions(ttl_seconds=24 * 3600)
-    assert removed == 1
-    assert fresh.is_dir()
-    assert not old.exists()
+    assert web_api.prune_web_attachments(max_bytes=0, max_files=0) == 0
+    assert old.is_file()
 
 
-def test_cleanup_disabled_when_ttl_zero(tmp_path, monkeypatch):
-    root = tmp_path / "web_sessions"
-    monkeypatch.setattr(web_api, "_SESSIONS_DIR", root)
-    d = root / "keepme"
-    d.mkdir(parents=True)
-    assert web_api.cleanup_expired_sessions(ttl_seconds=0) == 0
-    assert d.is_dir()
+def test_web_config_exposes_attachment_quota(web):
+    """网页配置暴露的是**配额**，不再是 TTL（前端不再有"24 小时后图会没"的概念）。"""
+    d = web.get("/api/web-config").json()
+    assert d["attachment_max_bytes"] == web_api.WEB_ATTACHMENT_MAX_BYTES
+    assert d["attachment_max_files"] == web_api.WEB_ATTACHMENT_MAX_FILES
+    assert "session_ttl_hours" not in d
 
 
 # ---------------------------------------------------------------- 错误友好化

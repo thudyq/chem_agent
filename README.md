@@ -94,7 +94,7 @@ graph LR
 │   ├── tag_validator.py       # 标记契约校验层
 │   ├── tag_injector.py        # 标记→TikZ 注入替换
 │   ├── prompt_manager.py      # System Prompt 管理
-│   ├── attachments.py         # TikZ→PNG 附件构建（编译、托管、TTL 清理）
+│   ├── attachments.py         # TikZ→PNG 附件构建（编译、托管、超配额回收）
 │   ├── web_api.py             # 公开网页后端（/api/chat、BYOK 凭证、限流、会话附件）
 │   └── metrics.py             # 基线评测（标记遵循率 / 端到端管线）
 ├── renderers/

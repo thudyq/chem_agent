@@ -211,8 +211,8 @@ curl -s -X POST $BASE/api/chat -H 'Content-Type: application/json' \
 | :--- | :--- |
 | 服务日志 | `sudo journalctl -u chem_agent -f` |
 | 只看网页请求 | `sudo journalctl -u chem_agent --no-pager \| grep '\[web\]'` |
-| 会话附件目录 | `data/web_sessions/<会话id>/`（默认 24h 未使用即被清理线程回收） |
-| 清小搭附件目录 | `data/attachments/`（长期保留，不受网页清理影响） |
+| 会话附件目录 | `data/web_sessions/<会话id>/`（**按全局配额回收**：2GB / 50000 个文件，**只在超配额时**删最旧的图，不按时间清；见 `core/web_api.py::prune_web_attachments`） |
+| 清小搭附件目录 | `data/attachments/`（独立配额 2GB / 50000，长期保留，与网页互不挤占） |
 | 限流 | 每 IP 每分钟 20 次（`core/web_api.py` 的 `RATE_LIMIT_PER_MINUTE`） |
 | 用户密钥去向 | 只在请求内存；日志只打指纹；`data/diagnostics.jsonl` 里存的是标记文本与凭证指纹，**不含密钥** |
 

@@ -38,7 +38,7 @@ from app import process_question
 from core.attachments import build_attachments, replace_code_blocks_with_images
 from core import answer_cache, credentials, diaglog
 from core.config import settings
-from core.web_api import cleanup_expired_sessions
+from core.web_api import prune_web_attachments
 from utils.tempdir import work_dir
 from utils import tempdir
 
@@ -96,12 +96,17 @@ app.include_router(web_router)
 
 
 def _web_session_janitor() -> None:
-    """后台守护线程：周期性清理过期的网页会话附件目录（BYOK 页面用）。
+    """后台守护线程：按**全局配额**回收网页附件（BYOK 页面用）。
 
-    只清理 `data/web_sessions/` 下超过 TTL（默认 24h）未使用的会话目录——
-    清小搭路径的附件（`data/attachments/`）是长期保留的，不在清理范围。
+    只处理 `data/web_sessions/` ——清小搭路径的附件（`data/attachments/`）
+    有自己的配额，不在清理范围。
+
+    ★ **不按时间删**：`prune_web_attachments()` 只在 `web_sessions/` 总量超过
+    `WEB_ATTACHMENT_MAX_BYTES/_MAX_FILES` 时才回收最旧的图，与 /v1 口径一致。
+    以前这里是 24h TTL，会把历史对话里的图删掉——文字存在浏览器里是永久的，
+    图却先没了，用户看到"昨天还好好的图今天裂了"，且无从预期。
+
     线程为 daemon：不阻塞退出，异常静默（清理失败不影响服务）。
-
     用**模块级标志**保证只启动一次；由 lifespan 在应用启动时调用
     （不在导入时启动——否则测试 import api 就会起后台线程）。
     """
@@ -116,16 +121,16 @@ def _web_session_janitor() -> None:
         while True:
             _time.sleep(3600)
             try:
-                cleanup_expired_sessions()
+                prune_web_attachments()
             except Exception as e:
-                print(f"[web] 会话清理异常（已忽略）: {e}")
+                print(f"[web] 附件配额回收异常（已忽略）: {e}")
 
     _threading.Thread(target=_loop, daemon=True,
-                      name="web-session-janitor").start()
-    try:                      # 启动时先清一次（重启后回收上次遗留）
-        cleanup_expired_sessions()
+                      name="web-attachment-janitor").start()
+    try:                      # 启动时先跑一次（重启后回收上次遗留的超额）
+        prune_web_attachments()
     except Exception as e:
-        print(f"[web] 启动清理跳过: {e}")
+        print(f"[web] 启动配额检查跳过: {e}")
 
 
 _JANITOR_STARTED = False
