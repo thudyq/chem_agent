@@ -836,22 +836,31 @@ function autoTitle(title, messages){
 }
 
 /** 落盘某会话的消息到 IndexedDB（**不阻塞 UI**，调用方不必 await）。
-    messages 由调用方显式传入：索引对象上没有 messages。 */
-async function saveSession(id, messages, title){
+
+    ★ `touch` 决定要不要把 `updatedAt` 顶到"现在"。侧栏是**按这个时间降序**排的，
+    所以它必须只表示"**内容真的变了**"：
+    * `true`  —— 用户发了消息 / 拿到了回答（`saveCurrent`）；
+    * `false` —— 切换会话、离开会话、纯落盘。
+
+    踩过的坑（用户实测）：`switchTo` 里顺手 `saveSession(prevId, …)` 也会顶时间，
+    于是**"点了某个历史对话"本身就算一次活动** —— 只是看了一眼，
+    那个会话就跳到最上面去了，而且顶的还是"离开的那个"而不是"打开的那个"。
+    */
+async function saveSession(id, messages, title, touch){
   const s = findSession(id);
   if (!s) return;
   if (title) s.title = title;
-  s.updatedAt = Date.now();
+  if (touch) s.updatedAt = Date.now();
   saveIndex();
   await idbPut(id, {id: s.id, serverId: s.serverId, title: s.title,
                     updatedAt: s.updatedAt, messages: messages || []});
 }
 
-/** 保存当前会话（`chat` 就是它的 messages）。 */
+/** 保存当前会话（`chat` 就是它的 messages）。**算一次活动**。 */
 async function saveCurrent(){
   const s = findSession(currentId);
   if (!s) return;
-  await saveSession(currentId, chat, autoTitle(s.title, chat));
+  await saveSession(currentId, chat, autoTitle(s.title, chat), true);
 }
 
 /** 新建会话并切过去（**旧会话保留**）。
@@ -870,6 +879,8 @@ function newConversation(){
   renderAll();
   elInput.focus();
   const prevTitle = prev ? autoTitle(prev.title, prevChat) : "";
+  // 纯落盘，**不 touch**：离开一个会话不算它的活动。
+  // 新会话的 updatedAt 由 newSession() 给（创建即活动），所以它也排在最前。
   saveSession(prevId, prevChat, prevTitle).then(() => saveSession(s.id, []));
 }
 
@@ -900,7 +911,8 @@ async function switchTo(id){
   renderAll();
   elInput.focus();
   const prevTitle = prev ? autoTitle(prev.title, prevChat) : "";
-  saveSession(prevId, prevChat, prevTitle);      // 旧会话异步落盘
+  // 纯落盘，**不 touch**：离开一个会话不算它的活动
+  saveSession(prevId, prevChat, prevTitle);
 }
 
 async function deleteSession(id){
@@ -1001,7 +1013,12 @@ function dayGroup(ts){
 function renderSidebar(){
   const box = $("sideList");
   box.innerHTML = "";
-  const ordered = sessions.slice().sort((a,b) => (b.updatedAt||0) - (a.updatedAt||0));
+  // 按"最后一次**内容活动**"降序（最新的在最上面）。`updatedAt` 只在真的
+  // 发消息/拿到回答时才顶（见 saveSession 的 touch 参数）——单纯点开看一眼
+  // 不会改变顺序。同毫秒时按索引稳定排，避免列表无谓跳动。
+  const ordered = sessions.map((s, i) => ({s, i}))
+    .sort((a, b) => ((b.s.updatedAt || 0) - (a.s.updatedAt || 0)) || (a.i - b.i))
+    .map(x => x.s);
   let group = null;
   ordered.forEach(s => {
     const g = dayGroup(s.updatedAt);
