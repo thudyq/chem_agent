@@ -11,6 +11,11 @@
 #   附件与会话目录都落在 <root>/data 下）。
 # - .env 由应用自己从项目根目录读取（core/config.py），无需 EnvironmentFile。
 # - 只监听 127.0.0.1，公网入口交给 Nginx（见 deploy/nginx-chem-agent.conf）。
+# - ★ `--forwarded-allow-ips=127.0.0.1`（安全审查 R4）：限流取的是 uvicorn 净化
+#   后的客户端 IP，而 uvicorn **只在直连对端是受信代理时**才采信
+#   `X-Forwarded-For`。这里显式写死，不依赖默认值；若你的反代不是从 127.0.0.1
+#   连进来（同机 Docker 网络、另有一层 LB），改成那个 IP/网段。
+# - ★ `--workers 1`：限流桶是**进程内**内存，多 worker 会让实际额度 ×worker 数。
 
 [Unit]
 Description=Chem_Agent — chemistry visualization agent (OpenAI-compatible API + BYOK web page)
@@ -24,7 +29,8 @@ WorkingDirectory=/var/www/chem_agent
 Environment=PYTHONUNBUFFERED=1
 # 依实际虚拟环境调整（示例为项目内 venv）
 ExecStart=/var/www/chem_agent/venv/bin/python -m uvicorn api:app \
-    --host 127.0.0.1 --port 8000 --workers 1 --timeout-keep-alive 75
+    --host 127.0.0.1 --port 8000 --workers 1 --timeout-keep-alive 75 \
+    --forwarded-allow-ips=127.0.0.1
 Restart=always
 RestartSec=5
 # 机理题生成 + LaTeX 编译较吃内存，可按机器配置调整

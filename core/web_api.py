@@ -149,17 +149,36 @@ def _reset_rate_limit_for_tests() -> None:
 
 
 def _client_ip(request: Request) -> str:
-    """客户端 IP（优先取反代链首个地址）。"""
-    xff = request.headers.get("x-forwarded-for", "")
-    if xff:
-        first = xff.split(",")[0].strip()
-        if first:
-            return first
-    try:
-        return ipaddress.ip_address(request.client.host).compressed \
-            if request.client else "unknown"
-    except ValueError:
+    """限流用的客户端 IP —— **只认 uvicorn 净化过的 `request.client`**。
+
+    ★ 安全审查 R4：这里过去直接取 `X-Forwarded-For` 的**第一个**地址，而那个
+    头是客户端**完全可以自己伪造**的。于是每个请求换一个假地址就得到一个全新
+    的限流桶，"每 IP 20 次/分钟"形同虚设 —— 而 R5（假 key 打慢端点）与 R6
+    （塞满磁盘）都靠它放大。
+
+    正确做法是**不要自己解析这个头**：uvicorn 的 `ProxyHeadersMiddleware`
+    已经做了（且做得比我们原来的写法对）——
+    1. 只在**直连对端**是受信代理时才采信 XFF（默认只信 `127.0.0.1`，
+       可用 `--forwarded-allow-ips` 扩展）；
+    2. 取真实客户端用的是"**从右往左找第一个不受信地址**"的标准算法，
+       而不是盲取第一个；
+    3. 结果写回 `scope["client"]`，也就是我们读的 `request.client`。
+
+    反过来说：以前那份自己写的解析**等于把 uvicorn 已经净化好的结果丢掉、
+    换成客户端可控的原始头**。
+
+    代价（文档已写明）：反代若不是从 `127.0.0.1` 连进来、又没配
+    `--forwarded-allow-ips`，所有用户会共用一个桶 —— 限流变严，属于
+    **失败朝安全一侧**（宁可误限，不可绕过）。
+    """
+    client = request.client
+    if not client or not client.host:
         return "unknown"
+    try:
+        return ipaddress.ip_address(client.host).compressed
+    except ValueError:
+        # 非 IP 的对端标识（unix socket、TestClient 的 "testclient" 等）
+        return client.host
 
 
 # ---------------------------------------------------------------- 凭证

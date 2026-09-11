@@ -116,7 +116,10 @@ CHEM_AGENT_TMPDIR=/var/tmp/chem_agent
 ### 2.3 Nginx 反向代理（若尚未配置）
 
 关键点：**SSE 不能缓冲**，否则网页"打字机"效果变成一次性吐出；**转发真实 IP**，
-否则限流把所有用户算作同一人（Nginx 的 IP）。
+否则限流把所有用户算作同一人（Nginx 的 IP）。★ 转发的写法必须是**覆盖**
+（`$remote_addr`），**不能**用 `$proxy_add_x_forwarded_for` —— 后者是"追加"，
+客户端自己伪造的 `X-Forwarded-For` 会被原样留在最前面，攻击者每个请求换一个假
+IP 就得到一个新的限流桶，"每 IP 20 次/分钟"形同虚设（安全审查 R4）。
 
 参考 `deploy/nginx-chem-agent.conf`（本仓库内，可直接改域名后使用）：
 
@@ -126,7 +129,7 @@ location / {
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-For $remote_addr;   # ★ 覆盖，不是 $proxy_add_x_forwarded_for
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_buffering off;              # ★ SSE 必需
     proxy_cache off;
@@ -137,10 +140,24 @@ location / {
 
 改完 reload：`sudo nginx -t && sudo systemctl reload nginx`。
 
+> 服务端**自己不再解析**这个头（安全审查 R4）：它只读 uvicorn 净化后的
+> `request.client`。uvicorn 默认只信任来自 `127.0.0.1` 的代理，并按"从右往左
+> 找第一个不受信地址"取真实客户端。**若你的反代不是从 `127.0.0.1` 连进来**
+> （例如跑在同一台机器的 Docker 网络里、或另有一层 LB），必须给 uvicorn 加
+> `--forwarded-allow-ips=<反代 IP 或网段>`，否则所有用户会共用一个限流桶
+> （限流变严，属于安全一侧的失败）。
+
 ### 2.4 systemd 单元参考
 
-`deploy/chem-agent.service`（本仓库内）。若沿用现有单元，确认两点即可：
-`WorkingDirectory=/var/www/chem_agent`、`ExecStart=... -m uvicorn api:app --host 127.0.0.1 --port 8000`。
+`deploy/chem-agent.service`（本仓库内）。若沿用现有单元，确认三点即可：
+`WorkingDirectory=/var/www/chem_agent`、
+`ExecStart=... -m uvicorn api:app --host 127.0.0.1 --port 8000`、
+**`--forwarded-allow-ips=127.0.0.1`**（安全审查 R4：限流取的是 uvicorn 净化后的
+客户端 IP，uvicorn 只在直连对端是受信代理时才采信 `X-Forwarded-For`；反代不在
+本机时改成它的 IP/网段）。
+
+> 另注：限流桶是**进程内**内存，`--workers` 大于 1 会让有效额度成倍放大。
+> 单 worker 足够（生成是 IO 密集），参考单元里就是 `--workers 1`。
 
 ```bash
 sudo cp deploy/chem-agent.service /etc/systemd/system/chem_agent.service   # 首次
