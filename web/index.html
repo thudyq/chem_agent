@@ -779,7 +779,7 @@ async function idbDel(id){
    localStorage 立刻被 base64 图片撑爆（5MB 配额），而 `setItem` 抛异常
    很容易被 catch 吞掉，表现为"历史莫名其妙不保存"。
 */
-const INDEX_FIELDS = ["id", "serverId", "title", "titleAi", "updatedAt"];
+const INDEX_FIELDS = ["id", "serverId", "title", "titleAi", "used", "updatedAt"];
 
 function loadIndex(){
   try {
@@ -825,8 +825,19 @@ function titleFrom(messages){
 }
 
 function newSession(){
-  return {id: newId(), serverId: newId(), title: "新对话",
-          titleAi: false, updatedAt: Date.now()};
+  return {id: newId(), serverId: newId(), title: "新对话", titleAi: false,
+          used: false, updatedAt: Date.now()};
+}
+
+/** 这个会话"用过"没有（= 有过任何消息）。
+
+    侧栏**只列用过的会话**（与 ChatGPT 一致：空白会话不进历史），
+    而且全库**最多保留一个**空白会话 —— 否则点几次"新对话"就攒一堆空壳。
+    `currentId` 那个额外用内存里的 `chat` 兜一下，避免索引写入滞后时误判。 */
+function sessionUsed(s){
+  if (!s) return false;
+  if (s.used) return true;
+  return s.id === currentId && chat.length > 0;
 }
 
 /** 首条用户提问到了就把"新对话"改成真实标题（只在还没改过时）。 */
@@ -850,9 +861,11 @@ async function saveSession(id, messages, title, touch){
   const s = findSession(id);
   if (!s) return;
   if (title) s.title = title;
+  if ((messages || []).length) s.used = true;   // 有内容了 → 从此进历史列表
   if (touch) s.updatedAt = Date.now();
   saveIndex();
   await idbPut(id, {id: s.id, serverId: s.serverId, title: s.title,
+                    titleAi: !!s.titleAi, used: !!s.used,
                     updatedAt: s.updatedAt, messages: messages || []});
 }
 
@@ -864,9 +877,29 @@ async function saveCurrent(){
 }
 
 /** 新建会话并切过去（**旧会话保留**）。
-    切换是同步的：点"新对话"不应等 IndexedDB。旧会话的消息在 prevChat 里，
-    异步落盘时数据不会丢。 */
+
+    ★ 两条约束（用户裁定）：
+    1. **最多只有一个空白会话** —— 已经在空白会话里就什么都不做；
+       库里若已有别的空白会话就切过去复用，绝不再开第三个。
+    2. 空白会话**不进侧栏**（见 sessionUsed）—— 与 ChatGPT 一致：
+       发出第一条消息之后它才出现在历史里。
+
+    切换全程同步（点"新对话"不该等 IndexedDB）；空白会话按定义没有消息，
+    所以可以直接 `chat = []`，不必去读库。 */
 function newConversation(){
+  if (!sessionUsed(findSession(currentId))){ elInput.focus(); return; }
+
+  const blank = sessions.find(s => !sessionUsed(s));
+  if (blank){
+    currentId = blank.id;
+    chat = [];
+    saveIndex();
+    renderSidebar();
+    renderAll();
+    elInput.focus();
+    return;
+  }
+
   const prevId = currentId, prevChat = chat;
   const prev = findSession(prevId);
   const s = newSession();
@@ -882,6 +915,20 @@ function newConversation(){
   // 纯落盘，**不 touch**：离开一个会话不算它的活动。
   // 新会话的 updatedAt 由 newSession() 给（创建即活动），所以它也排在最前。
   saveSession(prevId, prevChat, prevTitle).then(() => saveSession(s.id, []));
+}
+
+/** 空白会话最多留一个：多余的从索引与 IndexedDB 里清掉。
+    侧栏本来就不显示它们，留着只会越积越多（老版本点几次"新对话"就会攒）。 */
+function pruneUnusedSessions(){
+  const cur = findSession(currentId);
+  const keep = sessionUsed(cur) ? sessions.find(s => !sessionUsed(s)) : cur;
+  const drop = sessions.filter(s => !sessionUsed(s) && s !== keep);
+  if (!drop.length) return 0;
+  const ids = new Set(drop.map(s => s.id));
+  sessions = sessions.filter(s => !ids.has(s.id));
+  drop.forEach(s => { idbDel(s.id); });
+  saveIndex();
+  return drop.length;
 }
 
 /** 会话数超上限时删掉最旧的（连同它的消息）。 */
@@ -931,7 +978,8 @@ async function deleteSession(id){
   await idbDel(id);
   if (currentId === id){
     sessions.sort((a,b) => (b.updatedAt||0) - (a.updatedAt||0));
-    const next = sessions[0];
+    // 回退到最近一个**用过**的会话；一个都没有才新建空白会话
+    const next = sessions.find(sessionUsed) || sessions[0];
     if (next){
       currentId = next.id;
       const rec = await idbGet(next.id);
@@ -1013,10 +1061,12 @@ function dayGroup(ts){
 function renderSidebar(){
   const box = $("sideList");
   box.innerHTML = "";
-  // 按"最后一次**内容活动**"降序（最新的在最上面）。`updatedAt` 只在真的
-  // 发消息/拿到回答时才顶（见 saveSession 的 touch 参数）——单纯点开看一眼
-  // 不会改变顺序。同毫秒时按索引稳定排，避免列表无谓跳动。
-  const ordered = sessions.map((s, i) => ({s, i}))
+  // 只列**用过的**会话：空白会话不进历史（ChatGPT 同款行为）。
+  // 按"最后一次内容活动"降序（最新的在最上面）；`updatedAt` 只在真的发消息/
+  // 拿到回答时才顶（见 saveSession 的 touch 参数）——单纯点开看一眼不改变顺序。
+  // 同毫秒时按索引稳定排，避免列表无谓跳动。
+  const visible = sessions.filter(sessionUsed);
+  const ordered = visible.map((s, i) => ({s, i}))
     .sort((a, b) => ((b.s.updatedAt || 0) - (a.s.updatedAt || 0)) || (a.i - b.i))
     .map(x => x.s);
   let group = null;
@@ -1061,10 +1111,10 @@ function renderSidebar(){
     row.onclick = () => switchTo(s.id);
     box.appendChild(row);
   });
-  if (!sessions.length) box.innerHTML = '<div class="side-group">还没有会话</div>';
+  if (!visible.length) box.innerHTML = '<div class="side-group">还没有会话</div>';
   if (!storageWarned){
     $("sideFoot").textContent =
-      `${sessions.length} 个会话 · 消息存在本机浏览器，不上传服务端`;
+      `${visible.length} 个会话 · 消息存在本机浏览器，不上传服务端`;
   }
 }
 
@@ -2386,6 +2436,7 @@ document.addEventListener("keydown", (e) => {
     const t = autoTitle(cur.title, chat);
     if (t !== cur.title) cur.title = t;
   }
+  pruneUnusedSessions();          // 老版本可能攒了多个空白会话，收成一个
   saveIndex();
   renderSidebar();
   renderAll();
