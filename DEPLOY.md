@@ -163,6 +163,35 @@ sudo systemctl daemon-reload && sudo systemctl restart chem_agent
 > 安全提示：把页面放到第三方域名时，用户的 Key 会经由那个域名的 JS 发出——
 > 只托管你自己控制的页面。
 
+### 2.6 ★ 跑 LaTeX 的隔离要求（安全审查 R1，20260911）
+
+图示是靠**编译 LaTeX** 画出来的，而 `.tex` 内容来自大模型 —— 也就是**可以被用户
+提问影响**。TeX 的 `\input`/`\openin`/`\read` 能读服务器上任意可读文件，并把内容
+排版进图片**回传给访客**（实测见 `instructions/Security-Review.md` R1）。
+
+代码里已经加了两层（源码闸门 + 引擎级加固），但**引擎级限制只有 TeX Live/kpathsea
+认**（`--cnf-line=openin_any=p`），MiKTeX 不认。所以最后一道必须由部署形态保证：
+
+```bash
+# ① 先确认这台机器的引擎到底拦不拦得住（别假定）
+python -m utils.latex_compile --security-check
+#    file_read_restricted: true  → 引擎已拦住越界读文件
+#    file_read_restricted: false → 拦不住，必须靠下面的隔离
+
+# ② 无论结果如何，都让编译进程读不到密钥文件
+chmod 600 /var/www/chem_agent/.env        # 只有服务属主可读
+```
+
+* **最省**：给编译单独开一个系统用户，`.env` 归另一个用户所有。
+* **更稳**：把编译放进容器 / systemd 沙箱，只挂一个空的可写工作目录，例如
+  `ProtectHome=yes`、`ReadOnlyPaths=/var/www/chem_agent`、
+  `InaccessiblePaths=/var/www/chem_agent/.env`。
+* 用了 `ProtectSystem`/`PrivateTmp` 之类的沙箱时，记得给 LaTeX 留一个可写的临时
+  目录（配合 `CHEM_AGENT_TMPDIR`，见 §2.2），否则图示会全部渲染失败。
+
+> 服务启动时会打一行 `[startup] LaTeX 加固：...`，把当前生效的加固选项写进日志；
+> 引擎不支持文件访问限制时还会额外警告一次。
+
 ---
 
 ## 3. 验收清单（部署后逐项确认）
@@ -191,6 +220,12 @@ curl -s -X POST $BASE/api/chat -H 'Content-Type: application/json' \
 curl -s -X POST $BASE/api/chat -H 'Content-Type: application/json' \
      -H 'X-Chem-Api-Key: 你的Key' -H 'X-Chem-Model: deepseek-flash' \
      -d '{"messages":[{"role":"user","content":"画出苯的结构式"}]}' | head -c 400
+
+# ⑥ LaTeX 编译的文件访问限制（安全审查 R1）——★ 必须跑，别假定
+python -m utils.latex_compile --security-check
+#    file_read_restricted: true  → 引擎已拦住越界读文件
+#    file_read_restricted: false → 这台机器拦不住（如 MiKTeX），必须做 §2.6 的隔离
+python -m utils.latex_compile --security-check --strict   # 没拦住则以退出码 1 结束
 ```
 
 浏览器侧逐项检查：

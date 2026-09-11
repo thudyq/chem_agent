@@ -83,7 +83,25 @@ async def _lifespan(_app: FastAPI):
     _tmp_problem = tempdir.probe()
     if _tmp_problem:
         print("[startup] 警告：" + _tmp_problem)
+    # LaTeX 加固探测（安全审查 R1）：要跑几次引擎选项探测，**不阻塞启动**，
+    # 放守护线程里预热；结论只打一行，避免"编译有没有被限制"变成不可见状态。
+    threading.Thread(target=_latex_hardening_warmup, daemon=True,
+                     name="latex-hardening-probe").start()
     yield
+
+
+def _latex_hardening_warmup() -> None:
+    """后台探测 LaTeX 引擎可用的加固选项并打一行日志（失败不影响启动）。"""
+    try:
+        from utils import latex_compile as _lc
+        st = _lc.security_status()
+        flags = " ".join(st.get("flags") or []) or "(无)"
+        print(f"[startup] LaTeX 加固：{flags} —— {st.get('note')}")
+        if not st.get("flags"):
+            print("[startup] 警告：引擎不支持任何加固选项，"
+                  "文件读取限制只能靠独立用户/容器（见 Security-Review.md R1）")
+    except Exception as e:      # 探测失败绝不能拖垮服务启动
+        print(f"[startup] LaTeX 加固探测失败（不影响服务）: {e}")
 
 
 app = FastAPI(title="Chem_Agent", version="1.0.0", lifespan=_lifespan)
