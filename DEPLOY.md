@@ -41,17 +41,38 @@ core/credentials.py：把请求头里的凭证放进 contextvars，管线（app.
 # 1) 依赖（新增为零：只用已有的 fastapi/uvicorn）
 pip install -r requirements.txt
 
-# 2) 起服务（本地自测本机模型可加 WEB_ALLOW_PRIVATE_BASE_URL=1）
-#    Windows PowerShell:
-$env:WEB_ALLOW_PRIVATE_BASE_URL="1"; python -m uvicorn api:app --host 127.0.0.1 --port 8000
-#    Linux/macOS:
-WEB_ALLOW_PRIVATE_BASE_URL=1 python -m uvicorn api:app --host 127.0.0.1 --port 8000
+# 2) 起服务（本地自测**默认就这样**，不需要任何额外变量）
+python -m uvicorn api:app --host 127.0.0.1 --port 8000
+
+#    ─────────────── ⚠️ 下面这个开关只给"本地连自己电脑上的模型"用 ───────────────
+#    WEB_ALLOW_PRIVATE_BASE_URL=1 会让服务端的"内网/本机端点"拦截**整体失效**
+#    （安全审查 R7）。它同时关掉两道防护：
+#      · R2 —— 视觉端点的 SSRF 校验
+#      · R3 —— 出站请求"不跟随跳转"
+#    也就是说：**线上开着它 = 把服务器变成任意内网地址的请求跳板**，
+#    而且不会有任何日志提醒你。所以它**绝不能写进线上的 `.env` 或 systemd 单元**。
+#
+#    只在需要连本机模型时**临时**带一次（用完即弃，不要落盘）：
+#      Windows PowerShell: $env:WEB_ALLOW_PRIVATE_BASE_URL="1"; python -m uvicorn api:app --host 127.0.0.1 --port 8000
+#      Linux/macOS:        WEB_ALLOW_PRIVATE_BASE_URL=1 python -m uvicorn api:app --host 127.0.0.1 --port 8000
+#    ─────────────────────────────────────────────────────────────────────────────
 
 # 3) 打开页面
 #    http://127.0.0.1:8000/chat
 #    在设置面板填你自己的 Key（端点默认 https://api.deepseek.com/v1），保存后提问：
 #    "画出苯的结构式" / "用机理箭头说明 SN2 反应的电子流向"
 ```
+
+**线上随时可以核实这个开关没被打开**（`false` 才是对的）：
+
+```bash
+curl -s https://你的域名/api/web-config | grep -o '"allow_private_base_url":[a-z]*'
+```
+
+> 为什么用这条而不是翻文件：`.env` 是 `python-dotenv` 在**运行时**注入
+> `os.environ` 的，`/proc/<pid>/environ` **看不到**它。上面这条走的是应用自己的
+> 判断结果，是运行时事实。要查文件就查两处：项目 `.env` 与 systemd 单元
+> （含 drop-in）：`systemctl cat chem_agent | grep -i allow_private`。
 
 单元测试（不联网、不花钱）：
 
