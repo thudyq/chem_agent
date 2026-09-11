@@ -1156,9 +1156,27 @@ function setSidebar(open){
     $("scrim").classList.remove("show");
     try { localStorage.setItem(LS_SIDE, open ? "1" : "0"); } catch(e){}
   }
+  syncChrome();
 }
 function sidebarOpen(){
   try { return localStorage.getItem(LS_SIDE) !== "0"; } catch(e){ return true; }
+}
+
+/** 头栏与侧栏的控件显隐 —— 原则：**同一时刻每个动作只有一个入口**
+    （用户反馈：左侧"新对话"与上栏"新对话"重复；侧栏"«"与上栏"≡"重复）。
+
+    * 侧栏**可见** → 收起用侧栏里的「«」，新建用侧栏里的「＋ 新对话」；
+      头栏这两个按钮**隐藏**，不再重复。
+    * 侧栏**不可见**（宽屏收起了 / 窄屏抽屉关着）→ 头栏出现「☰」与「新对话」，
+      否则这两个动作就没有入口了（窄屏尤其需要）。
+
+    与 DeepSeek / ChatGPT 同一个思路：收起控件跟着侧栏走，侧栏不在时
+    才把头栏那一组放出来。 */
+function syncChrome(){
+  const visible = sidebarVisible();
+  const bSide = $("btnSide"), bNew = $("btnNew");
+  if (bSide) bSide.style.display = visible ? "none" : "";
+  if (bNew) bNew.style.display = visible ? "none" : "";
 }
 
 
@@ -2443,8 +2461,11 @@ document.addEventListener("keydown", (e) => {
   setSidebar(sidebarOpen());
   refreshKeyChip();
   autoGrow();
-  // 窄屏时旋屏/改窗口 → 收掉抽屉，避免半开状态卡住
-  window.addEventListener("resize", () => { if (isNarrow()) setSidebar(false); });
+  // 窄屏时旋屏/改窗口 → 收掉抽屉，避免半开状态卡住；两种情况都要重算头栏控件
+  window.addEventListener("resize", () => {
+    if (isNarrow()) setSidebar(false);
+    else syncChrome();
+  });
   if (!loadSettings().key) openSheet(true);
   else elInput.focus();
 })();
