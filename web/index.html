@@ -269,6 +269,21 @@
     background:var(--accent);border-color:var(--accent);color:var(--accent-ink);
   }
   .composer .tools button.primary:hover{background:var(--accent-hover);border-color:var(--accent-hover)}
+  /* 生成中：发送按钮变"停止"（描边款，避免误以为还在发送） */
+  .composer .tools button.primary.stop{
+    background:var(--surface);color:var(--err);border-color:var(--err-line);
+  }
+  .composer .tools button.primary.stop:hover{background:var(--err-bg)}
+  /* 就地编辑已发问题 */
+  .editbox{
+    width:100%;min-height:64px;max-height:220px;resize:vertical;font:inherit;
+    font-size:14px;line-height:1.6;padding:8px 10px;color:var(--ink);
+    background:var(--panel);border:1px solid var(--accent);border-radius:var(--radius-sm);
+    outline:none;
+  }
+  .editbar{display:flex;gap:8px;justify-content:flex-end;margin-top:8px}
+  .editbar button{font-size:13px;padding:5px 12px}
+  .edittip{font-size:11.5px;color:var(--muted);margin-top:6px}
   .thumbs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
   .thumb{position:relative;width:76px;height:76px;border:1px solid var(--line);
          border-radius:var(--radius-sm);overflow:hidden;background:var(--skeleton)}
@@ -323,6 +338,12 @@
   }
   .side-foot{border-top:1px solid var(--line);padding:10px 13px;font-size:11px;
              color:var(--muted);line-height:1.7}
+  .side-acts{display:flex;gap:6px;margin-top:8px}
+  .side-acts button{
+    flex:1;min-width:0;font-size:11.5px;padding:5px 6px;border-radius:8px;
+    color:var(--muted);background:var(--surface);
+  }
+  .side-acts button:hover{color:var(--ink);background:var(--hover)}
   .scrim{position:fixed;inset:0;background:rgba(8,12,20,.5);z-index:60;display:none}
   .scrim.show{display:block}
   @media (min-width:861px){ .scrim{display:none !important} }
@@ -431,7 +452,13 @@
     </div>
     <div class="side-new" id="btnNewSide" title="新建对话（Ctrl+K）">＋ 新对话</div>
     <div class="side-list" id="sideList"></div>
-    <div class="side-foot" id="sideFoot"></div>
+    <div class="side-foot">
+      <div id="sideFoot"></div>
+      <div class="side-acts">
+        <button id="btnExportMd" title="导出当前会话为 Markdown">导出 .md</button>
+        <button id="btnExportJson" title="导出当前会话为 JSON（含 LaTeX 与上传图片）">导出 .json</button>
+      </div>
+    </div>
   </aside>
   <div class="scrim" id="scrim"></div>
 
@@ -656,6 +683,7 @@ let serverCfg = {default_base_url:"https://api.deepseek.com/v1",
                  rate_limit_per_minute:20};
 let sending = false;
 let pendingImages = [];      // [{name, dataUrl}]
+let currentAbort = null;     // 本轮生成的中断器（"停止"按钮用）
 
 /* ---------------- 会话模型 ----------------
    session = {id, serverId, title, updatedAt, messages}
@@ -1576,14 +1604,29 @@ function renderAll(){
   scrollDown(true);
 }
 
-function addActions(bubble, m){
+function addActions(bubble, m, idx){
   const acts = document.createElement("div");
   acts.className = "acts";
+  const isLast = typeof idx === "number" && idx === chat.length - 1;
 
   if (m.content){
     const bCopy = document.createElement("button");
     wireCopy(bCopy, () => m.content, "复制");
     acts.appendChild(bCopy);
+  }
+  if (m.role === "user"){
+    // 只给**最后一条**用户消息提供「编辑」：没有分支功能，改中间的问题
+    // 等于截断它后面的全部内容，不打招呼就删太粗暴。
+    const lastUser = idx === chat.length - 1 ||
+      (idx === chat.length - 2 &&
+       (chat[chat.length - 1] || {}).role === "assistant");
+    if (lastUser && !sending){
+      const bEd = document.createElement("button");
+      bEd.textContent = "编辑";
+      bEd.title = "改这条问题并重新发送";
+      bEd.onclick = () => startEditMsg(idx);
+      acts.appendChild(bEd);
+    }
   }
   if (m.role === "assistant"){
     // 图示：放大 / 下载（图片是相对 URL，与页面同源）
@@ -1603,6 +1646,13 @@ function addActions(bubble, m){
       const bSrc = document.createElement("button");
       wireCopy(bSrc, () => m.latex.join("\n\n"), "复制全部 LaTeX");
       acts.appendChild(bSrc);
+    }
+    if (isLast && !sending){
+      const bRe = document.createElement("button");
+      bRe.textContent = "重新生成";
+      bRe.title = "用同一个问题再问一次";
+      bRe.onclick = () => regenerate();
+      acts.appendChild(bRe);
     }
   }
   if (acts.children.length) bubble.appendChild(acts);
@@ -1655,7 +1705,7 @@ function attachLatexPanels(bubble, sources){
   });
 }
 
-function buildMsg(m){
+function buildMsg(m, idx){
   const wrap = document.createElement("div");
   wrap.className = "msg " + (m.role === "user" ? "user" : "bot");
   const who = document.createElement("div");
@@ -1697,7 +1747,7 @@ function buildMsg(m){
     if (m.latex && m.latex.length) attachLatexPanels(bubble, m.latex);
   }
   // 流式期间不挂操作条（那时内容还不完整、也还没有图）
-  if (!m.streaming) addActions(bubble, m);
+  if (!m.streaming) addActions(bubble, m, idx);
   wrap.appendChild(who); wrap.appendChild(bubble);
   return wrap;
 }
@@ -1724,6 +1774,41 @@ function buildHeaders(s){
   return h;
 }
 
+/** 组装发给服务端的 messages。**前提**：`chat` 的最后一条就是要回答的用户消息
+    （发送 / 重新生成 / 编辑三个入口都保证这一点）。
+    助手历史只给纯文本摘要（去锚定：不回喂上一版图示/标记）。 */
+function buildTurnMessages(){
+  const msgs = [];
+  chat.slice(0, -1).forEach(m => {
+    if (m.role === "user"){
+      msgs.push({role:"user", content: m.content || "（图片问题）"});
+    } else if (m.content){
+      msgs.push({role:"assistant", content:"（已给出图示与说明）"});
+    }
+  });
+  const last = chat[chat.length - 1] || {};
+  const text = (last.content || "").trim();
+  const imgs = last.images || [];
+  const parts = [];
+  if (text) parts.push({type:"text", text:text});
+  imgs.forEach(u => parts.push({type:"image_url", image_url:{url:u}}));
+  msgs.push({role:"user", content: parts.length > 1 ? parts
+                                                 : (text || "（请识别图片）")});
+  return msgs;
+}
+
+/** 发送 / 重新生成 / 编辑 三个入口共用的起手式。
+    ★ setSending 必须**同步**执行且先于任何 await —— `sending` 是防重入闸门，
+    晚一个任务置位等于没有闸门（连按两次 Enter 会发两次请求）。 */
+async function startTurn(){
+  if (!loadSettings().key){ setSending(false); openSheet(true); return; }
+  setSending(true);
+  scrollDown(true);
+  await saveCurrent();       // 持久化串行完成，避免与收尾那次写竞争
+  renderSidebar();
+  await runTurn();
+}
+
 async function send(){
   if (sending) return;
   const s = loadSettings();
@@ -1734,45 +1819,101 @@ async function send(){
     alert("问题过长（上限 " + serverCfg.max_question_chars + " 字符）");
     return;
   }
-
   // 用户消息立即上屏（不等回答）
   const userMsg = {role:"user", content:text,
                    images: pendingImages.map(p => p.dataUrl)};
   chat.push(userMsg);
-  const node = buildMsg(userMsg);
   elEmpty.style.display = "none";
-  elStream.appendChild(node);
+  elStream.appendChild(buildMsg(userMsg, chat.length - 1));
   elInput.value = "";
   autoGrow();
   pendingImages = [];
   renderThumbs();
-  // ★ setSending 必须**同步**执行：下面还有 await，若把它放到 await 之后，
-  // "生成中…"与按钮禁用会晚一个任务才生效，连按两次 Enter 就会重复发请求
-  // （`sending` 是防重入闸门，晚置位等于没有闸门 —— 20260910 实测发现）
-  setSending(true);
-  scrollDown(true);
-  await saveCurrent();       // 持久化串行完成，避免与收尾那次写竞争
-  renderSidebar();
+  await startTurn();
+}
 
-  // 组装发给服务端的 messages（含多轮历史；助手历史只给纯文本摘要）
-  const messages = [];
-  chat.slice(0, -1).forEach(m => {
-    if (m.role === "user"){
-      messages.push({role:"user", content: m.content || "（图片问题）"});
-    } else if (m.content){
-      // 去锚定：不回喂上一版图示/标记，只报"已给出图示与说明"
-      messages.push({role:"assistant", content:"（已给出图示与说明）"});
+/** 重新生成：砍掉最后一条用户消息**之后**的全部内容（含失败/被停止的回答），
+    用同一个问题再问一次。 */
+async function regenerate(){
+  if (sending) return;
+  let i = chat.length - 1;
+  while (i >= 0 && chat[i].role !== "user") i--;
+  if (i < 0) return;
+  chat.splice(i + 1);
+  renderAll();
+  await startTurn();
+}
+
+/** 编辑已发问题：就地变成输入框；保存后**丢弃这条之后的所有消息**再重问。
+    只对最后一条用户消息提供（没有分支功能，改中间的问题等于截断后面全部，
+    不打招呼就删太粗暴）。 */
+function startEditMsg(idx){
+  if (sending) return;
+  const m = chat[idx];
+  if (!m || m.role !== "user") return;
+  const nodes = elStream.querySelectorAll(".msg");
+  const node = nodes[idx];
+  if (!node) return;
+  const bubble = node.querySelector(".bubble");
+  bubble.innerHTML = "";
+
+  const ta = document.createElement("textarea");
+  ta.className = "editbox";
+  ta.value = m.content || "";
+  const tip = document.createElement("div");
+  tip.className = "edittip";
+  const later = chat.length - 1 - idx;
+  tip.textContent = later > 0
+    ? `保存后，这条之后的 ${later} 条消息会被删除`
+    : "保存后将重新发送这个问题";
+  const bar = document.createElement("div");
+  bar.className = "editbar";
+  const cancel = document.createElement("button");
+  cancel.textContent = "取消";
+  const ok = document.createElement("button");
+  ok.className = "primary";
+  ok.textContent = "保存并重新发送";
+  bar.appendChild(cancel);
+  bar.appendChild(ok);
+  bubble.appendChild(ta);
+  bubble.appendChild(tip);
+  bubble.appendChild(bar);
+  ta.focus();
+  ta.setSelectionRange(ta.value.length, ta.value.length);
+
+  const cancelEdit = () => renderAll();
+  cancel.onclick = cancelEdit;
+  ta.onkeydown = (e) => {
+    if (e.key === "Escape" && !e.isComposing){ e.preventDefault(); cancelEdit(); }
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing){
+      e.preventDefault(); ok.click();
     }
-  });
-  const parts = [];
-  if (text) parts.push({type:"text", text:text});
-  userMsg.images.forEach(u => parts.push({type:"image_url", image_url:{url:u}}));
-  messages.push({role:"user", content: parts.length > 1 ? parts
-                                                 : (text || "（请识别图片）")});
+  };
+  ok.onclick = async () => {
+    const text = ta.value.trim();
+    if (!text) return;
+    chat.splice(idx + 1);                 // 丢弃这条之后的所有消息
+    chat[idx].content = text;
+    renderAll();
+    await startTurn();
+  };
+}
+
+/** 停止生成：中断本次 fetch。已经收到的内容**保留**（可继续复制/重新生成）。 */
+function stopGeneration(){
+  if (!sending || !currentAbort) return;
+  try { currentAbort.abort(); } catch(e){}
+}
+
+/** 一轮生成：把 `chat` 最后那条用户消息问出去，流式写进新建的助手消息。
+    调用方负责保证"chat 末尾是用户消息"且已 `setSending(true)`。 */
+async function runTurn(){
+  const s = loadSettings();
+  const messages = buildTurnMessages();
 
   const botMsg = {role:"assistant", content:"", pending:true, streaming: true};
   chat.push(botMsg);
-  const botNode = buildMsg(botMsg);
+  const botNode = buildMsg(botMsg, chat.length - 1);
   elStream.appendChild(botNode);
   const bubble = botNode.querySelector(".bubble");
   const noticeEl = bubble.querySelector(".note");
@@ -1803,9 +1944,11 @@ async function send(){
     });
   };
 
+  currentAbort = new AbortController();
   try {
     const resp = await fetch("api/chat", {
       method:"POST", headers: buildHeaders(s),
+      signal: currentAbort.signal,
       body: JSON.stringify({messages: messages, stream: true,
                             session_id: currentServerId()})
     });
@@ -1882,20 +2025,34 @@ async function send(){
     // 图示（PNG）异步加载完成后再滚一次（仅当用户仍贴底）
     setTimeout(() => scrollDown(false), 400);
   } catch (err){
-    botMsg.notice = "⚠️ " + (err && err.message ? err.message : "请求失败");
-    botMsg.noticeErr = true;
+    const aborted = !!(err && (err.name === "AbortError"
+                               || /abort/i.test(String(err.message || ""))));
+    if (aborted){
+      // 用户主动停止：不是错误，已收到的内容保留（可复制 / 重新生成）
+      botMsg.stopped = true;
+      botMsg.noticeErr = false;
+      botMsg.notice = botMsg.content ? "（已停止生成，以上是已收到的部分）"
+                                     : "（已停止生成）";
+    } else {
+      botMsg.notice = "⚠️ " + (err && err.message ? err.message : "请求失败");
+      botMsg.noticeErr = true;
+    }
     noticeEl.textContent = botMsg.notice;
     noticeEl.style.display = "";
-    noticeEl.className = "note err";
+    noticeEl.className = "note" + (botMsg.noticeErr ? " err" : "");
   } finally {
+    currentAbort = null;
     botMsg.pending = false;
     stopTyping(bubble);              // 任何出口都要收掉打字指示
     botMsg.streaming = false;
-    // 内容完整后才挂操作条（复制/放大/下载/源码）；面板由 renderBody 负责，
-    // 这里再渲染一次兜住"异常路径"（那时上面那段可能没走到）
-    renderBody();
-    addActions(bubble, botMsg);
+    // ★ 顺序：**先落闸门再挂操作条**。操作条里「重新生成 / 编辑」是按
+    // `!sending` 决定要不要给的，反了就会在流式结束后少这两个按钮
+    // （实测：刷新重放有、刚答完没有 —— 因为重放时 sending 已经是 false）。
     setSending(false);
+    // 内容完整后才挂操作条（复制/放大/下载/源码/重新生成）；面板由 renderBody
+    // 负责，这里再渲染一次兜住"异常路径"（那时上面那段可能没走到）
+    renderBody();
+    addActions(bubble, botMsg, chat.length - 1);
     await saveCurrent();
     renderSidebar();
     // ★ AI 标题：只在**新会话的第一次问答**之后调一次（用户自己的 key 付费）
@@ -1907,9 +2064,61 @@ async function send(){
 
 function setSending(on){
   sending = on;
-  $("btnSend").disabled = on;
-  $("btnSend").textContent = on ? "生成中…" : "发送";
+  const b = $("btnSend");
+  if (on){
+    // 生成中它变成"停止"按钮，**必须保持可点**（禁用就没法停了）
+    b.textContent = "停止";
+    b.classList.add("stop");
+    b.disabled = false;
+    b.title = "停止等待：已收到的内容会保留。注意：服务端那一轮不一定立刻中断，"
+            + "可能仍会计费（BYOK）";
+  } else {
+    b.textContent = "发送";
+    b.classList.remove("stop");
+    b.disabled = false;
+    b.title = "";
+  }
   $("btnAttach").disabled = on;
+}
+
+/* ---------------- 导出会话 ---------------- */
+function exportSession(kind){
+  const s = findSession(currentId);
+  if (!s || !chat.length) return;
+  const safe = (s.title || "会话").replace(/[\\/:*?"<>|\s]+/g, "_").slice(0, 40)
+               || "session";
+  let text, mime, ext;
+  if (kind === "json"){
+    // .json 保真：连 latex 源码、上传图片的 dataURL 一起带走
+    text = JSON.stringify({
+      app: "Chem_Agent", title: s.title,
+      exportedAt: new Date().toISOString(),
+      messages: chat,
+    }, null, 2);
+    mime = "application/json"; ext = "json";
+  } else {
+    const lines = ["# " + (s.title || "会话"), "",
+                   "> 导出自 Chem_Agent 网页版。" +
+                   "图示链接是**服务端相对路径**，只有在原服务上才能打开；" +
+                   "要连图一起带走（含上传的图片）请用 .json 导出。", ""];
+    chat.forEach(m => {
+      lines.push(m.role === "user" ? "## 我" : "## AI", "");
+      (m.images || []).forEach((u, i) => {
+        lines.push(/^data:/i.test(u)
+          ? `（本地图片 ${i + 1}：data URL 太长，未随 Markdown 导出，见 .json）`
+          : `![图片 ${i + 1}](${u})`);
+      });
+      if ((m.images || []).length) lines.push("");
+      if (m.content) lines.push(m.content, "");
+      if (m.stopped) lines.push("_（此回答被用户停止）_", "");
+      (m.latex || []).forEach(c => lines.push("```latex", c, "```", ""));
+    });
+    text = lines.join("\n");
+    mime = "text/markdown"; ext = "md";
+  }
+  const url = URL.createObjectURL(new Blob([text], {type: mime + ";charset=utf-8"}));
+  downloadUrl(url, safe + "." + ext);
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
 
 /* ---------------- 图片附件 ---------------- */
@@ -1963,7 +2172,10 @@ elInput.addEventListener("keydown", (e) => {
     send();
   }
 });
-$("btnSend").onclick = send;
+// 发送按钮在生成中变成"停止"（见 setSending），所以这里要分派
+$("btnSend").onclick = () => { sending ? stopGeneration() : send(); };
+$("btnExportMd").onclick = () => exportSession("md");
+$("btnExportJson").onclick = () => exportSession("json");
 // 新建对话：**旧会话保留**在侧栏（不再询问"清空？"——那是破坏性的）
 $("btnNew").onclick = () => newConversation();
 $("btnNewSide").onclick = () => { newConversation(); if (isNarrow()) setSidebar(false); };
