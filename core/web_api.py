@@ -698,6 +698,7 @@ async def make_title(request: Request,
         body = {}
     question = str((body or {}).get("question") or "")
     with credentials.user_credentials(creds):
+        credentials.set_request_ip(_client_ip(request))   # 按 IP 的在途闸门（R5）
         title = summarize_title(question)
     return {"title": title}
 
@@ -766,7 +767,11 @@ async def chat(request: Request,
 
     # 整个请求（含后续 SSE 子线程）都在用户凭证作用域内
     with credentials.user_credentials(creds):
-        print(f"[web] ip={_client_ip(request)} key={credentials.redact(creds['api_key'])} "
+        client_ip = _client_ip(request)
+        # 非流式路径在本上下文里同步跑管线 → 这里 set 就够；
+        # 流式路径要把它传进 `work()`（见 `_sse_stream` 的说明）。
+        credentials.set_request_ip(client_ip)
+        print(f"[web] ip={client_ip} key={credentials.redact(creds['api_key'])} "
               f"model={creds.get('model')} base={creds.get('base_url')} "
               f"session={session_id[:8]} images={len(images)} "
               f"stream={stream} history={len(history)}")
@@ -784,18 +789,23 @@ async def chat(request: Request,
                             thinking=_thinking_of(creds),
                             effort=creds.get("effort"),
                             max_tokens=_max_tokens_of(creds),
-                            creds=creds),
+                            creds=creds, client_ip=client_ip),
                 media_type="text/event-stream",
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
 
         diag, responses = [], []
-        answer = process_question(question, history=history,
-                                  diagnostics=diag, responses=responses,
-                                  thinking=_thinking_of(creds),
-                                  effort=creds.get("effort"),
-                                  max_tokens=_max_tokens_of(creds)) \
-            or "（未能生成回答）"
+        try:
+            answer = process_question(question, history=history,
+                                      diagnostics=diag, responses=responses,
+                                      thinking=_thinking_of(creds),
+                                      effort=creds.get("effort"),
+                                      max_tokens=_max_tokens_of(creds)) \
+                or "（未能生成回答）"
+        except credentials.ServerBusy as e:
+            # 在途上限已满（安全审查 R5）：这不是用户的错，给 503 而不是 500，
+            # 并且让文案可操作（别让用户去翻自己的设置）。
+            raise HTTPException(status_code=503, detail=str(e))
         answer = _polish_answer(answer)
         diaglog.log_request(question, f"web-{session_id[:8]}", diag,
                             responses[-1] if responses else None,
@@ -825,7 +835,8 @@ def _diag_meta(diag: list) -> dict:
 
 def _sse_stream(question: str, history: list, session_id: str,
                 thinking: str = None, effort: str = None,
-                max_tokens: int = None, creds: dict = None):
+                max_tokens: int = None, creds: dict = None,
+                client_ip: str = None):
     """SSE 帧序列：role → reasoning 心跳 → content 增量 → stop(+session_id)。
 
     与 `/v1` 的帧序同构（文本先行：文字就绪即发，PNG 编译在 worker 线程
@@ -846,15 +857,19 @@ def _sse_stream(question: str, history: list, session_id: str,
 
     同理不能用 `with user_credentials(...)`：`reset` 要求 set/reset 同 Context，
     跨迭代会抛 `ValueError: Token was created in a different Context`。
+
+    ★ `client_ip`：按 IP 的在途闸门（安全审查 R5）要在 `work()` 里
+    `set_request_ip(client_ip)`——理由与凭证完全相同（生成器跨迭代换 Context），
+    所以必须由调用方把 IP 传进来，不能在这里 set。
     """
     yield from _sse_stream_inner(question, history, session_id,
-                                 thinking, effort, max_tokens, creds)
+                                 thinking, effort, max_tokens, creds, client_ip)
 
 
 def _sse_stream_inner(question: str, history: list, session_id: str,
                       thinking: str = None,
                       effort: str = None, max_tokens: int = None,
-                      creds: dict = None):
+                      creds: dict = None, client_ip: str = None):
     """`_sse_stream` 的主体；用户凭证在 `work()` 内落地（见 `_sse_stream`）。"""
     yield _sse_frame({"role": "assistant"})
     yield _sse_frame({"reasoning": "正在思考并绘制化学图示…"})
@@ -874,6 +889,9 @@ def _sse_stream_inner(question: str, history: list, session_id: str,
         # 上下文只有一个，set 之后本线程内所有管线代码（以及它们用
         # copy_context() 拉起的子线程）都能读到用户凭证。
         credentials.apply_credentials(creds)
+        # 按 IP 的在途闸门（安全审查 R5）：与凭证同理，必须在 work() 里设 ——
+        # 生成器的每段都在新 Context 里跑。
+        credentials.set_request_ip(client_ip)
         diag, responses = [], []
         try:
             answer = process_question(
@@ -962,6 +980,9 @@ def _friendly_error(raw: str) -> str:
     if re.search(r"http\s+30[12378]\b", raw or "", re.IGNORECASE):
         return ("接口地址返回了重定向：本服务为安全起见**不跟随跳转**，"
                 "请把最终的完整地址直接填进设置里的「接口地址」")
+    # ★ 在途上限已满（安全审查 R5）：这不是用户的配置问题，别让他去改设置
+    if "繁忙" in (raw or ""):
+        return "服务器当前请求较多，请稍后重试（这不是你的设置问题）"
     if "401" in low or "invalid_api_key" in low or "unauthorized" in low:
         return "API Key 无效或已过期，请在设置里检查后重试"
     if "404" in low or "model_not_found" in low or "does not exist" in low:

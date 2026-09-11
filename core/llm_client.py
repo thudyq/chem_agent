@@ -38,7 +38,13 @@ from .config import (EFFORT_LOW, EFFORT_ORDER, THINKING_ON, normalize_effort,
                      normalize_thinking)
 from .prompt_manager import load_system_prompt
 
-DEFAULT_TIMEOUT = 180
+# 建连与读取分开（安全审查 R5）：
+# * 建连超时要短 —— 不可达/被丢包的地址不再让每个请求干等满整个超时；
+# * 读取超时保持宽松 —— 思考模型首字可能很慢，且流式下它只约束
+#   "两块数据之间的间隔"，不是总时长。
+CONNECT_TIMEOUT = 10
+READ_TIMEOUT = 180
+DEFAULT_TIMEOUT = (CONNECT_TIMEOUT, READ_TIMEOUT)
 DEFAULT_RETRIES = 3
 
 # 各调用点的 max_tokens（§4.2.1）。**上限不是预留**，按实际用量计费；
@@ -470,7 +476,8 @@ def ask_llm(
                 print(f"[ask_llm] HTTP {e.status} → 摘掉 {field}={value!r} 重试"
                       f"（其余字段保留）")
 
-    with credentials.llm_semaphore():   # 按凭证分桶限流（同 key 最多 max_concurrent 个）
+    # 在途闸门（全局 + 按 IP）+ 按凭证分桶上限（安全审查 R5）
+    with credentials.llm_slot():
         for stage_i, (st_on, st_effort) in enumerate(stages):
             eff_on, eff_effort = st_on, st_effort
             advanced = False
@@ -487,7 +494,7 @@ def ask_llm(
                 except requests.exceptions.Timeout as e:
                     last_error = f"请求超时: {e}"
                     print(f"[ask_llm] 第 {attempt}/{resolved_retries} 次请求超时"
-                          f"（数据间隔 >{DEFAULT_TIMEOUT}s）: {e}")
+                          f"（数据间隔 >{READ_TIMEOUT}s）: {e}")
                     continue
                 except requests.exceptions.RequestException as e:
                     last_error = f"请求异常: {e}"

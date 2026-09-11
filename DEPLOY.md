@@ -265,7 +265,8 @@ python -m utils.latex_compile --security-check --strict   # 没拦住则以退�
 | 只看网页请求 | `sudo journalctl -u chem_agent --no-pager \| grep '\[web\]'` |
 | 会话附件目录 | `data/web_sessions/<会话id>/`（**按全局配额回收**：2GB / 50000 个文件，**只在超配额时**删最旧的图，不按时间清；见 `core/web_api.py::prune_web_attachments`） |
 | 清小搭附件目录 | `data/attachments/`（独立配额 2GB / 50000，长期保留，与网页互不挤占） |
-| 限流 | 每 IP 每分钟 20 次（`core/web_api.py` 的 `RATE_LIMIT_PER_MINUTE`） |
+| 限流 | 每 IP 每分钟 20 次（`core/web_api.py` 的 `RATE_LIMIT_PER_MINUTE`）；客户端身份取 uvicorn 净化后的对端地址 |
+| 在途上限 | 全局 16、单 IP 4（安全审查 R5）。超了返回 503 + "服务器当前请求较多"（不是用户设置问题）。可用环境变量 `CHEM_AGENT_MAX_INFLIGHT` / `CHEM_AGENT_MAX_INFLIGHT_PER_IP` 调整，设 `0` = 关闭该道闸门 |
 | 用户密钥去向 | 只在请求内存；日志只打指纹；`data/diagnostics.jsonl` 里存的是标记文本与凭证指纹，**不含密钥** |
 
 ### 常见问题
@@ -274,6 +275,13 @@ python -m utils.latex_compile --security-check --strict   # 没拦住则以退�
 同 IP 每分钟超过 20 次。这是防脚本的默认值，可在 `core/web_api.py` 调整
 `RATE_LIMIT_PER_MINUTE`（0 = 关闭）。Nginx 未转发 `X-Forwarded-For` 时
 所有用户会共享同一配额，先修反代配置。
+
+**Q：用户看到"服务器当前请求较多，请稍后重试"？**
+这是**在途上限**（安全审查 R5）而不是用户填错了东西：服务器同时在处理的出站调用
+达到上限（默认全局 16、单 IP 4）就会快速失败，避免把内存/线程耗尽。默认值够用；
+如果是正常高峰想放宽，设环境变量 `CHEM_AGENT_MAX_INFLIGHT=32`（以及
+`CHEM_AGENT_MAX_INFLIGHT_PER_IP`）后重启服务。**如果日志里这个提示很频繁、
+而且来源 IP 很分散**，那多半是有人在打你，考虑上 WAF/CDN 限速。
 
 **Q：图示一直显示"（图示未能渲染）"？**
 服务器缺 LaTeX 工具链。装：

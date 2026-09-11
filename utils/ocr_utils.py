@@ -16,6 +16,12 @@ import requests
 from core import credentials
 from core.config import settings
 
+# 视觉调用超时拆成（建连, 读取）（安全审查 R5）：不可达/被丢包的端点快速失败，
+# 不再让每个请求干等满整个超时（识图本身不需要长思考，读取 60s 足够）。
+VISION_CONNECT_TIMEOUT = 10
+VISION_READ_TIMEOUT = 60
+VISION_TIMEOUT = (VISION_CONNECT_TIMEOUT, VISION_READ_TIMEOUT)
+
 _DESCRIBE_PROMPT = """请描述这张图片的内容，供后续化学问答使用。按内容类型分别处理：
 1. 文字（题目/问题/解答等）：完整转录原文，不要改写。
 2. 化学结构式：给出 SMILES（能确定时）；不能确定时用文字描述（如"苯环连一个硝基"）。
@@ -180,8 +186,9 @@ def _describe_once(url: str, headers: dict, payload: dict,
         try:
             # ★ 不跟随重定向（安全审查 R3）：视觉端点地址已经过 SSRF 校验，
             # 但 302 之后跳到哪不受校验管 —— 跟随等于把校验作废。
+            # 超时拆成（建连, 读取）（安全审查 R5）：不可达地址快速失败。
             resp = requests.post(url, headers=headers, json=payload,
-                                 timeout=60, allow_redirects=False)
+                                 timeout=VISION_TIMEOUT, allow_redirects=False)
         except requests.exceptions.RequestException as e:
             print(f"[ocr] 请求异常: {e}")
             return None, True
@@ -203,7 +210,8 @@ def _describe_once(url: str, headers: dict, payload: dict,
                 print(f"[ocr] HTTP {resp.status_code} → 摘掉 {field}={value!r} 重试")
                 try:
                     resp2 = requests.post(url, headers=headers, json=payload,
-                                          timeout=60, allow_redirects=False)
+                                          timeout=VISION_TIMEOUT,
+                                          allow_redirects=False)
                 except requests.exceptions.RequestException as e:
                     print(f"[ocr] 请求异常: {e}")
                     return None, True
@@ -353,24 +361,33 @@ def describe_image(image_path: str, max_attempts: int = _VISION_MAX_ATTEMPTS) ->
     except Exception:
         pass
 
-    for attempt in range(1, max_attempts + 1):
-        desc, retryable = _describe_once(url, headers, dict(payload), model,
-                                        cap_key=cap_key)
-        if desc:
-            # B1（20260826）：结构式 SMILES 过 RDKit 硬校验，供调用方示警
-            desc["smiles_ok"] = _structure_smiles_ok(
-                desc.get("content"), desc.get("type"))
-            # 降级标记：未产出正式"类型/内容"两行 → 调用方据此作"识别受限"处理
-            if desc.get("type") == "未分类_草稿":
-                desc["downgraded"] = True
-                print("[ocr] 识别降级：未产出结构化两行，仅保留最佳提取片段")
-            else:
-                desc["downgraded"] = False
-            return desc
-        if not retryable or attempt >= max_attempts:
-            return None
-        print(f"[ocr] 第 {attempt} 次尝试失败，重试（{attempt + 1}/{max_attempts}）...")
-        time.sleep(_RETRY_DELAY)
+    try:
+        # 在途闸门（安全审查 R5）：视觉调用同样是"带着用户凭证出站"，也要受
+        # 全局/按 IP 上限约束 —— 否则攻击者可以绕过主模型的闸门，用视觉端点
+        # 那台"永不回包的服务器"占满 worker。
+        with credentials.inflight_guard():
+            for attempt in range(1, max_attempts + 1):
+                desc, retryable = _describe_once(url, headers, dict(payload), model,
+                                                cap_key=cap_key)
+                if desc:
+                    # B1（20260826）：结构式 SMILES 过 RDKit 硬校验，供调用方示警
+                    desc["smiles_ok"] = _structure_smiles_ok(
+                        desc.get("content"), desc.get("type"))
+                    # 降级标记：未产出正式"类型/内容"两行 → 调用方据此作"识别受限"处理
+                    if desc.get("type") == "未分类_草稿":
+                        desc["downgraded"] = True
+                        print("[ocr] 识别降级：未产出结构化两行，仅保留最佳提取片段")
+                    else:
+                        desc["downgraded"] = False
+                    return desc
+                if not retryable or attempt >= max_attempts:
+                    return None
+                print(f"[ocr] 第 {attempt} 次尝试失败，重试"
+                      f"（{attempt + 1}/{max_attempts}）...")
+                time.sleep(_RETRY_DELAY)
+    except credentials.ServerBusy as e:
+        print(f"[ocr] 跳过视觉识别：{e}")
+        return None
     return None
 
 

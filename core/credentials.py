@@ -60,6 +60,7 @@ API key 来用"的公开网页，凭证必须变成**每请求可变**，而管�
 from __future__ import annotations
 
 import hashlib
+import os
 import threading
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -475,6 +476,120 @@ def _reset_semaphores_for_tests() -> None:
     """清空信号量池（仅测试用）。"""
     with _LOCK:
         _SEMS.clear()
+
+
+# ------------------------------------------------ 全局 / 按 IP 在途上限（R5）
+# 为什么"按凭证分桶"对服务器没有保护：**假 key 是无限的**。攻击者每个请求换
+# 一个假 key，就得到一个全新的桶；再把 `base_url` 指向自己控制的、故意不回包的
+# 公网地址，就能让每个请求占住一个 worker 直到读超时（`llm_client.READ_TIMEOUT`）。
+# 这里加两道**与凭证无关**的闸门，只护服务器自己：
+#   1. 全局在途上限 —— 服务器最多同时扛这么多出站调用（内存/线程有上界）；
+#   2. 同一客户端 IP 的在途上限 —— 防止单个 IP 把全局额度吃光、把别人饿死。
+# 设 0 即关闭该道闸门（本地/测试用）。
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name) or default)
+    except ValueError:
+        return default
+
+
+GLOBAL_MAX_INFLIGHT = _env_int("CHEM_AGENT_MAX_INFLIGHT", 16)
+PER_IP_MAX_INFLIGHT = _env_int("CHEM_AGENT_MAX_INFLIGHT_PER_IP", 4)
+# 等不到槽位就**快速失败**：把请求堆在队列里只会把资源耗尽推迟成雪崩。
+INFLIGHT_WAIT_SECONDS = 5.0
+
+
+class ServerBusy(RuntimeError):
+    """服务器在途请求已达上限（安全审查 R5）。文案面向终端用户。"""
+
+    def __init__(self, msg: str = "服务器繁忙：同时在处理的请求过多，请稍后重试"):
+        super().__init__(msg)
+
+
+# 请求作用域的客户端 IP：由 Web 层设置；Streamlit / CLI 不设 → 跳过按 IP 的闸门
+_REQUEST_IP: ContextVar[Optional[str]] = ContextVar("chem_agent_request_ip",
+                                                    default=None)
+
+_inflight_lock = threading.Lock()
+_global_sem: Optional[threading.BoundedSemaphore] = None
+_ip_inflight: dict = {}
+
+
+def set_request_ip(ip: Optional[str]) -> None:
+    """把当前请求的客户端 IP 放进 contextvar（供按 IP 的在途闸门分桶）。
+
+    ★ 必须由**能拿到真实客户端地址的那一层**（`core/web_api.py` 的
+    `_client_ip`，即 uvicorn 净化后的值）来设置——不要在这里自己解析请求头。
+    """
+    _REQUEST_IP.set(ip or None)
+
+
+def request_ip() -> Optional[str]:
+    """当前请求的客户端 IP（未设置返回 None）。"""
+    return _REQUEST_IP.get()
+
+
+def _global_semaphore() -> Optional[threading.BoundedSemaphore]:
+    """惰性创建全局在途信号量；`GLOBAL_MAX_INFLIGHT <= 0` 时返回 None（关闭）。"""
+    global _global_sem
+    if GLOBAL_MAX_INFLIGHT <= 0:
+        return None
+    with _inflight_lock:
+        if _global_sem is None:
+            _global_sem = threading.BoundedSemaphore(max(1, int(GLOBAL_MAX_INFLIGHT)))
+        return _global_sem
+
+
+def reset_inflight_for_tests() -> None:
+    """清空在途闸门状态（仅测试用；改了上面两个常量后必须调一次）。"""
+    global _global_sem
+    with _inflight_lock:
+        _global_sem = None
+        _ip_inflight.clear()
+
+
+@contextmanager
+def inflight_guard():
+    """全局在途上限 +（已知客户端 IP 时）同一 IP 的在途上限。
+
+    拿不到槽位就抛 `ServerBusy`（最多等 `INFLIGHT_WAIT_SECONDS` 秒）。
+    """
+    sem = _global_semaphore()
+    if sem is not None and not sem.acquire(timeout=INFLIGHT_WAIT_SECONDS):
+        raise ServerBusy()
+    try:
+        ip = request_ip()
+        per_ip = max(0, int(PER_IP_MAX_INFLIGHT)) if ip else 0
+        if per_ip:
+            with _inflight_lock:
+                if _ip_inflight.get(ip, 0) >= per_ip:
+                    raise ServerBusy()
+                _ip_inflight[ip] = _ip_inflight.get(ip, 0) + 1
+        try:
+            yield
+        finally:
+            if per_ip:
+                with _inflight_lock:
+                    left = _ip_inflight.get(ip, 0) - 1
+                    if left > 0:
+                        _ip_inflight[ip] = left
+                    else:
+                        _ip_inflight.pop(ip, None)
+    finally:
+        if sem is not None:
+            sem.release()
+
+
+@contextmanager
+def llm_slot():
+    """出站 LLM/视觉调用的槽位 = 在途闸门 + 该凭证的分桶上限。
+
+    ★ 供 `core/llm_client.py` 与 `utils/ocr_utils.py` 使用。
+    两道闸门的获取顺序**固定**（先全局/按 IP，再按凭证），全仓库一致 → 不会死锁。
+    """
+    with inflight_guard():
+        with llm_semaphore():
+            yield
 
 
 if __name__ == "__main__":
