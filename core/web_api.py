@@ -220,9 +220,17 @@ def _require_credentials(kwargs: dict) -> dict:
         creds["model"] = DEFAULT_MODEL
     if not creds.get("base_url"):
         creds["base_url"] = DEFAULT_BASE_URL
-    ok, reason = credentials.client_host_allowed(creds.get("base_url", ""))
-    if not ok:
-        raise HTTPException(status_code=400, detail=f"端点地址不可用：{reason}")
+    # ★ **每一个用户提供的端点**都要过 SSRF 校验，不能只查主端点。
+    # 安全审查 R2：`X-Chem-Vision-Base-Url` 曾经完全没校验 —— 只要填一个内网
+    # 地址、再给一个视觉模型名并上传一张图，服务端就会替攻击者去请求内网
+    # （云元数据 169.254.169.254、内网管理面板…），而且视觉返回的内容会进入
+    # 回答文本，比纯盲 SSRF 更容易读出东西。
+    # 以后再加任何"用户可填的 URL"字段，都必须登记到这张表里。
+    for field, label in (("base_url", "端点地址"),
+                         ("vision_base_url", "视觉端点地址")):
+        ok, reason = credentials.client_host_allowed(creds.get(field, ""))
+        if not ok:
+            raise HTTPException(status_code=400, detail=f"{label}不可用：{reason}")
     return creds
 
 

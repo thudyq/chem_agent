@@ -111,6 +111,51 @@ def test_private_base_url_rejected(web):
     assert "端点地址" in r.json()["detail"]
 
 
+# ------------------------------------------------- 视觉端点的 SSRF（安全审查 R2）
+
+PRIVATE_VISION_URLS = [
+    "http://127.0.0.1:11434/v1",
+    "http://localhost:8000/v1",
+    "http://169.254.169.254/latest/meta-data",
+    "http://10.0.0.5:8080/v1",
+    "http://192.168.1.10/v1",
+    "file:///etc/passwd",
+]
+
+
+@pytest.mark.parametrize("url", PRIVATE_VISION_URLS)
+def test_private_vision_base_url_rejected(web, answered, url):
+    """★ 安全审查 R2：视觉端点曾经**完全没有** SSRF 校验。
+
+    攻击者只要带一个假 Key（`_require_credentials` 只查"有没有"）、任意视觉
+    模型名、一个内网端点地址，再上传一张图，服务端就会替他去请求内网
+    （云元数据、内网管理面板…），而且视觉返回的内容会进入回答文本 ——
+    比纯盲 SSRF 更容易读出东西。这里必须**在发起任何请求之前**就 400。
+    """
+    headers = {**KEY_HEADERS, "X-Chem-Vision-Model": "glm-4.6v",
+               "X-Chem-Vision-Base-Url": url}
+    r = web.post("/api/chat", json=_payload(), headers=headers)
+    assert r.status_code == 400, url
+    assert "视觉端点地址" in r.json()["detail"]
+    assert answered.get("question") is None, "校验必须发生在调用管线之前"
+
+
+def test_public_vision_base_url_still_allowed(web, answered):
+    """不能因为加固把正常的第三方视觉端点也堵掉（过严 = 功能坏掉）。"""
+    headers = {**KEY_HEADERS, "X-Chem-Vision-Model": "glm-4.6v",
+               "X-Chem-Vision-Base-Url": "https://open.bigmodel.cn/api/paas/v4"}
+    r = web.post("/api/chat", json=_payload(), headers=headers)
+    assert r.status_code == 200
+    assert answered.get("question")
+
+
+def test_vision_base_url_absent_is_fine(web, answered):
+    """不填视觉端点 = 用用户自己的主端点（`vision_config` 的回退规则），不该被拦。"""
+    r = web.post("/api/chat", json=_payload(),
+                 headers={**KEY_HEADERS, "X-Chem-Vision-Model": "glm-4.6v"})
+    assert r.status_code == 200
+
+
 def test_bad_json_body(web):
     r = web.post("/api/chat", content="not-json",
                  headers={**KEY_HEADERS, "Content-Type": "application/json"})
