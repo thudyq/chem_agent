@@ -195,6 +195,35 @@
 
   .note{font-size:12.5px;color:var(--muted);white-space:pre-wrap}
   .note.err{color:var(--err)}
+
+  /* ---------- 化学式 / 公式（零依赖渲染器产出）---------- */
+  .bubble sub,.bubble sup{font-size:.72em;line-height:1}
+  .bubble sup{vertical-align:super}
+  .bubble sub{vertical-align:sub}
+  /* 带条件的反应箭头：条件在上、箭头在下（\xrightarrow{...}）*/
+  .rx{display:inline-flex;flex-direction:column;align-items:center;
+      vertical-align:-.18em;margin:0 .28em;line-height:1}
+  .rx-c{font-size:.7em;white-space:nowrap;margin-bottom:-.1em}
+  .rx-a{font-size:1.05em}
+  /* 分式 */
+  .frac{display:inline-flex;flex-direction:column;align-items:center;
+        vertical-align:-.35em;margin:0 .18em;line-height:1.12}
+  .frac .num{border-bottom:1px solid currentColor;padding:0 .2em}
+  .frac .den{padding:0 .2em}
+  .mathblk{display:block;text-align:center;margin:10px 0;overflow-x:auto}
+  .bubble a{text-decoration:underline;text-underline-offset:2px}
+  .bubble a:hover{text-decoration-thickness:2px}
+
+  /* 图示 LaTeX 源码折叠面板 */
+  details.src{margin-top:10px;font-size:12.5px}
+  details.src summary{cursor:pointer;color:var(--muted);list-style:none}
+  details.src summary::-webkit-details-marker{display:none}
+  details.src summary::before{content:"▸ "}
+  details.src[open] summary::before{content:"▾ "}
+  details.src pre{margin:8px 0 0;max-height:340px;overflow:auto;font-size:12px;
+                  background:var(--code-bg);color:var(--code-ink);
+                  border-radius:var(--radius-sm);padding:11px 13px}
+  details.src pre code{background:none;padding:0;color:inherit}
   /* 打字指示（替代一行灰字"正在思考…"）*/
   .typing{display:inline-flex;gap:5px;align-items:center;padding:3px 0}
   .typing i{width:6px;height:6px;border-radius:50%;background:var(--muted);
@@ -462,6 +491,10 @@
       由你自己的账号计费。密钥仅保存在浏览器本地，随请求头一次性发送给本服务，
       服务端<b>不写日志、不落盘、不回显</b>。
     </p>
+    <div class="desc" style="margin:-8px 0 14px;font-size:11.5px;color:var(--muted)">
+      ℹ️ 每个<b>新对话</b>会额外发一次极小的标题生成请求（上限 64 token），
+      由你的 key 计费；后续追问与它无关。
+    </div>
     <div class="banner" id="probeBanner" style="display:none"></div>
 
     <div class="field">
@@ -710,7 +743,7 @@ async function idbDel(id){
    localStorage 立刻被 base64 图片撑爆（5MB 配额），而 `setItem` 抛异常
    很容易被 catch 吞掉，表现为"历史莫名其妙不保存"。
 */
-const INDEX_FIELDS = ["id", "serverId", "title", "updatedAt"];
+const INDEX_FIELDS = ["id", "serverId", "title", "titleAi", "updatedAt"];
 
 function loadIndex(){
   try {
@@ -757,7 +790,7 @@ function titleFrom(messages){
 
 function newSession(){
   return {id: newId(), serverId: newId(), title: "新对话",
-          updatedAt: Date.now()};
+          titleAi: false, updatedAt: Date.now()};
 }
 
 /** 首条用户提问到了就把"新对话"改成真实标题（只在还没改过时）。 */
@@ -872,10 +905,38 @@ async function deleteSession(id){
   renderAll();
 }
 
+/** AI 生成会话标题：**一次极小调用，用户自己的 key 付费**。
+    只在"新会话的第一次问答"之后调一次；任何失败都静默保留原截断标题，
+    绝不影响对话本身。 */
+async function requestTitle(sid, question){
+  const q = (question || "").trim();
+  if (!q) return;
+  const st = loadSettings();
+  if (!st.key) return;
+  const h = buildHeaders(st);
+  delete h["X-Chem-Max-Tokens"];      // 起标题不需要用户设的输出上限
+  try {
+    const r = await fetch("api/title", {
+      method: "POST", headers: h, body: JSON.stringify({question: q})
+    });
+    if (!r.ok) return;
+    const d = await r.json().catch(() => ({}));
+    const t = String((d && d.title) || "").trim();
+    if (!t) return;
+    const cur = findSession(sid);
+    if (!cur || cur.titleAi) return;   // 期间被删/已由用户重命名 → 不覆盖
+    cur.title = t.slice(0, 30);
+    cur.titleAi = true;
+    saveIndex();
+    renderSidebar();
+  } catch(e){ /* 起标题失败不影响对话 */ }
+}
+
 function renameSession(id, name){
   const s = findSession(id);
   if (!s) return;
   s.title = (name || "").trim().slice(0, 30) || "未命名对话";
+  s.titleAi = true;        // 手动改过名的会话，不再被 AI 标题覆盖
   saveIndex();
   renderSidebar();
 }
@@ -1109,6 +1170,189 @@ async function migrateLegacy(){
   } catch(e){}
 }
 
+/* ================= 化学式 / 公式渲染（零依赖） =================
+   为什么不引 KaTeX：完整 KaTeX = 253KB JS + 28KB CSS + 59 个字体文件
+   （woff2 就 0.24MB、全格式 1.02MB），而本页整体只有 ~76KB，且约定
+   "单文件 / 零依赖 / 零 CDN / 可离线"。化学文本真正需要的是下标、电荷、
+   箭头、常见符号——一个小子集就能覆盖；排版级数学（积分、矩阵、多层根式）
+   不在覆盖范围，遇到时退化为可读文本而不是报错。
+   转换规则与 streamlit_app.py 的 `_convert_ce_math` 同一套（箭头、电荷、
+   下标、沉淀符号），区别只是产出 HTML 而不是 KaTeX 语法。 */
+
+const ELEMENTS = new Set(("H He Li Be B C N O F Ne Na Mg Al Si P S Cl Ar K Ca "
+  + "Sc Ti V Cr Mn Fe Co Ni Cu Zn Ga Ge As Se Br Kr Rb Sr Y Zr Nb Mo Tc Ru Rh Pd "
+  + "Ag Cd In Sn Sb Te I Xe Cs Ba La Ce Pr Nd Pm Sm Eu Gd Tb Dy Ho Er Tm Yb Lu Hf "
+  + "Ta W Re Os Ir Pt Au Hg Tl Pb Bi Po At Rn Fr Ra Ac Th Pa U Np Pu Am Cm Bk Cf "
+  + "Es Fm Md No Lr Rf Db Sg Bh Hs Mt Ds Rg Cn Nh Fl Mc Lv Ts Og").split(" "));
+
+const MATH_SYMBOLS = {
+  Delta:"Δ", delta:"δ", alpha:"α", beta:"β", gamma:"γ", Gamma:"Γ",
+  epsilon:"ε", varepsilon:"ε", zeta:"ζ", eta:"η", theta:"θ", Theta:"Θ",
+  kappa:"κ", lambda:"λ", Lambda:"Λ", mu:"μ", nu:"ν", xi:"ξ", pi:"π", Pi:"Π",
+  rho:"ρ", sigma:"σ", Sigma:"Σ", tau:"τ", upsilon:"υ", phi:"φ", varphi:"φ",
+  Phi:"Φ", chi:"χ", psi:"ψ", Psi:"Ψ", omega:"ω", Omega:"Ω",
+  times:"×", cdot:"·", pm:"±", mp:"∓", approx:"≈", neq:"≠", equiv:"≡",
+  le:"≤", leq:"≤", ge:"≥", geq:"≥", ll:"≪", gg:"≫", propto:"∝",
+  rightarrow:"→", to:"→", longrightarrow:"⟶", leftarrow:"←",
+  leftrightarrow:"↔", rightleftharpoons:"⇌", Rightarrow:"⇒",
+  uparrow:"↑", downarrow:"↓", triangle:"△", circ:"°", degree:"°",
+  infty:"∞", partial:"∂", nabla:"∇", sum:"∑", prod:"∏", int:"∫",
+  angle:"∠", perp:"⊥", therefore:"∴", prime:"′", " ":" ", ",":" ", ";":" ",
+  "!":"", quad:"  ", qquad:"    ", text:"", mathrm:""
+};
+
+/** 带条件的反应箭头：条件在上、箭头在下。
+    条件本身也要渲染化学式 —— `\ce{A ->[H2SO4, \triangle] B}` 里的 H₂SO₄
+    才是化学家要看的样子。这里允许产出 `<sub>`（rx-c 是独立 span）。 */
+function arrowHtml(cond, glyph){
+  let c = mathToHtml(cond || "");
+  c = c.replace(/[A-Z][A-Za-z0-9()[\]]*(?:\d*[+-])?/g,
+                (m) => formulaToHtml(m) || m);
+  c = c.trim();
+  return c
+    ? '<span class="rx"><span class="rx-c">' + c + '</span><span class="rx-a">'
+      + glyph + '</span></span>'
+    : glyph;
+}
+
+/** 数学片段（不含 \\( \\) 分隔符）→ HTML。 */
+function mathToHtml(expr){
+  let s = String(expr == null ? "" : expr);
+  s = s.replace(/\\(?:text|mathrm|operatorname)\{([^{}]*)\}/g, "$1");
+  s = s.replace(
+    /\\frac\{((?:[^{}]|\{[^{}]*\})*)\}\{((?:[^{}]|\{[^{}]*\})*)\}/g,
+    (m, a, b) => '<span class="frac"><span class="num">' + a +
+                 '</span><span class="den">' + b + '</span></span>');
+  s = s.replace(/\\sqrt\{([^{}]*)\}/g, "√($1)");
+  s = s.replace(/\\(x)?rightarrow\{([^{}]*)\}/g,
+                (m, x, c) => arrowHtml(c, x ? "←" : "→"));
+  s = s.replace(/\\(x)?leftarrow\{([^{}]*)\}/g,
+                (m, x, c) => arrowHtml(c, x ? "→" : "←"));
+  s = s.replace(/\^\{([^{}]*)\}/g, "<sup>$1</sup>");
+  s = s.replace(/_\{([^{}]*)\}/g, "<sub>$1</sub>");
+  s = s.replace(/\^([A-Za-z0-9+\-])/g, "<sup>$1</sup>");
+  s = s.replace(/_([A-Za-z0-9+\-])/g, "<sub>$1</sub>");
+  s = s.replace(/\\\\/g, "<br>");
+  // 公式里的箭头（同样要认实体形态，见 ceToHtml 的说明）
+  s = s.replace(/&lt;=&gt;|<=>/g, "⇌")
+       .replace(/-&gt;|->/g, "→")
+       .replace(/&lt;-|<-/g, "←");
+  s = s.replace(/\\([A-Za-z]+)/g,
+                (m, n) => (MATH_SYMBOLS[n] !== undefined ? MATH_SYMBOLS[n] : n));
+  return s.replace(/[{}]/g, "");
+}
+
+/** mhchem \ce{...} 的内容 → HTML（规则对齐 Streamlit 的 _convert_ce_math，
+    但化学式部分复用 `formulaToHtml`，所以 SO42-/MnO4- 这类歧义写法更准）。 */
+function ceToHtml(inner){
+  const stash = [];
+  const keep = (html) => { stash.push(html); return "\u0004" + (stash.length - 1) + "\u0005"; };
+  let s = String(inner == null ? "" : inner);
+  // 同位素：^14C → ¹⁴C（必须在"^ 当气体符号"之前处理）
+  s = s.replace(/\^(\d+)([A-Z][a-z]?)/g, "<sup>$1</sup>$2");
+  // ★ 箭头：`inline()` 会先做 HTML 转义，所以到了这里 `->` 已经是 `-&gt;`、
+  //   `<-` 是 `&lt;-`。两种形态都要认（直接调 chem() 的单元测试走的是原始形态）。
+  s = s.replace(/(-&gt;|->)\[([^\]]*)\]/g,
+                (m, a, c) => keep(" " + arrowHtml(c, "→") + " "));
+  s = s.replace(/&lt;=&gt;|<=>/g, "⇌");
+  s = s.replace(/&lt;-&gt;|<->/g, "↔");
+  s = s.replace(/-&gt;|->/g, "→");
+  s = s.replace(/&lt;-|<-/g, "←");
+  // 化学式：元素/括号/数字组成的连续段，交给与裸露式同一套规则
+  s = s.replace(/[A-Z][A-Za-z0-9()[\]]*(?:\d*[+-])?/g, (m) => formulaToHtml(m) || m);
+  // 沉淀 / 气体（mhchem 的孤立 v 与 ↓、独立 ^ 与 ↑）
+  s = s.replace(/(^|[^A-Za-z])v(?![A-Za-z])/g, "$1↓");
+  s = s.replace(/(^|[^A-Za-z0-9])\^(?![0-9])/g, "$1↑");
+  s = s.replace(/\\([A-Za-z]+)/g,
+                (m, n) => (MATH_SYMBOLS[n] !== undefined ? MATH_SYMBOLS[n] : n));
+  return s.replace(/\u0004(\d+)\u0005/g, (m, i) => stash[+i]);
+}
+
+/* 裸露的化学式（不在 \ce{} / 公式里）。**保守**：一个 token 只有在其
+   每一组字母都是真实元素符号、且至少有一个下标或电荷时才改写。
+   这样 H2O/CO2/Fe2O3 会变，而 GPT4（G 非元素）、COVID19（V 非元素）、
+   DNA（D 非元素）、pH（p 非元素）都原样不动。
+   故意不用 lookbehind：老 Safari 会在**解析期**抛错，整个脚本都挂掉。 */
+const FORMULA_RE = /(^|[^A-Za-z0-9])([A-Z][A-Za-z0-9()[\]]*(?:\d*[+-])?)(?![A-Za-z0-9])/g;
+
+/** 把 token 尾部的 `<数字?><+->` 拆成「(核心, 电荷上标)」。
+
+    化学写法天然有歧义，这里按**最常见约定**判定：
+    * 数字 ≥2 位 → 最后一位是电荷、其余是下标：SO42- → SO₄²⁻、Cr2O72- → Cr₂O₇²⁻
+    * 数字 1 位 → 前面是**单个元素**（O2- → O²⁻、Fe2+ → Fe²⁺）或**以 ) ] 收尾**
+      （[Fe(CN)6]3- → ³⁻）时算电荷；否则算下标（MnO4- → MnO₄⁻、NH4+ → NH₄⁺）
+    * 没有数字 → 电荷就是那个符号（Cl- → Cl⁻）
+
+    注：streamlit_app.py 的正则是 `([A-Za-z)\]])(\d*)([+-])`，会把 SO42- 渲染成
+    SO⁴²⁻、MnO4- 渲染成 MnO⁴⁻。这里借着**元素表**把这两类常见写法修对了。
+*/
+function splitTrailingCharge(token){
+  const m = String(token).match(/^(.*?)(\d*)([+-])$/);
+  if (!m) return { core: token, charge: "" };
+  const head = m[1], digits = m[2], sign = m[3];
+  let coreDigits = digits, chDigits = "";
+  if (digits.length >= 2){
+    coreDigits = digits.slice(0, -1);
+    chDigits = digits.slice(-1);
+  } else if (digits.length === 1){
+    const singleElem = /^[A-Z][a-z]?$/.test(head) && ELEMENTS.has(head);
+    const bracketEnd = /[)\]]$/.test(head);
+    if (singleElem || bracketEnd){ chDigits = digits; coreDigits = ""; }
+    else coreDigits = digits;
+  }
+  return { core: head + coreDigits, charge: "<sup>" + chDigits + sign + "</sup>" };
+}
+
+function formulaToHtml(token){
+  const split = splitTrailingCharge(token);
+  const core = split.core, charge = split.charge;
+  let out = "", i = 0, groups = 0, subs = 0;
+  while (i < core.length){
+    const ch = core[i];
+    if (ch === "(" || ch === ")" || ch === "[" || ch === "]"){
+      out += ch;
+      i++;
+    } else {
+      const two = i + 2 <= core.length ? core.substr(i, 2) : "";
+      let sym = null;
+      if (two && ELEMENTS.has(two)) sym = two;
+      else if (ELEMENTS.has(ch)) sym = ch;
+      if (!sym) return null;                  // 出现非元素 → 不是化学式
+      out += sym;
+      i += sym.length;
+      groups++;
+    }
+    let num = "";
+    while (i < core.length && core[i] >= "0" && core[i] <= "9") num += core[i++];
+    if (num){ out += "<sub>" + num + "</sub>"; subs++; }
+  }
+  if (!groups) return null;
+  if (!subs && !charge) return null;          // NaCl / HCl 无下标 → 不动
+  return out + charge;
+}
+
+const CE_RE = /\\ce\{((?:[^{}]|\{[^{}]*\})*)\}/g;
+const DISPLAY_MATH_RE = /\\\[([\s\S]*?)\\\]/g;
+const INLINE_MATH_RE = /\\\(([\s\S]*?)\\\)/g;
+
+/** 纯文本 → 化学式/公式已渲染的 HTML（代码段与 URL 由调用方先行摘除）。 */
+function chem(text){
+  const stash = [];
+  const keep = (html) => { stash.push(html); return "\u0002" + (stash.length - 1) + "\u0003"; };
+  let s = String(text == null ? "" : text);
+  // 空 \text{}（LLM 常在正文与 TikZ 之间留下的残留分隔符）无渲染意义
+  s = s.replace(/\\text\{\s*\}(?:\\\\|\s)*/g, "");
+  s = s.replace(DISPLAY_MATH_RE,
+                (m, e) => keep('<span class="mathblk">' + mathToHtml(e) + "</span>"));
+  s = s.replace(INLINE_MATH_RE, (m, e) => keep(mathToHtml(e)));
+  s = s.replace(CE_RE, (m, e) => keep(ceToHtml(e)));
+  s = s.replace(FORMULA_RE, (m, pre, tok) => {
+    const html = formulaToHtml(tok);
+    return pre + (html || tok);
+  });
+  return s.replace(/\u0002(\d+)\u0003/g, (m, i) => stash[+i]);
+}
+
 /* ---------------- 极简 Markdown ---------------- */
 function esc(s){
   return String(s == null ? "" : s)
@@ -1118,15 +1362,23 @@ function esc(s){
 function safeUrl(u){
   return /^(https?:|\/|data:image\/)/i.test(u || "") ? esc(u) : "#";
 }
-/* 行内：图片 → 代码 → 粗体 → 斜体。（先图片，避免 ![]() 被斜体规则吃掉） */
+/* 行内：代码段/图片/链接先摘出 → 化学式 → 粗体斜体 → 还原。
+   ★ 顺序很关键：化学式替换**绝不能**碰到 URL 与代码内容（图片 URL 里
+   一段十六进制、代码块里的 C6H6 都不该被改写）。 */
 function inline(t){
   let s = esc(t);
-  s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g,
-        (m, alt, url) => '<img src="' + safeUrl(url) + '" alt="' + alt + '" loading="lazy">');
-  s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
+  const stash = [];
+  const keep = (html) => { stash.push(html); return "\u0000" + (stash.length - 1) + "\u0001"; };
+  s = s.replace(/`([^`]+)`/g, (m, c) => keep("<code>" + c + "</code>"));
+  s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (m, alt, url) =>
+        keep('<img src="' + safeUrl(url) + '" alt="' + alt + '" loading="lazy">'));
+  s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, txt, url) =>
+        keep('<a href="' + safeUrl(url) +
+             '" target="_blank" rel="noopener noreferrer">' + txt + "</a>"));
+  s = chem(s);
   s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   s = s.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
-  return s;
+  return s.replace(/\u0000(\d+)\u0001/g, (m, i) => stash[+i]);
 }
 function md(src){
   const lines = String(src == null ? "" : src).split(/\r?\n/);
@@ -1330,8 +1582,29 @@ function addActions(bubble, m){
       bDl.onclick = () => downloadUrl(imgs[0].getAttribute("src"), "化学图示.png");
       acts.appendChild(bDl);
     }
+    if (m.raw){
+      const bSrc = document.createElement("button");
+      wireCopy(bSrc, () => m.raw, "复制 LaTeX 源码");
+      acts.appendChild(bSrc);
+    }
   }
   if (acts.children.length) bubble.appendChild(acts);
+}
+
+/** 图示 LaTeX 源码折叠面板（服务端在 stop 帧里带回的 TikZ 原文）。 */
+function addLatexPanel(bubble, raw){
+  if (!raw || bubble.querySelector("details.src")) return;
+  const d = document.createElement("details");
+  d.className = "src";
+  const sum = document.createElement("summary");
+  sum.textContent = "查看图示 LaTeX 源码（可复制到 Overleaf）";
+  const pre = document.createElement("pre");
+  const code = document.createElement("code");
+  code.textContent = raw;
+  pre.appendChild(code);
+  d.appendChild(sum);
+  d.appendChild(pre);
+  bubble.appendChild(d);
 }
 
 function buildMsg(m){
@@ -1372,9 +1645,7 @@ function buildMsg(m){
     body.className = "md-body";
     body.innerHTML = md(m.content || "");
     bubble.appendChild(body);
-    // 注：曾经的 `m.raw`（查看 LaTeX 源码）与 `m.meta` 分支是**死代码**——
-    // send() 里初始化成 "" 后再没被赋值，SSE 帧也不带这两个字段。已删除；
-    // 要恢复请先把数据接上（见 instructions/UI-Redesign.md 第 3/4 批）。
+    if (m.raw) addLatexPanel(bubble, m.raw);
   }
   // 流式期间不挂操作条（那时内容还不完整、也还没有图）
   if (!m.streaming) addActions(bubble, m);
@@ -1534,6 +1805,10 @@ async function send(){
             const cur = findSession(currentId);
             if (cur){ cur.serverId = d.session_id; saveIndex(); }
           }
+          if (d.latex && d.latex.length){
+            // stop 帧带回 TikZ 原文 → 折叠面板（正文已被图片 URL 替换，取不回来）
+            botMsg.raw = d.latex.join("\n\n");
+          }
         }
       }
     }
@@ -1558,11 +1833,16 @@ async function send(){
     botMsg.pending = false;
     stopTyping(bubble);              // 任何出口都要收掉打字指示
     botMsg.streaming = false;
-    // 内容完整后才挂操作条（复制/放大/下载）
+    // 内容完整后才挂操作条（复制/放大/下载/源码）
     addActions(bubble, botMsg);
+    addLatexPanel(bubble, botMsg.raw);
     setSending(false);
     await saveCurrent();
     renderSidebar();
+    // ★ AI 标题：只在**新会话的第一次问答**之后调一次（用户自己的 key 付费）
+    if (chat.length === 2 && !(findSession(currentId) || {}).titleAi){
+      requestTitle(currentId, (chat[0] || {}).content || "");
+    }
   }
 }
 

@@ -636,6 +636,101 @@ def test_web_config_exposes_attachment_quota(web):
     assert "session_ttl_hours" not in d
 
 
+# ---------------------------------------------------------------- 图示源码 / AI 标题
+
+def test_stream_stop_frame_carries_latex_sources(web, answered):
+    """★ stop 帧必须带回 TikZ 原文 —— 正文里的代码块已被替换成图片 URL，
+    前端"查看图示 LaTeX 源码"面板只能从这里拿。"""
+    r = web.post("/api/chat", json=_payload(stream=True), headers=KEY_HEADERS)
+    frames = _frames(r.text)
+    stops = [f for f in frames if "choices" in f
+             and f["choices"][0].get("finish_reason") == "stop"]
+    latex = stops[-1]["choices"][0]["delta"].get("latex")
+    assert isinstance(latex, list) and len(latex) == 1
+    assert latex[0].startswith("\\begin{tikzpicture}")
+    assert latex[0].endswith("\\end{tikzpicture}")
+
+
+def test_json_path_carries_latex_sources(web, answered):
+    r = web.post("/api/chat", json=_payload(), headers=KEY_HEADERS)
+    d = r.json()
+    assert len(d["latex"]) == 1 and "tikzpicture" in d["latex"][0]
+    # 正文里是图片引用，不是裸代码
+    assert "tikzpicture" not in d["content"]
+
+
+def test_latex_sources_helper_is_total():
+    """取源码是"锦上添花"，任何输入都不该抛。"""
+    from core import web_api
+    assert web_api.latex_sources("") == []
+    assert web_api.latex_sources("没有代码块") == []
+    assert web_api.latex_sources(None) == []
+
+
+def test_title_uses_user_key_and_returns_llm_title(web, monkeypatch):
+    """★ BYOK：起标题必须用**用户自己的** key/模型，且标记为用户作用域调用。"""
+    seen = {}
+    from core import credentials
+
+    def fake_ask_llm(prompt, system_prompt=None, max_tokens=None, thinking=None,
+                     user_scoped=False, **kw):
+        seen["key"] = (credentials.current() or {}).get("api_key")
+        seen["model"] = credentials.llm_config().model_name
+        seen["scoped"] = user_scoped
+        seen["thinking"] = thinking
+        seen["max_tokens"] = max_tokens
+        return "苯的结构式"
+
+    monkeypatch.setattr("core.llm_client.ask_llm", fake_ask_llm)
+    r = web.post("/api/title", json={"question": "画出苯的结构式，并说明它的分子式"},
+                 headers=KEY_HEADERS)
+    assert r.status_code == 200
+    assert r.json()["title"] == "苯的结构式"
+    assert seen["key"] == "sk-test-key-123456"          # 用户自己的 key
+    assert seen["model"] == "deepseek-flash"            # 用户填的模型
+    assert seen["scoped"] is True                       # 不许回退服务器模型
+    assert seen["thinking"] == "disabled"               # 起标题不用思考
+    assert seen["max_tokens"] == 64
+
+
+def test_title_falls_back_to_truncation_on_failure(web, monkeypatch):
+    """上游失败 → 回退为提问前 12 字，且**仍然返回 200**（不影响对话）。"""
+    def boom(*a, **k):
+        raise RuntimeError("upstream down")
+
+    monkeypatch.setattr("core.llm_client.ask_llm", boom)
+    q = "画出苯的结构式并说明分子式"
+    r = web.post("/api/title", json={"question": q}, headers=KEY_HEADERS)
+    assert r.status_code == 200
+    assert r.json()["title"] == q[:12]
+    assert len(r.json()["title"]) == 12
+
+
+def test_title_cleans_quotes_and_limits_length(web, monkeypatch):
+    monkeypatch.setattr("core.llm_client.ask_llm",
+                        lambda *a, **k: '“苯环的结构与芳香性说明”')
+    r = web.post("/api/title", json={"question": "苯"}, headers=KEY_HEADERS)
+    assert r.json()["title"] == "苯环的结构与芳香性说明"[:12]
+
+
+def test_title_requires_user_key(web):
+    """没有 Key 直接 400 —— 绝不用服务器 .env 的 key 替用户起标题。"""
+    r = web.post("/api/title", json={"question": "苯"},
+                 headers={"X-Chem-Model": "m"})
+    assert r.status_code == 400
+    assert "API Key" in r.json()["detail"]
+
+
+def test_title_empty_question_makes_no_llm_call(web, monkeypatch):
+    called = []
+    monkeypatch.setattr("core.llm_client.ask_llm",
+                        lambda *a, **k: called.append(1))
+    r = web.post("/api/title", json={}, headers=KEY_HEADERS)
+    assert r.status_code == 200
+    assert r.json()["title"] == ""
+    assert called == []
+
+
 # ---------------------------------------------------------------- 错误友好化
 
 @pytest.mark.parametrize("raw,expect", [

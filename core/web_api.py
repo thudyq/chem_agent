@@ -53,7 +53,8 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Streamin
 
 from app import process_question
 from core import answer_cache, credentials, diaglog
-from core.attachments import build_attachments, replace_code_blocks_with_images
+from core.attachments import (build_attachments, extract_code_blocks,
+                              replace_code_blocks_with_images)
 from core.config import settings
 
 router = APIRouter()
@@ -466,6 +467,57 @@ def _build_question(text: str, images: list, session_dir: Path) -> str:
 
 # ---------------------------------------------------------------- 结果整备
 
+def latex_sources(answer: str) -> list:
+    """从**原始**回答里取出所有 TikZ/chemfig 代码块（供前端展示源码）。
+
+    必须在 `_prepare_answer` **之前**调用：那个函数会把代码块替换成图片
+    markdown，之后就取不到了。
+    """
+    try:
+        return extract_code_blocks(answer or "")
+    except Exception:
+        return []
+
+
+# AI 命名标题：极简 system prompt（替代完整 system_prompt，省 token）。
+# 与 streamlit_app.py 的 _TITLE_SYSTEM 同一套口径，区别是这里**用用户自己的
+# key 付费**（BYOK），所以前端只在"新会话的第一次提问"后调一次。
+_TITLE_SYSTEM = ("你是对话标题生成器。根据用户第一条提问提炼一个"
+                 "不超过 12 个字的对话标题。只输出标题本身，不要任何"
+                 "解释、引号或标点。")
+_TITLE_MAX_LEN = 12
+
+
+def summarize_title(question: str) -> str:
+    """用 LLM 给会话起一个短标题；失败一律回退为提问前 12 字。
+
+    ★ 必须 `user_scoped=True`：BYOK 下这次调用由用户付费，绝不能在缺模型名时
+    静默回退服务器 `.env` 的模型（见 llm_client.ask_llm 的该参数说明）。
+    思考强制关闭（起标题不需要思考）；个别端点强制思考会在客户端被识别并摘掉
+    字段重试，所以这里不需要额外兜底。
+    """
+    q = (question or "").strip()
+    if not q:
+        return ""
+    try:
+        from core.llm_client import ask_llm
+        title = ask_llm(f"提问：{q}\n对话标题：",
+                        system_prompt=_TITLE_SYSTEM, max_tokens=64,
+                        thinking="disabled", user_scoped=True)
+        if title:
+            title = title.strip()
+            title = next(
+                (ln.strip('"“”\'').strip() for ln in title.splitlines()
+                 if ln.strip().strip('"“”\'')),
+                "")
+            title = title[:_TITLE_MAX_LEN]
+            if title:
+                return title
+    except Exception as e:
+        print(f"[web] 标题生成失败，回退截断: {e}")
+    return q[:_TITLE_MAX_LEN]
+
+
 def _prepare_answer(answer: str, session_id: str) -> str:
     """TikZ 代码块 → 编译为 PNG → 就地替换为行内图片引用，返回展示文本。
 
@@ -584,6 +636,40 @@ def index():
     return HTMLResponse(page.read_text(encoding="utf-8"))
 
 
+@router.post("/api/title")
+async def make_title(request: Request,
+                     x_chem_api_key: str | None = Header(None),
+                     x_chem_base_url: str | None = Header(None),
+                     x_chem_model: str | None = Header(None),
+                     x_chem_thinking: str | None = Header(None),
+                     x_chem_effort: str | None = Header(None)):
+    """用用户的 key 生成一个会话标题（一次极小调用）。
+
+    为什么单独开一个端点而不是复用 `/api/chat`：走 `/api/chat` 会把标题请求
+    塞进完整管线（标记契约校验、修正闭环、LaTeX 编译、附件落盘），既慢又可能
+    因为标题里没有化学标记而触发"修正"，纯属浪费用户的 token。
+
+    前端只在**新会话的第一次提问后**调一次；失败一律回退为提问前 12 字，
+    绝不因为起标题失败而影响对话本身。
+    """
+    allowed, retry_after = _rate_limit(_client_ip(request))
+    if not allowed:
+        raise HTTPException(status_code=429,
+                            detail=f"请求过于频繁，请 {retry_after} 秒后重试")
+    creds = _require_credentials({
+        _HEADER_KEY: x_chem_api_key, _HEADER_BASE: x_chem_base_url,
+        _HEADER_MODEL: x_chem_model, _HEADER_THINKING: x_chem_thinking,
+        _HEADER_EFFORT: x_chem_effort})
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    question = str((body or {}).get("question") or "")
+    with credentials.user_credentials(creds):
+        title = summarize_title(question)
+    return {"title": title}
+
+
 @router.post("/api/chat")
 async def chat(request: Request,
                x_chem_api_key: str | None = Header(None),
@@ -689,6 +775,7 @@ async def chat(request: Request,
         return JSONResponse({
             "session_id": session_id,
             "content": display,
+            "latex": latex_sources(answer),
             "diagnostics": [{"resolved": d.get("resolved"),
                              "type": d.get("type")} for d in diag],
         })
@@ -766,13 +853,16 @@ def _sse_stream_inner(question: str, history: list, session_id: str,
         except Exception as e:                       # 管线异常兜底为 error 帧
             answer_q.put(e)
             return
+        raw = answer or ""
         diaglog.log_request(question, f"web-{session_id[:8]}", diag,
                             responses[-1] if responses else None,
                             credential=credentials.fingerprint())
-        display = _polish_answer(_prepare_answer(answer or "", session_id))
+        display = _polish_answer(_prepare_answer(raw, session_id))
         if responses:
             answer_cache.store(display, responses[-1], meta=_diag_meta(diag))
-        answer_q.put(display)
+        # ★ 把 TikZ 源码一并带回：前端"查看图示 LaTeX 源码"面板要用。
+        # `_prepare_answer` 已把代码块换成图片 URL，所以必须从**原始回答**里取。
+        answer_q.put((display, latex_sources(raw)))
 
     # 子线程**不自动继承** contextvars（新线程拿到的是创建时的空 context），
     # 必须显式 copy_context().run() 把当前请求的用户凭证带进工作线程——
@@ -780,9 +870,10 @@ def _sse_stream_inner(question: str, history: list, session_id: str,
     ctx = contextvars.copy_context()
     threading.Thread(target=lambda: ctx.run(work), daemon=True).start()
     last_flush = time.time()
+    payload = None
     while True:
         try:
-            answer = answer_q.get_nowait()
+            payload = answer_q.get_nowait()
             break
         except queue.Empty:
             pass
@@ -815,17 +906,19 @@ def _sse_stream_inner(question: str, history: list, session_id: str,
     if correction:
         yield _sse_frame({"reasoning": "正在修正回答…"})
 
-    if isinstance(answer, Exception):
+    if isinstance(payload, Exception):
         yield _sse_frame({}, finish="stop",
                          error={"type": "upstream_error",
-                                "message": _friendly_error(str(answer))})
+                                "message": _friendly_error(str(payload))})
         yield "data: [DONE]\n\n"
         return
 
+    answer, sources = payload if isinstance(payload, tuple) else (payload, [])
     text = answer or "（未能生成回答）"
     for i in range(0, len(text), _ANSWER_CHUNK):
         yield _sse_frame({"content": text[i:i + _ANSWER_CHUNK]})
-    yield _sse_frame({"session_id": session_id}, finish="stop")
+    # stop 帧带上会话 id 与图示源码（前端据此渲染"查看 LaTeX 源码"折叠面板）
+    yield _sse_frame({"session_id": session_id, "latex": sources}, finish="stop")
     yield "data: [DONE]\n\n"
 
 
@@ -887,4 +980,4 @@ def _validate_download_url(url: str) -> bool:
 
 
 __all__ = ["router", "prune_web_attachments", "WEB_ATTACHMENT_MAX_BYTES",
-           "WEB_ATTACHMENT_MAX_FILES"]
+           "WEB_ATTACHMENT_MAX_FILES", "latex_sources", "summarize_title"]
