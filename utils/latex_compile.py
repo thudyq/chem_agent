@@ -302,14 +302,24 @@ def _run_latex(engine: str, tex_path: str) -> Optional[str]:
 
 
 def _compile_doc_to_png(latex_doc: str, dpi: int) -> Optional[bytes]:
-    """编译完整 LaTeX 文档 → PNG 字节。"""
+    """编译完整 LaTeX 文档 → PNG 字节。
+
+    ★ 本函数的契约是"失败返回 None"，所以**落盘也要兜住 OSError**：
+    临时目录不可写（只读 `/tmp` 的容器、受限身份下的沙箱）时 `open(...,'w')`
+    会抛 PermissionError。以前它会一路冒到调用方，Web 路径有 try/except 还好，
+    Streamlit 路径直接把整页渲染成一段 traceback（实测踩到）。
+    """
     engine = _find_latex_engine()
     if not engine:
         return None
     with work_dir(prefix="chemtex_") as work:
         tex_path = os.path.join(work, "fig.tex")
-        with open(tex_path, "w", encoding="utf-8") as f:
-            f.write(latex_doc)
+        try:
+            with open(tex_path, "w", encoding="utf-8") as f:
+                f.write(latex_doc)
+        except OSError as e:
+            print(f"[latex] 临时目录不可写，跳过编译（可设 CHEM_AGENT_TMPDIR）: {e}")
+            return None
         pdf_path = _run_latex(engine, tex_path)
         if not pdf_path:
             return None

@@ -344,6 +344,35 @@
     color:var(--muted);background:var(--surface);
   }
   .side-acts button:hover{color:var(--ink);background:var(--hover)}
+
+  /* ---------- 搜索 ---------- */
+  .side-search{padding:0 12px 10px}
+  .side-search input{
+    width:100%;font:inherit;font-size:13px;padding:7px 10px;color:var(--ink);
+    background:var(--input);border:1px solid var(--line);border-radius:9px;outline:none;
+  }
+  .side-search input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+  .sideitem.sr{display:block;padding:9px 10px}
+  .sideitem.sr .t{display:block;font-weight:600}
+  .sideitem.sr .snip{
+    display:block;font-size:11.5px;color:var(--muted);margin-top:3px;line-height:1.5;
+    overflow:hidden;text-overflow:ellipsis;display:-webkit-box;
+    -webkit-line-clamp:2;-webkit-box-orient:vertical;
+  }
+  .sideitem.sr mark{background:var(--accent-soft);color:var(--accent);border-radius:3px}
+  .sideitem .pin{flex:0 0 auto;font-size:10px;opacity:.7}
+  .sr-msg{font-size:11.5px;color:var(--muted);padding:12px 8px}
+
+  /* ---------- 消息时间戳 / 反馈 ---------- */
+  .acts .ts{font-size:11px;color:var(--muted);margin:0 6px 0 2px;align-self:center}
+  .acts button.on{color:var(--accent);border-color:var(--accent);background:var(--accent-soft)}
+  .flash{animation:flash 1.4s ease-out}
+  @keyframes flash{0%{background:var(--accent-soft)}100%{background:transparent}}
+  /* 只给读屏用的文本 */
+  .sr-only{
+    position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
+    clip:rect(0 0 0 0);white-space:nowrap;border:0;
+  }
   .scrim{position:fixed;inset:0;background:rgba(8,12,20,.5);z-index:60;display:none}
   .scrim.show{display:block}
   @media (min-width:861px){ .scrim{display:none !important} }
@@ -448,9 +477,14 @@
     <div class="side-head">
       <span class="brand">会话</span>
       <span class="spacer"></span>
-      <button class="ghost" id="btnCloseSide" title="收起侧栏">«</button>
+      <button class="ghost" id="btnCloseSide" title="收起侧栏"
+              aria-label="收起会话列表">«</button>
     </div>
     <div class="side-new" id="btnNewSide" title="新建对话（Ctrl+K）">＋ 新对话</div>
+    <div class="side-search">
+      <input id="searchBox" type="search" autocomplete="off" spellcheck="false"
+             placeholder="搜索对话…（按 / 聚焦）" aria-label="搜索历史对话">
+    </div>
     <div class="side-list" id="sideList"></div>
     <div class="side-foot">
       <div id="sideFoot"></div>
@@ -464,7 +498,8 @@
 
   <div class="app">
   <header>
-    <button class="ghost" id="btnSide" title="会话列表">☰</button>
+    <button class="ghost" id="btnSide" title="会话列表"
+            aria-label="展开会话列表" aria-expanded="false">☰</button>
     <h1>Chem_Agent</h1>
     <span class="sub">化学可视化问答 · 自带 API Key</span>
     <span class="spacer"></span>
@@ -496,17 +531,24 @@
         placeholder="输入化学问题…（Enter 发送，Shift+Enter 换行；可点 📎 上传结构式图片）"></textarea>
       <div class="tools">
         <input type="file" id="fileInput" accept="image/*" multiple hidden>
-        <button id="btnAttach" title="上传结构式图片">📎</button>
+        <button id="btnAttach" title="上传结构式图片" aria-label="上传结构式图片">📎</button>
         <button class="primary" id="btnSend">发送</button>
       </div>
     </div>
     <div class="hint">
       <span>🔒 密钥只存在你的浏览器（<span class="kbd">sessionStorage</span>），随请求头发送，服务端不保存</span>
       <span id="hintEndpoint"></span>
+      <span class="kbd">Ctrl+K</span> 新对话 ·
+      <span class="kbd">/</span> 搜索 ·
+      <span class="kbd">Alt+↑↓</span> 切换会话 ·
+      <span class="kbd">Esc</span> 停止/关闭
     </div>
   </footer>
   </div><!-- /.app -->
 </div><!-- /.layout -->
+
+<!-- 读屏播报区（视觉上不可见）：进度/错误/完成都往这里写一句 -->
+<div class="sr-only" id="a11y" role="status" aria-live="polite" aria-atomic="true"></div>
 
 <!-- ================= 图示灯箱 ================= -->
 <div class="lightbox" id="lightbox">
@@ -758,6 +800,21 @@ async function idbGet(id){
   });
 }
 
+/** 读出**全部**会话记录（搜索用：要按内容找，就得真的把消息读出来）。
+    数据都在本机 IndexedDB，不涉及网络。 */
+async function idbGetAll(){
+  const db = await openDB();
+  if (!db) return Array.from(memoryStore.values());
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(DB_STORE, "readonly");
+      const rq = tx.objectStore(DB_STORE).getAll();
+      rq.onsuccess = () => resolve(rq.result || []);
+      rq.onerror = () => resolve(Array.from(memoryStore.values()));
+    } catch(e){ resolve(Array.from(memoryStore.values())); }
+  });
+}
+
 async function idbDel(id){
   const db = await openDB();
   memoryStore.delete(id);
@@ -779,7 +836,8 @@ async function idbDel(id){
    localStorage 立刻被 base64 图片撑爆（5MB 配额），而 `setItem` 抛异常
    很容易被 catch 吞掉，表现为"历史莫名其妙不保存"。
 */
-const INDEX_FIELDS = ["id", "serverId", "title", "titleAi", "used", "updatedAt"];
+const INDEX_FIELDS = ["id", "serverId", "title", "titleAi", "used", "pinned",
+                      "updatedAt"];
 
 function loadIndex(){
   try {
@@ -826,7 +884,7 @@ function titleFrom(messages){
 
 function newSession(){
   return {id: newId(), serverId: newId(), title: "新对话", titleAi: false,
-          used: false, updatedAt: Date.now()};
+          used: false, pinned: false, updatedAt: Date.now()};
 }
 
 /** 这个会话"用过"没有（= 有过任何消息）。
@@ -865,7 +923,7 @@ async function saveSession(id, messages, title, touch){
   if (touch) s.updatedAt = Date.now();
   saveIndex();
   await idbPut(id, {id: s.id, serverId: s.serverId, title: s.title,
-                    titleAi: !!s.titleAi, used: !!s.used,
+                    titleAi: !!s.titleAi, used: !!s.used, pinned: !!s.pinned,
                     updatedAt: s.updatedAt, messages: messages || []});
 }
 
@@ -938,8 +996,8 @@ function trimSessions(){
   sessions.splice(MAX_SESSIONS).forEach(s => { idbDel(s.id); });
 }
 
-async function switchTo(id){
-  if (id === currentId) return;
+async function switchTo(id, focusIdx){
+  if (id === currentId && typeof focusIdx !== "number") return;
   const s = findSession(id);
   if (!s) return;
   const prevId = currentId, prevChat = chat;
@@ -956,10 +1014,24 @@ async function switchTo(id){
   if (t !== s.title){ s.title = t; saveIndex(); }
   renderSidebar();
   renderAll();
+  if (typeof focusIdx === "number") focusMsg(focusIdx);
   elInput.focus();
-  const prevTitle = prev ? autoTitle(prev.title, prevChat) : "";
-  // 纯落盘，**不 touch**：离开一个会话不算它的活动
-  saveSession(prevId, prevChat, prevTitle);
+  if (prevId !== id){
+    const prevTitle = prev ? autoTitle(prev.title, prevChat) : "";
+    // 纯落盘，**不 touch**：离开一个会话不算它的活动
+    saveSession(prevId, prevChat, prevTitle);
+  }
+  say("已切到「" + s.title + "」");
+}
+
+/** Alt+↑/↓：按侧栏顺序切换会话。 */
+function switchRelative(dir){
+  const { pinned, rest } = orderedSessions();
+  const order = pinned.concat(rest);
+  if (order.length < 2) return;
+  const i = order.findIndex(s => s.id === currentId);
+  const j = i < 0 ? 0 : (i + dir + order.length) % order.length;
+  switchTo(order[j].id);
 }
 
 async function deleteSession(id){
@@ -1058,59 +1130,226 @@ function dayGroup(ts){
   return "更早";
 }
 
+/** 侧栏的展示顺序（置顶在前，其余按"最后一次内容活动"降序）。
+    `renderSidebar` 与 Alt+↑↓ 共用这一份，避免两处规则不一致。
+    只列**用过的**会话：空白会话不进历史（ChatGPT 同款行为）。 */
+function orderedSessions(){
+  const byTime = (a, b) => (b.updatedAt || 0) - (a.updatedAt || 0);
+  const visible = sessions.filter(sessionUsed);
+  return {
+    visible: visible,
+    pinned: visible.filter(s => s.pinned).sort(byTime),
+    rest: visible.filter(s => !s.pinned).sort(byTime),
+  };
+}
+
+/** 侧栏里的一行会话。 */
+function sessionRow(s){
+  const row = document.createElement("div");
+  row.className = "sideitem" + (s.id === currentId ? " cur" : "");
+  row.title = s.title;
+  row.tabIndex = 0;                                   // 键盘可达
+  row.setAttribute("role", "button");
+  if (s.id === currentId) row.setAttribute("aria-current", "true");
+  const open = () => switchTo(s.id);
+  row.onclick = open;
+  row.onkeydown = (e) => {
+    if (e.key === "Enter" || e.key === " "){ e.preventDefault(); open(); }
+  };
+
+  if (s.pinned){
+    const pin = document.createElement("span");
+    pin.className = "pin";
+    pin.textContent = "📌";
+    pin.setAttribute("aria-label", "已置顶");
+    row.appendChild(pin);
+  }
+  const t = document.createElement("span");
+  t.className = "t";
+  t.textContent = s.title;
+  row.appendChild(t);
+
+  // 尾部一格：平时显示时间，悬停/当前项换成操作按钮（标题不再被挤窄）
+  const tail = document.createElement("span");
+  tail.className = "tail";
+  const time = document.createElement("span");
+  time.className = "time";
+  time.textContent = fmtTime(s.updatedAt);
+  tail.appendChild(time);
+
+  const menu = document.createElement("span");
+  menu.className = "m";
+  const mkBtn = (label, text, title, fn) => {
+    const b = document.createElement("button");
+    b.textContent = text;
+    b.title = title;
+    b.setAttribute("aria-label", label);
+    b.onclick = (e) => { e.stopPropagation(); fn(); };
+    return b;
+  };
+  // 注意参数顺序是 (aria-label, 图标, tooltip, 动作)：三者语义不同，
+  // 不要把描述性文案塞进 aria-label（读屏会念一长串）。
+  menu.appendChild(mkBtn(s.pinned ? "取消置顶" : "置顶", s.pinned ? "📌" : "📍",
+                         s.pinned ? "取消置顶" : "置顶这个会话",
+                         () => togglePin(s.id)));
+  menu.appendChild(mkBtn("重命名", "✏️", "重命名", () => startRename(row, s)));
+  menu.appendChild(mkBtn("删除", "🗑", "删除", () => deleteSession(s.id)));
+  tail.appendChild(menu);
+  row.appendChild(tail);
+  return row;
+}
+
+/** 置顶（只影响排序，不动 updatedAt）。 */
+function togglePin(id){
+  const s = findSession(id);
+  if (!s) return;
+  s.pinned = !s.pinned;
+  saveIndex();
+  renderSidebar();
+  say(s.pinned ? `已置顶「${s.title}」` : `已取消置顶「${s.title}」`);
+}
+
+/** 读屏播报（只写 sr-only 区域，视觉无变化）。进度/错误/完成各报一句，
+    而不是把流式正文塞进 live region —— 那样每帧都会重复播报。 */
+function say(msg){
+  const el = $("a11y");
+  if (el) el.textContent = String(msg || "");
+}
+
+/* ---------------- 搜索（按**内容**找，数据全在本机） ---------------- */
+let searchQ = "", searchTimer = null;
+
+function onSearchInput(){
+  const v = $("searchBox").value.trim();
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    searchQ = v;
+    if (searchQ) doSearch(); else renderSidebar();
+  }, 160);
+}
+
+async function doSearch(){
+  const q = searchQ.toLowerCase();
+  if (!q){ renderSidebar(); return; }
+  const recs = await idbGetAll();
+  const byId = new Map(recs.map(r => [r.id, r]));
+  const { pinned, rest } = orderedSessions();
+  const hits = [];
+  pinned.concat(rest).forEach(s => {
+    const rec = byId.get(s.id);
+    const msgs = (rec && rec.messages) || [];
+    let found = false;
+    msgs.forEach((m, i) => {
+      const text = String(m.content || "");
+      if (text.toLowerCase().indexOf(q) < 0) return;
+      found = true;
+      hits.push({sid: s.id, idx: i, title: s.title, text: text});
+    });
+    if (!found && String(s.title || "").toLowerCase().indexOf(q) >= 0){
+      hits.push({sid: s.id, idx: -1, title: s.title, text: ""});
+    }
+  });
+  // 期间又敲了字 → 丢弃这次结果（避免乱序覆盖）
+  if (searchQ !== $("searchBox").value.trim()) return;
+  renderSearchResults(hits);
+}
+
+function renderSearchResults(hits){
+  const box = $("sideList");
+  box.innerHTML = "";
+  if (!hits.length){
+    box.innerHTML = '<div class="sr-msg">没有匹配的对话</div>';
+    return;
+  }
+  const head = document.createElement("div");
+  head.className = "sr-msg";
+  head.textContent = hits.length > 50
+    ? `命中 ${hits.length} 处，仅显示前 50 条`
+    : `命中 ${hits.length} 处`;
+  box.appendChild(head);
+
+  hits.slice(0, 50).forEach(h => {
+    const row = document.createElement("div");
+    row.className = "sideitem sr" + (h.sid === currentId ? " cur" : "");
+    row.tabIndex = 0;
+    row.setAttribute("role", "button");
+    const t = document.createElement("span");
+    t.className = "t";
+    t.textContent = h.title;
+    row.appendChild(t);
+    const sn = document.createElement("span");
+    sn.className = "snip";
+    if (h.text) sn.appendChild(snipNode(h.text, searchQ.toLowerCase()));
+    else sn.textContent = "（标题匹配）";
+    row.appendChild(sn);
+    const go = () => gotoHit(h);
+    row.onclick = go;
+    row.onkeydown = (e) => {
+      if (e.key === "Enter" || e.key === " "){ e.preventDefault(); go(); }
+    };
+    box.appendChild(row);
+  });
+}
+
+/** 命中片段（匹配处前后各留一小段），匹配词用 <mark> 标出。
+    全部走 DOM 文本节点，**不拼 innerHTML** —— 内容来自用户/模型，必须转义。 */
+function snipNode(text, q){
+  const frag = document.createDocumentFragment();
+  const t = String(text).replace(/\s+/g, " ").trim();
+  const at = t.toLowerCase().indexOf(q);
+  if (at < 0){ frag.appendChild(document.createTextNode(t.slice(0, 90))); return frag; }
+  const a = Math.max(0, at - 28);
+  const b = Math.min(t.length, at + q.length + 48);
+  if (a > 0) frag.appendChild(document.createTextNode("…"));
+  frag.appendChild(document.createTextNode(t.slice(a, at)));
+  const mk = document.createElement("mark");
+  mk.textContent = t.slice(at, at + q.length);
+  frag.appendChild(mk);
+  frag.appendChild(document.createTextNode(t.slice(at + q.length, b)));
+  if (b < t.length) frag.appendChild(document.createTextNode("…"));
+  return frag;
+}
+
+async function gotoHit(h){
+  $("searchBox").value = "";
+  searchQ = "";
+  await switchTo(h.sid, h.idx);
+}
+
+/** 把某条消息滚到视野中央并闪一下（搜索跳转用）。 */
+function focusMsg(idx){
+  if (typeof idx !== "number" || idx < 0) return;
+  const node = elStream.querySelectorAll(".msg")[idx];
+  if (!node) return;
+  node.scrollIntoView({block: "center", behavior: "instant"});
+  node.classList.add("flash");
+  setTimeout(() => node.classList.remove("flash"), 1500);
+}
+
 function renderSidebar(){
   const box = $("sideList");
   box.innerHTML = "";
-  // 只列**用过的**会话：空白会话不进历史（ChatGPT 同款行为）。
-  // 按"最后一次内容活动"降序（最新的在最上面）；`updatedAt` 只在真的发消息/
-  // 拿到回答时才顶（见 saveSession 的 touch 参数）——单纯点开看一眼不改变顺序。
-  // 同毫秒时按索引稳定排，避免列表无谓跳动。
-  const visible = sessions.filter(sessionUsed);
-  const ordered = visible.map((s, i) => ({s, i}))
-    .sort((a, b) => ((b.s.updatedAt || 0) - (a.s.updatedAt || 0)) || (a.i - b.i))
-    .map(x => x.s);
+  if (searchQ){ doSearch(); return; }        // 搜索中：列表位置显示结果
+  const { visible, pinned, rest } = orderedSessions();
+
+  const addGroup = (text) => {
+    const h = document.createElement("div");
+    h.className = "side-group";
+    h.textContent = text;
+    box.appendChild(h);
+  };
+
+  if (pinned.length){
+    addGroup("置顶");
+    pinned.forEach(s => box.appendChild(sessionRow(s)));
+  }
   let group = null;
-  ordered.forEach(s => {
+  rest.forEach(s => {
     const g = dayGroup(s.updatedAt);
-    if (g !== group){
-      group = g;
-      const h = document.createElement("div");
-      h.className = "side-group";
-      h.textContent = g;
-      box.appendChild(h);
-    }
-    const row = document.createElement("div");
-    row.className = "sideitem" + (s.id === currentId ? " cur" : "");
-    row.title = s.title;
-
-    const t = document.createElement("span");
-    t.className = "t";
-    t.textContent = s.title;
-    row.appendChild(t);
-
-    // 尾部一格：平时显示时间，悬停/当前项换成操作按钮（标题不再被挤窄）
-    const tail = document.createElement("span");
-    tail.className = "tail";
-    const time = document.createElement("span");
-    time.className = "time";
-    time.textContent = fmtTime(s.updatedAt);
-    tail.appendChild(time);
-
-    const menu = document.createElement("span");
-    menu.className = "m";
-    const bR = document.createElement("button");
-    bR.textContent = "✏️"; bR.title = "重命名";
-    bR.onclick = (e) => { e.stopPropagation(); startRename(row, s); };
-    const bD = document.createElement("button");
-    bD.textContent = "🗑"; bD.title = "删除";
-    bD.onclick = (e) => { e.stopPropagation(); deleteSession(s.id); };
-    menu.appendChild(bR); menu.appendChild(bD);
-    tail.appendChild(menu);
-    row.appendChild(tail);
-
-    row.onclick = () => switchTo(s.id);
-    box.appendChild(row);
+    if (g !== group){ group = g; addGroup(g); }
+    box.appendChild(sessionRow(s));
   });
+
   if (!visible.length) box.innerHTML = '<div class="side-group">还没有会话</div>';
   if (!storageWarned){
     $("sideFoot").textContent =
@@ -1175,7 +1414,10 @@ function sidebarOpen(){
 function syncChrome(){
   const visible = sidebarVisible();
   const bSide = $("btnSide"), bNew = $("btnNew");
-  if (bSide) bSide.style.display = visible ? "none" : "";
+  if (bSide){
+    bSide.style.display = visible ? "none" : "";
+    bSide.setAttribute("aria-expanded", visible ? "true" : "false");
+  }
   if (bNew) bNew.style.display = visible ? "none" : "";
 }
 
@@ -1197,6 +1439,7 @@ function applyTheme(){
     // 图标显示**当前实际渲染**的状态（而不是模式名），否则 auto 与 light 看起来一样
     b.textContent = dark ? "🌙" : "☀";
     b.title = "主题：" + (THEME_NAME[themeMode] || "跟随系统") + "（点击切换浅色/深色）";
+    b.setAttribute("aria-label", b.title);
   }
   const sel = $("fTheme");
   if (sel) sel.value = themeMode;
@@ -1689,11 +1932,28 @@ function renderAll(){
   scrollDown(true);
 }
 
+/** 消息时间戳（比侧栏的 fmtTime 细一档：今天只看时分，跨天带月日）。 */
+function fmtFullTime(ts){
+  if (!ts) return "";
+  const d = new Date(ts), now = new Date();
+  const pad = (n) => String(n).padStart(2,"0");
+  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return d.toDateString() === now.toDateString()
+    ? hm : `${d.getMonth()+1}/${d.getDate()} ${hm}`;
+}
+
 function addActions(bubble, m, idx){
   const acts = document.createElement("div");
   acts.className = "acts";
   const isLast = typeof idx === "number" && idx === chat.length - 1;
 
+  // 时间戳放最前（悬停才显眼；触屏上常驻，所以只到分钟）
+  if (m.ts){
+    const ts = document.createElement("span");
+    ts.className = "ts";
+    ts.textContent = fmtFullTime(m.ts);
+    acts.appendChild(ts);
+  }
   if (m.content){
     const bCopy = document.createElement("button");
     wireCopy(bCopy, () => m.content, "复制");
@@ -1739,6 +1999,23 @@ function addActions(bubble, m, idx){
       bRe.onclick = () => regenerate();
       acts.appendChild(bRe);
     }
+    // 👍 / 👎：**只存在本机**（随 .json 一起导出），不上报任何服务器
+    const fb = [];
+    [["up", "👍", "回答有帮助"], ["down", "👎", "回答没帮助"]].forEach(([k, ic, tip]) => {
+      const b = document.createElement("button");
+      b.textContent = ic;
+      b.title = tip + "（只记录在本机）";
+      b.setAttribute("aria-label", tip);
+      if (m.feedback === k) b.classList.add("on");
+      b.onclick = () => {
+        m.feedback = (m.feedback === k) ? "" : k;
+        fb.forEach(x => x.b.classList.toggle("on", m.feedback === x.k));
+        // 反馈不是"对话活动" → 不 touch，免得侧栏顺序跟着跳
+        saveSession(currentId, chat, null, false);
+      };
+      fb.push({k: k, b: b});
+      acts.appendChild(b);
+    });
   }
   if (acts.children.length) bubble.appendChild(acts);
 }
@@ -1888,6 +2165,7 @@ function buildTurnMessages(){
 async function startTurn(){
   if (!loadSettings().key){ setSending(false); openSheet(true); return; }
   setSending(true);
+  say("正在生成回答…");
   scrollDown(true);
   await saveCurrent();       // 持久化串行完成，避免与收尾那次写竞争
   renderSidebar();
@@ -1906,7 +2184,7 @@ async function send(){
   }
   // 用户消息立即上屏（不等回答）
   const userMsg = {role:"user", content:text,
-                   images: pendingImages.map(p => p.dataUrl)};
+                   images: pendingImages.map(p => p.dataUrl), ts: Date.now()};
   chat.push(userMsg);
   elEmpty.style.display = "none";
   elStream.appendChild(buildMsg(userMsg, chat.length - 1));
@@ -1996,7 +2274,8 @@ async function runTurn(){
   const s = loadSettings();
   const messages = buildTurnMessages();
 
-  const botMsg = {role:"assistant", content:"", pending:true, streaming: true};
+  const botMsg = {role:"assistant", content:"", pending:true, streaming: true,
+                  ts: Date.now()};
   chat.push(botMsg);
   const botNode = buildMsg(botMsg, chat.length - 1);
   elStream.appendChild(botNode);
@@ -2118,9 +2397,11 @@ async function runTurn(){
       botMsg.noticeErr = false;
       botMsg.notice = botMsg.content ? "（已停止生成，以上是已收到的部分）"
                                      : "（已停止生成）";
+      say("已停止生成");
     } else {
       botMsg.notice = "⚠️ " + (err && err.message ? err.message : "请求失败");
       botMsg.noticeErr = true;
+      say("生成失败：" + (err && err.message ? err.message : "请求失败"));
     }
     noticeEl.textContent = botMsg.notice;
     noticeEl.style.display = "";
@@ -2134,10 +2415,11 @@ async function runTurn(){
     // `!sending` 决定要不要给的，反了就会在流式结束后少这两个按钮
     // （实测：刷新重放有、刚答完没有 —— 因为重放时 sending 已经是 false）。
     setSending(false);
-    // 内容完整后才挂操作条（复制/放大/下载/源码/重新生成）；面板由 renderBody
-    // 负责，这里再渲染一次兜住"异常路径"（那时上面那段可能没走到）
+    // 内容完整后才挂操作条（复制/放大/下载/源码/重新生成/反馈）；面板由
+    // renderBody 负责，这里再渲染一次兜住"异常路径"（那时上面那段可能没走到）
     renderBody();
     addActions(bubble, botMsg, chat.length - 1);
+    if (botMsg.content) say("回答已生成");
     await saveCurrent();
     renderSidebar();
     // ★ AI 标题：只在**新会话的第一次问答**之后调一次（用户自己的 key 付费）
@@ -2149,6 +2431,7 @@ async function runTurn(){
 
 function setSending(on){
   sending = on;
+  elStream.setAttribute("aria-busy", on ? "true" : "false");
   const b = $("btnSend");
   if (on){
     // 生成中它变成"停止"按钮，**必须保持可点**（禁用就没法停了）
@@ -2225,6 +2508,7 @@ function renderThumbs(){
     img.src = p.dataUrl; img.alt = p.name;
     const b = document.createElement("button");
     b.textContent = "×"; b.title = "移除";
+    b.setAttribute("aria-label", "移除这张图片");
     b.onclick = () => { pendingImages.splice(i, 1); renderThumbs(); };
     d.appendChild(img); d.appendChild(b);
     box.appendChild(d);
@@ -2411,17 +2695,47 @@ $("btnProbe").onclick = async () => {
   refreshKeyChip();
 };
 $("overlay").addEventListener("click", (e) => { if (e.target === $("overlay")) closeSheet(); });
+$("searchBox").addEventListener("input", onSearchInput);
+$("searchBox").addEventListener("keydown", (e) => {
+  if (e.key === "Escape"){ e.preventDefault(); $("searchBox").value = "";
+                           searchQ = ""; renderSidebar(); return; }
+  if (e.key === "Enter"){                       // 回车跳到第一条命中
+    e.preventDefault();
+    const first = $("sideList").querySelector(".sideitem.sr");
+    if (first) first.click();
+  }
+});
 document.addEventListener("keydown", (e) => {
-  // Esc 的优先级：灯箱 → 设置面板
+  const tag = (e.target && e.target.tagName) || "";
+  const inField = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT"
+                  || (e.target && e.target.isContentEditable);
+
+  // Esc 的优先级：灯箱 → 设置面板 → 取消编辑 → 停止生成 → 退出搜索
   if (e.key === "Escape"){
     if ($("lightbox").classList.contains("show")){ closeLightbox(); return; }
-    closeSheet();
+    if ($("overlay").classList.contains("show")){ closeSheet(); return; }
+    if (document.querySelector(".editbox")){ renderAll(); return; }
+    if (sending){ stopGeneration(); return; }
+    if (searchQ){ $("searchBox").value = ""; searchQ = ""; renderSidebar(); return; }
     return;
   }
   // Ctrl/Cmd+K：新建对话（与 DeepSeek / ChatGPT 一致）
   if ((e.ctrlKey || e.metaKey) && (e.key === "k" || e.key === "K")){
     e.preventDefault();
     newConversation();
+    return;
+  }
+  // "/" 聚焦搜索（不在输入框里时才接管，否则没法打斜杠）
+  if (e.key === "/" && !inField && !e.ctrlKey && !e.metaKey && !e.altKey){
+    e.preventDefault();
+    $("searchBox").focus();
+    $("searchBox").select();
+    return;
+  }
+  // Alt+↑/↓ 切换会话
+  if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")){
+    e.preventDefault();
+    switchRelative(e.key === "ArrowUp" ? -1 : 1);
   }
 });
 

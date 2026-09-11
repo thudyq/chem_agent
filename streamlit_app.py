@@ -522,25 +522,43 @@ def _delete_session(sid: str) -> None:
         st.session_state.current_id = sessions[-1]["id"] if sessions else None
     _save_sessions(sessions)
     st.session_state.pop("renaming_id", None)
+    st.session_state.pop("pending_delete", None)
     _rerun()  # 立即重绘会话列表
 
 
 def _session_menu(s: dict) -> None:
-    """会话行右侧 ⋯ 菜单（重命名/删除）；旧版 streamlit 降级为展开。"""
+    """会话行右侧 ⋯ 菜单（重命名/删除）；旧版 streamlit 降级为展开。
+
+    删除是**两步**的：先点「🗑 删除」进入待确认态（显示条数与"无法恢复"），
+    再点「确认删除」才真的删。此前是一次点击即永久丢失，且与网页端
+    （有确认弹窗）行为不一致。
+    """
+    def body() -> None:
+        if st.session_state.get("pending_delete") == s["id"]:
+            st.caption(f"删除「{s['title']}」？该会话的 "
+                       f"{len(s.get('messages') or [])} 条消息将被永久删除，"
+                       f"无法恢复。")
+            c1, c2 = st.columns(2)
+            if c1.button("确认删除", key=f"md_yes_{s['id']}",
+                         width="stretch"):
+                _delete_session(s["id"])
+            if c2.button("取消", key=f"md_no_{s['id']}", width="stretch"):
+                st.session_state.pop("pending_delete", None)
+                _rerun()
+            return
+        if st.button("✏️ 重命名", key=f"mr_{s['id']}", width="stretch"):
+            st.session_state.renaming_id = s["id"]
+            _rerun()  # 立即重绘该行为输入框（原位编辑）
+        if st.button("🗑 删除", key=f"md_{s['id']}", width="stretch"):
+            st.session_state.pending_delete = s["id"]   # 只进入待确认，不删
+            _rerun()
+
     if hasattr(st, "popover"):
         with st.popover("⋯", key=f"menu_{s['id']}"):
-            if st.button("✏️ 重命名", key=f"mr_{s['id']}", width="stretch"):
-                st.session_state.renaming_id = s["id"]
-                _rerun()  # 立即重绘该行为输入框（原位编辑）
-            if st.button("🗑 删除", key=f"md_{s['id']}", width="stretch"):
-                _delete_session(s["id"])
+            body()
     else:
         with st.expander("⋯", key=f"menu_{s['id']}"):
-            if st.button("✏️ 重命名", key=f"mr_{s['id']}"):
-                st.session_state.renaming_id = s["id"]
-                _rerun()
-            if st.button("🗑 删除", key=f"md_{s['id']}"):
-                _delete_session(s["id"])
+            body()
 
 
 # ---------------- 输入区（底部固定窗格） ----------------
@@ -667,10 +685,13 @@ def _handle_uploaded(uploaded) -> None:
 # ---------------- 页面 ----------------
 
 st.set_page_config(page_title="有机化学知识智能体", page_icon="🧪", layout="wide")
+# ★ 只隐藏页脚，**不隐藏右上角的 ⋮ 主菜单**：Streamlit 的「Settings → Theme
+#   （Light / Dark / Use system setting）」就在那个菜单里（1.60 的前端包里
+#   确实带 "Use system setting"），把它藏掉等于**顺手把深色模式也藏了**。
+#   其余 CSS 只调宽度/间距，不含任何颜色 —— 两种主题下都自适应。
 st.markdown(
     "<style>"
     "footer {visibility: hidden;}"
-    "#MainMenu {visibility: hidden;}"
     "[data-testid='stChatInput']{"
     "width: max(280px, calc((100vw - 460px) * 0.8)) !important;"
     "max-width: 100% !important;"
