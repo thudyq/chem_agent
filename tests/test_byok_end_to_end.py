@@ -39,6 +39,30 @@ SERVER_KEY = "sk-server-env-key"
 ANSWER = "苯（Benzene）是最基本的芳香族化合物，分子式为 C6H6。"
 
 
+class _QuietHTTPServer(HTTPServer):
+    """mock 上游服务器：把"对端正常断开连接"当成噪声忽略掉。
+
+    背景（20260911 排查）：`protocol_version = "HTTP/1.1"` 会**keep-alive**，
+    处理器读完一个请求后会继续等**下一个请求行**；而客户端是产品里那个模块级
+    `requests.Session`（连接池），测试跑完/回收时会把 socket 直接关掉 —— 服务端
+    阻塞中的 `readline` 于是抛 `ConnectionResetError`（Windows 上是 WinError 10054）。
+
+    `socketserver` 默认把这类异常当作"处理请求时出错"，打印**整段 traceback**
+    （见 `BaseServer.handle_error`）。它**不影响测试结果**，但会插进 pytest 输出里
+    看着像真失败 —— 实测 3 次里出现 1 次，属间歇性噪声。
+
+    对端断开不是错误，静默；**其它异常照常打印**（不能因为消噪而掩盖真问题）。
+    """
+
+    def handle_error(self, request, client_address):
+        import sys
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionResetError, ConnectionAbortedError,
+                            BrokenPipeError)):
+            return
+        super().handle_error(request, client_address)
+
+
 class _Upstream:
     """本机 mock 上游：记录每次请求收到的 model / Authorization / 路径。"""
 
@@ -86,7 +110,7 @@ class _Upstream:
             def log_message(self, *a):              # 静音
                 pass
 
-        self._srv = HTTPServer(("127.0.0.1", 0), Handler)
+        self._srv = _QuietHTTPServer(("127.0.0.1", 0), Handler)
         threading.Thread(target=self._srv.serve_forever, daemon=True).start()
 
     @property
@@ -248,3 +272,34 @@ def test_v1_history_isolation_via_cache(client, upstream):
     }, headers=_web_headers(base_url=upstream.base_url))
     assert r2.status_code == 200
     assert {c.model for c in upstream.calls} == {USER_MODEL}
+
+
+# ─────────────────────────────────────── mock 上游的噪声（20260911 排查）
+
+def test_quiet_server_suppresses_client_disconnect(capsys):
+    """★ 客户端断开（keep-alive 连接被关掉）不该打印 traceback。
+
+    这条是**确定性**验证：直接构造 `handle_error` 的两种输入，而不是靠"跑很多次
+    看有没有噪声"（那个是间歇性的，实测 3 次里 1 次）。
+    """
+    class _H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+    srv = _QuietHTTPServer(("127.0.0.1", 0), _H)
+    try:
+        try:
+            raise ConnectionResetError(10054, "远程主机强迫关闭了一个现有的连接。")
+        except ConnectionResetError:
+            srv.handle_error(None, ("127.0.0.1", 12345))
+        assert capsys.readouterr().err == "", "对端断开是噪声，不该打印"
+
+        # 但不能把真异常也吞掉
+        try:
+            raise ValueError("真错误")
+        except ValueError:
+            srv.handle_error(None, ("127.0.0.1", 12345))
+        err = capsys.readouterr().err
+        assert "ValueError" in err and "真错误" in err
+    finally:
+        srv.server_close()
