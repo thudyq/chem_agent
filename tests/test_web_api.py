@@ -35,6 +35,9 @@ def web(tmp_path, monkeypatch):
     monkeypatch.setattr(web_api, "_SESSIONS_DIR", tmp_path / "web_sessions")
     monkeypatch.setattr(web_api, "RATE_LIMIT_PER_MINUTE", 0)   # 默认关闭限流
     web_api._reset_rate_limit_for_tests()
+    # R11 之后客户端给的 session_id 必须"服务端下发过"（= 会话目录已存在）；
+    # 这些用例断言"服务端沿用我给的 id"，所以先把它登记上。
+    web_api._session_dir("a" * 32)
     with TestClient(app) as client:
         yield client
     web_api._reset_rate_limit_for_tests()

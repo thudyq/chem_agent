@@ -19,6 +19,7 @@ http(s) URL），经视觉模型识别为 SMILES 后并入问题文本。
 import base64
 import ipaddress
 import json
+import os
 import queue
 import re
 import socket
@@ -33,6 +34,7 @@ import requests
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from starlette.concurrency import run_in_threadpool
 
 from app import process_question
 from core.attachments import build_attachments, replace_code_blocks_with_images
@@ -153,13 +155,57 @@ def _web_session_janitor() -> None:
 
 _JANITOR_STARTED = False
 
-# 清小搭网关为服务端调用，CORS 仅供浏览器直连调试；密钥保护下放开无妨
+# 清小搭网关为服务端调用（不受 CORS 影响）；浏览器侧的来源默认只放行
+# 「本机调试 + 自己的公开地址」，不再用 `["*"]`（安全审查 R9）。
+def _cors_origins() -> list:
+    """允许的浏览器来源（安全审查 R9）。
+
+    原来是 `allow_origins=["*"]`：任何网站都能让它自己的访客的浏览器直接调本
+    服务。BYOK 的鉴权走**请求头**而不是 cookie，所以别人的页面偷不到用户填在
+    我们页面里的 Key，危害有限——但没有理由敞开。
+
+    * 网页与接口**同源**（`/chat` 与 `/api/*` 同一个域名），同源请求根本不需要
+      CORS，所以收紧不影响正常使用；
+    * 只有"把页面托管到别的域名"（DEPLOY.md §2.5）才需要额外来源，用
+      `CORS_ALLOW_ORIGINS=https://a.com,https://b.com` 显式列出即可。
+    """
+    raw = (os.environ.get("CORS_ALLOW_ORIGINS") or "").strip()
+    if raw:
+        return [o.strip().rstrip("/") for o in raw.split(",") if o.strip()]
+    local = ["http://127.0.0.1:8000", "http://localhost:8000"]
+    pub = (settings.service.public_base_url or "").strip().rstrip("/")
+    return local + ([pub] if pub and pub not in local else [])
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins(),
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 统一安全响应头（安全审查 R10）。★ 只加**最小 CSP**（frame-ancestors），
+# 不加完整的资源 CSP：`web/index.html` 是内联 script/style 的单文件，完整 CSP
+# 得放开 'unsafe-inline' 才有意义——收益小、弄坏页面的风险实在。
+_SECURITY_HEADERS = (
+    ("X-Frame-Options", "DENY"),
+    ("Content-Security-Policy", "frame-ancestors 'none'"),
+    ("X-Content-Type-Options", "nosniff"),
+    ("Referrer-Policy", "no-referrer"),
+)
+
+
+@app.middleware("http")
+async def _security_headers(request: Request, call_next):
+    """给所有响应补上 X-Frame-Options / 最小 CSP / nosniff / Referrer-Policy。
+
+    主要目的是**禁止本页面被别的站点 iframe 套用**（点击劫持）——页面里有
+    "填 API Key"的输入框，被套框后可以诱导点击。
+    """
+    response = await call_next(request)
+    for key, value in _SECURITY_HEADERS:
+        response.headers.setdefault(key, value)
+    return response
 
 SERVICE_KEY = settings.service.api_key
 
@@ -790,7 +836,10 @@ async def chat_completions(request: Request, authorization: str | None = Header(
     # 请求级临时目录（图片/附件落盘）；`work_dir` 支持 CHEM_AGENT_TMPDIR
     # 覆盖，且在收尾删除失败时只记日志、不让整请求失败
     with work_dir(prefix="chemreq_") as tmp_dir:
-        question = _build_question(text, images, audios, files, tmp_dir)
+        # ★ R13：`_build_question` 可能发起**视觉模型 HTTP 调用**（带图时），
+        # 同步跑在 async 端点里会占住事件循环 → 全服务（含网页 SSE）一起卡。
+        question = await run_in_threadpool(
+            _build_question, text, images, audios, files, tmp_dir)
         question = _maybe_add_correction_directive(
             question, text, body.get("messages") or [])
 
@@ -802,9 +851,11 @@ async def chat_completions(request: Request, authorization: str | None = Header(
 
     diag = []
     responses = []
-    answer = process_question(question, history=history,
-                              diagnostics=diag, responses=responses) \
-        or "（未能生成回答）"
+    # ★ R13：非流式这条路以前**同步**跑整条管线（1~3 分钟）→ 事件循环被占死，
+    # 同一进程里的网页 SSE、附件下载全部停摆。改为线程池执行。
+    answer = await run_in_threadpool(
+        process_question, question, history=history,
+        diagnostics=diag, responses=responses) or "（未能生成回答）"
     answer = _strip_md_images(answer)
     _log_diagnostics(diag)
     # 完整诊断落盘（JSONL，journald 摘要之外的完整记录——长 COMPOSITE
@@ -812,7 +863,8 @@ async def chat_completions(request: Request, authorization: str | None = Header(
     diaglog.log_request(question, cid, diag,
                         responses[-1] if responses else None)
     try:
-        attachments = build_attachments(answer, public_base)
+        # ★ R13：LaTeX 编译（3 图并发、每张最长 120 秒）也不能占事件循环
+        attachments = await run_in_threadpool(build_attachments, answer, public_base)
     except Exception as e:  # 编译异常不拖垮已生成的文本回答（与流式路径一致）
         print(f"[api] 附件编译异常，降级为无附件: {e}")
         attachments = []

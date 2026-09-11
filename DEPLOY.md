@@ -194,8 +194,10 @@ sudo systemctl daemon-reload && sudo systemctl restart chem_agent
 * 页面里两处端点写死为同源（`api/chat`、`api/web-config`）——放到异地托管时
   改成绝对地址，例如把 `fetch("api/chat"` 改为
   `fetch("https://你的域名/api/chat"`；
-* 服务端已开 `CORSMiddleware(allow_origins=["*"])`，但**必须**允许自定义头，
-  否则浏览器预检失败——当前配置 `allow_headers=["*"]` 已满足；
+* 服务端已开 `CORSMiddleware`，但**默认只放行本机调试地址与你自己的 `PUBLIC_BASE_URL`**
+  （安全审查 R9；网页与接口同源时根本不需要 CORS）。放到异地托管时，必须把那个域名
+  加进去，否则浏览器预检失败：`CORS_ALLOW_ORIGINS=https://你的静态域名`；
+* 必须允许自定义头，否则浏览器预检失败——当前配置 `allow_headers=["*"]` 已满足；
 * 附件 URL 由服务端按 `PUBLIC_BASE_URL` 生成，与页面托管位置无关。
 
 > 安全提示：把页面放到第三方域名时，用户的 Key 会经由那个域名的 JS 发出——
@@ -290,6 +292,8 @@ python -m utils.latex_compile --security-check --strict   # 没拦住则以退�
 | 在途上限 | 全局 16、单 IP 4（安全审查 R5）。超了返回 503 + "服务器当前请求较多"（不是用户设置问题）。可用环境变量 `CHEM_AGENT_MAX_INFLIGHT` / `CHEM_AGENT_MAX_INFLIGHT_PER_IP` 调整，设 `0` = 关闭该道闸门 |
 | 图片大小上限 | 单张 8MB、单次合计 16MB（**解码后**，安全审查 R6）；超限 400 并提示压缩/减少张数。反代另需 `client_max_body_size` 放行（见 §2.3） |
 | 单个会话附件上限 | 64MB（`core/web_api.py` 的 `WEB_SESSION_MAX_BYTES`）；超了先回收**该会话内部**最旧的图，再走全局配额 |
+| 浏览器来源（CORS） | 默认只放行本机调试地址 + `.env` 的 `PUBLIC_BASE_URL`（网页与接口同源，同源请求不需要 CORS）。把页面托管到**别的域名**时（§2.5），用 `CORS_ALLOW_ORIGINS=https://a.com,https://b.com` 显式列出 |
+| 安全响应头 | 所有响应带 `X-Frame-Options: DENY`、CSP `frame-ancestors 'none'`、`nosniff`、`Referrer-Policy: no-referrer`（防 iframe 套框/点击劫持） |
 | 用户密钥去向 | 只在请求内存；日志只打指纹；`data/diagnostics.jsonl` 里存的是标记文本与凭证指纹，**不含密钥** |
 
 ### 常见问题

@@ -131,6 +131,9 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(web_api, "_SESSIONS_DIR", tmp_path / "web_sessions")
     monkeypatch.setattr(web_api, "RATE_LIMIT_PER_MINUTE", 0)
     web_api._reset_rate_limit_for_tests()
+    # R11 之后客户端给的 session_id 必须"服务端下发过"（= 会话目录已存在）；
+    # 这些用例沿用固定 id，先把它登记上。
+    web_api._session_dir("a" * 32)
     # 不往仓库 data/ 写诊断与回答缓存（保持测试无副作用）
     monkeypatch.setattr(api, "diaglog", SimpleNamespace(log_request=lambda *a, **k: None))
     monkeypatch.setattr(web_api, "diaglog",

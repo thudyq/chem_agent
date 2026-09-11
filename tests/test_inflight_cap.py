@@ -240,6 +240,7 @@ def test_json_path_returns_503_when_busy(monkeypatch, tmp_path):
     monkeypatch.setattr(web_api, "_SESSIONS_DIR", tmp_path / "web_sessions")
     monkeypatch.setattr(web_api, "RATE_LIMIT_PER_MINUTE", 0)
     web_api._reset_rate_limit_for_tests()
+    web_api._session_dir("a" * 32)      # R11：让用例里的固定 id 成为"已下发"
 
     def busy(*a, **k):
         raise credentials.ServerBusy()

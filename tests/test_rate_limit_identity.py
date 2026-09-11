@@ -39,6 +39,7 @@ def web(tmp_path, monkeypatch):
     app.include_router(web_api.router)
     monkeypatch.setattr(web_api, "_SESSIONS_DIR", tmp_path / "web_sessions")
     web_api._reset_rate_limit_for_tests()
+    web_api._session_dir("a" * 32)      # R11：让用例里的固定 id 成为"已下发"
     with TestClient(app) as client:
         yield client
     web_api._reset_rate_limit_for_tests()

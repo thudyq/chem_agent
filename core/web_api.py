@@ -50,6 +50,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from starlette.concurrency import run_in_threadpool
 
 from app import process_question
 from core import answer_cache, credentials, diaglog
@@ -857,7 +858,8 @@ async def make_title(request: Request,
     question = str((body or {}).get("question") or "")
     with credentials.user_credentials(creds):
         credentials.set_request_ip(_client_ip(request))   # 按 IP 的在途闸门（R5）
-        title = summarize_title(question)
+        # ★ R13：一次真实的 LLM 调用（1~3 秒起），同样不能占着事件循环
+        title = await run_in_threadpool(summarize_title, question)
     return {"title": title}
 
 
@@ -920,8 +922,16 @@ async def chat(request: Request,
     _check_image_budget(images)
 
     session_id = str(body.get("session_id") or "").strip().lower()
-    if not _SID_RE.fullmatch(session_id):
-        # 前端未给或格式非法 → 服务端生成一个（前端回存并复用）
+    # ★ 只接受**服务端下发过**的会话 id（安全审查 R11）。
+    # 判据是"会话目录已存在"——服务端每次下发 id 都会建这个目录，所以它天然
+    # 就是一份"已下发清单"，而且**重启后依然有效**（纯内存集合会在重启后丢掉，
+    # 那样老会话的图就取不到了）。客户端自造的 id 一律忽略并换成新的；前端本来
+    # 就会回存服务端给的那个 id，所以正常使用不受影响。
+    if not (_SID_RE.fullmatch(session_id)
+            and (_sessions_root() / session_id).is_dir()):
+        if session_id:
+            print(f"[web] 忽略客户端自造的 session_id（安全审查 R11）: "
+                  f"{session_id[:8]}")
         session_id = uuid.uuid4().hex
     session_dir = _session_dir(session_id)
     history = _extract_history(messages)
@@ -936,7 +946,11 @@ async def chat(request: Request,
               f"model={creds.get('model')} base={creds.get('base_url')} "
               f"session={session_id[:8]} images={len(images)} "
               f"stream={stream} history={len(history)}")
-        question = _build_question(text, images, session_dir)
+        # ★ R13：`_build_question` 里可能有一次**视觉模型 HTTP 调用**。同步跑在
+        # async 端点里会占住事件循环——期间连别的请求都读不到，所有用户一起卡。
+        # 交给线程池后，本请求继续异步（凭证靠 context 拷贝带进线程，已实测）。
+        question = await run_in_threadpool(_build_question, text, images,
+                                          session_dir)
 
         if stream:
             # ★ 必须把**凭证 dict 本身**传进生成器：`_sse_stream` 是生成器，
@@ -957,11 +971,14 @@ async def chat(request: Request,
 
         diag, responses = [], []
         try:
-            answer = process_question(question, history=history,
-                                      diagnostics=diag, responses=responses,
-                                      thinking=_thinking_of(creds),
-                                      effort=creds.get("effort"),
-                                      max_tokens=_max_tokens_of(creds)) \
+            # ★ R13：整条管线（1~3 分钟）必须离开事件循环，否则这一台服务器上
+            # **所有**请求都会停住（含其他人的 SSE 流）。
+            answer = await run_in_threadpool(
+                process_question, question, history=history,
+                diagnostics=diag, responses=responses,
+                thinking=_thinking_of(creds),
+                effort=creds.get("effort"),
+                max_tokens=_max_tokens_of(creds)) \
                 or "（未能生成回答）"
         except credentials.ServerBusy as e:
             # 在途上限已满（安全审查 R5）：这不是用户的错，给 503 而不是 500，
@@ -971,7 +988,9 @@ async def chat(request: Request,
         diaglog.log_request(question, f"web-{session_id[:8]}", diag,
                             responses[-1] if responses else None,
                             credential=credentials.fingerprint())
-        display = _prepare_answer(answer, session_id)
+        # ★ R13：`_prepare_answer` 会把 TikZ 编译成 PNG（3 图并发、每张最长
+        # 120 秒）——同样不能占着事件循环。
+        display = await run_in_threadpool(_prepare_answer, answer, session_id)
         if responses:
             answer_cache.store(display, responses[-1],
                                meta=_diag_meta(diag))
