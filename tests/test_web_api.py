@@ -6,6 +6,7 @@
 沙箱环境下同样可跑）。
 """
 
+import base64
 import json
 import time
 from pathlib import Path
@@ -15,6 +16,11 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from core import answer_cache, credentials, web_api
+
+# 视觉链路用例要喂**真图片**：安全审查 R6 之后，落盘前会按魔数判断真实类型，
+# 拿 `base64,AAAA` 这种假数据会被直接拒绝（那是"图片不合法"的路径，另有专门用例）。
+PNG_DATA_URL = "data:image/png;base64," + base64.b64encode(
+    b"\x89PNG\r\n\x1a\n" + b"0" * 32).decode()
 
 KEY_HEADERS = {"X-Chem-Api-Key": "sk-test-key-123456",
                "X-Chem-Model": "deepseek-flash",
@@ -490,7 +496,7 @@ def test_image_uses_main_model_when_no_vision_configured(web, answered,
     monkeypatch.setattr(ocr, "describe_image", fake_describe)
     body = {"messages": [{"role": "user", "content": [
         {"type": "text", "text": "这是什么分子"},
-        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}]}],
+        {"type": "image_url", "image_url": {"url": PNG_DATA_URL}}]}],
         "stream": False, "session_id": "a" * 32}
     r = web.post("/api/chat", json=body, headers=KEY_HEADERS)
     assert r.status_code == 200
@@ -511,7 +517,7 @@ def test_image_recognition_failure_is_reported(web, answered, monkeypatch):
     body = {"messages": [{"role": "user", "content": [
         {"type": "text", "text": "这是什么分子"},
         {"type": "image_url",
-         "image_url": {"url": "data:image/png;base64,AAAA"}}]}],
+         "image_url": {"url": PNG_DATA_URL}}]}],
         "stream": False, "session_id": "a" * 32}
     r = web.post("/api/chat", json=body, headers=KEY_HEADERS)
     assert r.status_code == 200
@@ -528,7 +534,7 @@ def test_image_recognized_with_vision_config(web, answered, monkeypatch):
     body = {"messages": [{"role": "user", "content": [
         {"type": "text", "text": "这是什么分子"},
         {"type": "image_url",
-         "image_url": {"url": "data:image/png;base64," + "A" * 40}}]}],
+         "image_url": {"url": PNG_DATA_URL}}]}],
         "stream": False, "session_id": "a" * 32}
     r = web.post("/api/chat", json=body, headers=headers)
     assert r.status_code == 200
@@ -546,7 +552,7 @@ def test_image_vision_failure_is_reported_to_model(web, answered, monkeypatch):
     body = {"messages": [{"role": "user", "content": [
         {"type": "text", "text": "看图"},
         {"type": "image_url",
-         "image_url": {"url": "data:image/png;base64," + "A" * 40}}]}],
+         "image_url": {"url": PNG_DATA_URL}}]}],
         "stream": False, "session_id": "a" * 32}
     web.post("/api/chat", json=body, headers=headers)
     assert "识别失败" in answered["question"]

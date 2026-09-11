@@ -267,6 +267,8 @@ python -m utils.latex_compile --security-check --strict   # 没拦住则以退�
 | 清小搭附件目录 | `data/attachments/`（独立配额 2GB / 50000，长期保留，与网页互不挤占） |
 | 限流 | 每 IP 每分钟 20 次（`core/web_api.py` 的 `RATE_LIMIT_PER_MINUTE`）；客户端身份取 uvicorn 净化后的对端地址 |
 | 在途上限 | 全局 16、单 IP 4（安全审查 R5）。超了返回 503 + "服务器当前请求较多"（不是用户设置问题）。可用环境变量 `CHEM_AGENT_MAX_INFLIGHT` / `CHEM_AGENT_MAX_INFLIGHT_PER_IP` 调整，设 `0` = 关闭该道闸门 |
+| 图片大小上限 | 单张 8MB、单次合计 16MB（**解码后**，安全审查 R6）；超限 400 并提示压缩/减少张数。反代另需 `client_max_body_size` 放行（见 §2.3） |
+| 单个会话附件上限 | 64MB（`core/web_api.py` 的 `WEB_SESSION_MAX_BYTES`）；超了先回收**该会话内部**最旧的图，再走全局配额 |
 | 用户密钥去向 | 只在请求内存；日志只打指纹；`data/diagnostics.jsonl` 里存的是标记文本与凭证指纹，**不含密钥** |
 
 ### 常见问题
@@ -282,6 +284,12 @@ python -m utils.latex_compile --security-check --strict   # 没拦住则以退�
 如果是正常高峰想放宽，设环境变量 `CHEM_AGENT_MAX_INFLIGHT=32`（以及
 `CHEM_AGENT_MAX_INFLIGHT_PER_IP`）后重启服务。**如果日志里这个提示很频繁、
 而且来源 IP 很分散**，那多半是有人在打你，考虑上 WAF/CDN 限速。
+
+**Q：用户说图片传不上去 / 提示图片过大？**
+三道限制，按顺序看：① 单张 8MB、单次合计 16MB（解码后，安全审查 R6）——让用户
+压缩或减少张数；② 反代的 `client_max_body_size`（§2.3 应设 48m，nginx 默认只有 1MB，
+小图也会被 413 拒掉，且用户看不到原因）；③ 前端也会先拦一次并给提示。
+如果报的是"图片格式不支持"，那是魔数校验：附件必须是**真图片**（png/jpg/gif/bmp/webp）。
 
 **Q：图示一直显示"（图示未能渲染）"？**
 服务器缺 LaTeX 工具链。装：

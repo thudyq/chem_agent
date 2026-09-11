@@ -2542,13 +2542,33 @@ function renderThumbs(){
 $("btnAttach").onclick = () => $("fileInput").click();
 $("fileInput").onchange = async (e) => {
   const files = Array.from(e.target.files || []);
+  // 与后端同一口径（core/web_api.py 的 _MAX_IMAGE_BYTES / _MAX_TOTAL_IMAGE_BYTES）：
+  // 单张 8MB、合计 16MB。前端先拦是为了**给出清楚的提示**，后端仍会独立校验
+  // （直接构造 JSON 就能绕开这里）。图片按原样 base64 内联发送，所以合计
+  // 上限也决定了请求体大小 —— 超了会被 nginx 直接 413，用户看不到原因。
+  const MAX_ONE = 8 * 1024 * 1024, MAX_ALL = 16 * 1024 * 1024;
+  // 估算已选图片的解码后字节数（与后端 _b64_decoded_size 同一算法）
+  const imgBytes = (im) => {
+    const s = (im && im.dataUrl) ? im.dataUrl : "";
+    const i = s.indexOf(",");
+    return i < 0 ? 0 : Math.floor((s.length - i - 1) * 3 / 4);
+  };
+  let total = pendingImages.reduce((n, im) => n + imgBytes(im), 0);
   for (const f of files){
     if (pendingImages.length >= serverCfg.max_images){
       alert("最多上传 " + serverCfg.max_images + " 张图片"); break;
     }
     if (!/^image\//.test(f.type)) continue;
-    if (f.size > 8 * 1024 * 1024){ alert(f.name + " 超过 8MB，已跳过"); continue; }
-    pendingImages.push(await readFile(f));
+    if (f.size > MAX_ONE){
+      alert(f.name + " 超过 8MB，已跳过（建议先压缩）"); continue;
+    }
+    if (total + f.size > MAX_ALL){
+      alert(f.name + " 会让图片合计超过 16MB，已跳过（建议减少张数或压缩）");
+      continue;
+    }
+    const item = await readFile(f);
+    pendingImages.push(item);
+    total += imgBytes(item);
   }
   e.target.value = "";
   renderThumbs();

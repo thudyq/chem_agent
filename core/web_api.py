@@ -90,6 +90,13 @@ _MAX_QUESTION_CHARS = 8000
 _MAX_IMAGES = 4
 _MAX_HISTORY_ITEMS = 10
 
+# ★ 图片大小硬上限（安全审查 R6）：前端先按同一口径拦一遍（见 web/index.html），
+# 这里是后端兜底 —— 直接构造 JSON 就能绕开前端。
+# `data:` URL 用**长度估算**判断（不解码），避免"为了拒绝而先解出几百 MB"。
+# 16MB 解码后 ≈ 21.3MB base64，正好落在 nginx 的 `client_max_body_size 24m` 之内。
+_MAX_IMAGE_BYTES = 8 * 1024 * 1024           # 单张（解码后）
+_MAX_TOTAL_IMAGE_BYTES = 16 * 1024 * 1024    # 一次请求合计（解码后）
+
 # 网页附件的**全局**配额。语义与 /v1（core/attachments.py）完全一致：
 # **不按时间删，只在超配额时删最旧的**。差别只在作用域——/v1 是一个扁平目录，
 # 配额天然就是全局；网页是"每会话一个目录"，所以必须在 `web_sessions/` 这一层
@@ -100,6 +107,10 @@ _MAX_HISTORY_ITEMS = 10
 # 反之亦然。默认值与 `ServiceConfig.attachment_max_*` 同口径（2GB / 50000）。
 WEB_ATTACHMENT_MAX_BYTES = 2 * 1024 * 1024 * 1024      # 2GB
 WEB_ATTACHMENT_MAX_FILES = 50000
+
+# 单个会话目录的上限（安全审查 R6）：回收时**先在会话内部消化**，再走全局最旧
+# 优先。否则一个人猛传图就能把配额顶到全局上限，把别人的附件挤掉。
+WEB_SESSION_MAX_BYTES = 64 * 1024 * 1024               # 64MB / 会话
 
 # 清理时**不动**刚写入的文件：清理器是后台线程，可能和一个正在落盘的请求撞上。
 # 这不是"按时间删除"，只是给新文件一道保护窗（超配额时宁超额也不删新图，
@@ -277,6 +288,73 @@ def _within_web_quota(total_bytes: int, total_files: int,
     return True
 
 
+def _collect_web_pngs(root: Path) -> tuple:
+    """收集 `web_sessions/` 下所有 `*.png` → (文件列表, 总字节数)。"""
+    files, total_bytes = [], 0
+    for p in root.rglob("*.png"):
+        try:
+            if not p.is_file():
+                continue
+            sz = p.stat().st_size
+        except OSError:
+            continue
+        files.append(p)
+        total_bytes += sz
+    return files, total_bytes
+
+
+def _prune_oversized_sessions(root: Path, cutoff: float,
+                              max_bytes: int = None) -> int:
+    """先按**单会话**上限回收，返回删除的文件数（安全审查 R6）。
+
+    为什么需要这一道：全局回收是"跨会话按最旧优先删"。一个人猛传图就能把总量
+    顶到全局上限，于是**别人的图先被删掉**（他们的图更旧）。先在会话内部消化，
+    可以把这类"挤掉别人"的效果大幅削弱——攻击者只能删到自己的图。
+    （仍有残留：会话 id 由请求方指定，可以不断开新会话绕开单会话额度。
+    彻底解法见 Security-Review.md R6 的"还剩什么"。）
+
+    ★ `max_bytes=None` 时**在调用时**读 `WEB_SESSION_MAX_BYTES`，不写成默认参数
+    ——默认值在函数定义时求值，会绑死旧值，运行时改配置/测试 monkeypatch 全都不
+    生效（本项目在 `_rate_limit` 上已经踩过一次同样的坑）。
+    """
+    if max_bytes is None:
+        max_bytes = WEB_SESSION_MAX_BYTES
+    if max_bytes <= 0:
+        return 0
+    by_dir: dict = {}
+    try:
+        children = [c for c in root.iterdir() if c.is_dir()]
+    except OSError:
+        return 0
+    for d in children:
+        try:
+            entries = [(p, p.stat().st_size, p.stat().st_mtime)
+                       for p in d.rglob("*.png") if p.is_file()]
+        except OSError:
+            continue
+        total = sum(sz for _, sz, _ in entries)
+        if total <= max_bytes:
+            continue
+        removed = 0
+        for p, sz, mtime in sorted(entries, key=lambda x: x[2]):
+            if total <= max_bytes:
+                break
+            if mtime > cutoff:          # 新文件一律不删（可能正被引用）
+                continue
+            try:
+                p.unlink()
+            except OSError:
+                continue
+            total -= sz
+            removed += 1
+        by_dir[d] = removed
+        if removed:
+            print(f"[web] 会话 {d.name[:8]} 超过单会话上限（"
+                  f"{max_bytes // 1024 // 1024} MB）→ 回收其内部最旧图 "
+                  f"{removed} 个")
+    return sum(by_dir.values())
+
+
 def prune_web_attachments(max_bytes: int = WEB_ATTACHMENT_MAX_BYTES,
                           max_files: int = WEB_ATTACHMENT_MAX_FILES) -> int:
     """按**全局配额**回收网页附件，返回删除的文件数。
@@ -289,7 +367,9 @@ def prune_web_attachments(max_bytes: int = WEB_ATTACHMENT_MAX_BYTES,
     与 `_prune_attachments`（/v1）**不能直接复用**：那个只处理单个扁平目录，
     这里是每会话一个目录，必须在 `web_sessions/` 这一层跨目录收集。
 
-    * 先统计全部 `*.png` 的字节数与个数，未超配额直接返回 0（常态路径，不删任何东西）；
+    * **先按单会话上限回收**（安全审查 R6）——让超额会话先在自己内部消化，
+      而不是一上来就跨会话删最旧的、把别人的图挤掉；
+    * 再统计全部 `*.png` 的字节数与个数，未超全局配额直接返回 0（常态路径）；
     * 超配额 → 按 mtime 升序删，直到两项都达标；`_PRUNE_MIN_AGE` 内的新文件
       一律跳过（可能正被某个请求写入/引用）；
     * 顺手删掉因此变空的会话目录（避免 `web_sessions/` 里堆一堆空目录）。
@@ -298,23 +378,16 @@ def prune_web_attachments(max_bytes: int = WEB_ATTACHMENT_MAX_BYTES,
     if not root.is_dir() or (max_bytes <= 0 and max_files <= 0):
         return 0
 
-    files = []
-    total_bytes = 0
-    for p in root.rglob("*.png"):
-        try:
-            if not p.is_file():
-                continue
-            sz = p.stat().st_size
-        except OSError:
-            continue
-        files.append(p)
-        total_bytes += sz
+    cutoff = time.time() - _PRUNE_MIN_AGE
+    removed = _prune_oversized_sessions(root, cutoff)     # 第一道：单会话上限
+    files, total_bytes = _collect_web_pngs(root)          # 重新统计
 
     if _within_web_quota(total_bytes, len(files), max_bytes, max_files):
-        return 0
+        if removed:
+            _drop_empty_session_dirs(root)
+        return removed
 
-    cutoff = time.time() - _PRUNE_MIN_AGE
-    removed, freed = 0, 0
+    freed = 0
     for p in sorted(files, key=lambda x: x.stat().st_mtime):
         if _within_web_quota(total_bytes, len(files), max_bytes, max_files):
             break
@@ -404,6 +477,64 @@ def _extract_history(messages) -> list:
 
 _DATA_URL_RE = re.compile(r"data:image/(\w+);base64,(.*)", re.DOTALL)
 
+# 真实图片的魔数（安全审查 R6）：只看 `data:image/...` 前缀是不够的——
+# 那串前缀是**请求方自己写的**，后面完全可以是任意字节。落盘前按内容判断，
+# 既避免把垃圾写进磁盘，也顺手纠正扩展名（声明 png 实际是 jpg 的情况）。
+_IMAGE_SIGNATURES = (
+    (b"\x89PNG\r\n\x1a\n", "png"),
+    (b"\xff\xd8\xff", "jpg"),
+    (b"GIF87a", "gif"),
+    (b"GIF89a", "gif"),
+    (b"BM", "bmp"),
+)
+
+
+def _sniff_image(data: bytes) -> Optional[str]:
+    """按魔数判断真实图片类型；不是图片返回 None（webp 额外校验 RIFF 里的标签）。"""
+    if not data:
+        return None
+    for sig, kind in _IMAGE_SIGNATURES:
+        if data.startswith(sig):
+            return kind
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "webp"
+    return None
+
+
+def _b64_decoded_size(payload: str) -> int:
+    """估算 base64 解码后的字节数（**不解码**，免得为了拒绝先吃掉内存）。"""
+    n = len(payload) - payload.count("=")
+    return max(0, (n * 3) // 4)
+
+
+def _check_image_budget(images: list) -> None:
+    """图片引用的**大小**校验（安全审查 R6），超限抛 400。
+
+    `data:` URL 在这里按长度估算；http(s) 的大小只能等下载时才知道，
+    由 `_save_upload_image` 边下边卡（不落盘超限内容）。
+    """
+    total = 0
+    for i, ref in enumerate(images):
+        if not isinstance(ref, str) or not ref.startswith("data:"):
+            continue
+        m = _DATA_URL_RE.match(ref)
+        if not m:
+            continue
+        size = _b64_decoded_size(m.group(2))
+        if _MAX_IMAGE_BYTES > 0 and size > _MAX_IMAGE_BYTES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"第 {i + 1} 张图片过大（约 {size // 1024 // 1024} MB，"
+                       f"单张上限 {_MAX_IMAGE_BYTES // 1024 // 1024} MB）；"
+                       f"请压缩后重试")
+        total += size
+    if _MAX_TOTAL_IMAGE_BYTES > 0 and total > _MAX_TOTAL_IMAGE_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"图片合计过大（约 {total // 1024 // 1024} MB，单次上限 "
+                   f"{_MAX_TOTAL_IMAGE_BYTES // 1024 // 1024} MB）；"
+                   f"请减少张数或压缩后重试")
+
 
 def _save_upload_image(ref: str, index: int, upload_dir: Path) -> str | None:
     """把一条图片引用落盘为会话上传目录下的独立文件，返回路径；失败 None。
@@ -411,18 +542,31 @@ def _save_upload_image(ref: str, index: int, upload_dir: Path) -> str | None:
     单独实现（不复用 api.py 的 `_fetch_image_to_temp`）：那个函数写死文件名
     `upload.png`，同请求多图会互相覆盖。这里每图一个 uuid 文件名，支持并发。
     data: base64 直接解码（不发网络请求）；http(s) 走 SSRF 校验后下载。
+
+    ★ 两道硬约束（安全审查 R6）：**解码后不得超过单张上限**，且必须是**真图片**
+    （按魔数判断）。http(s) 那条边下边卡，绝不把超限内容读进内存再落盘。
     """
     upload_dir.mkdir(parents=True, exist_ok=True)
     if ref.startswith("data:"):
         m = _DATA_URL_RE.match(ref)
         if not m:
             return None
-        ext = "jpg" if m.group(1).lower() in ("jpg", "jpeg") else "png"
+        if _MAX_IMAGE_BYTES > 0 and \
+                _b64_decoded_size(m.group(2)) > _MAX_IMAGE_BYTES:
+            print(f"[web] 拒绝落盘：第 {index + 1} 张图片超过单张上限")
+            return None
         try:
             data = base64.b64decode(m.group(2))
         except Exception:
             return None
-        path = upload_dir / f"up{index}-{uuid.uuid4().hex[:8]}.{ext}"
+        if _MAX_IMAGE_BYTES > 0 and len(data) > _MAX_IMAGE_BYTES:
+            print(f"[web] 拒绝落盘：第 {index + 1} 张图片解码后超限")
+            return None
+        kind = _sniff_image(data)
+        if kind is None:
+            print(f"[web] 拒绝落盘：第 {index + 1} 个附件不是图片（魔数不匹配）")
+            return None
+        path = upload_dir / f"up{index}-{uuid.uuid4().hex[:8]}.{kind}"
         path.write_bytes(data)
         return str(path)
     if ref.startswith(("http://", "https://")):
@@ -433,13 +577,27 @@ def _save_upload_image(ref: str, index: int, upload_dir: Path) -> str | None:
         try:
             # ★ 不跟随重定向（安全审查 R3）：URL 已过 `_validate_download_url`，
             # 但 302 的目标不受校验管，跟随等于把 SSRF 防护作废。
-            resp = requests.get(ref, timeout=20, allow_redirects=False)
+            # ★ stream=True（安全审查 R6）：边下边卡上限，别把 1GB 读进内存。
+            with requests.get(ref, timeout=20, allow_redirects=False,
+                              stream=True) as resp:
+                if resp.status_code != 200:
+                    return None
+                chunks, size = [], 0
+                for chunk in resp.iter_content(64 * 1024):
+                    size += len(chunk or b"")
+                    if _MAX_IMAGE_BYTES > 0 and size > _MAX_IMAGE_BYTES:
+                        print(f"[web] 中断下载：第 {index + 1} 张图片超过单张上限")
+                        return None
+                    chunks.append(chunk or b"")
         except requests.exceptions.RequestException:
             return None
-        if resp.status_code != 200:
+        data = b"".join(chunks)
+        kind = _sniff_image(data)
+        if kind is None:
+            print(f"[web] 拒绝落盘：下载内容不是图片（魔数不匹配）")
             return None
-        path = upload_dir / f"up{index}-{uuid.uuid4().hex[:8]}.png"
-        path.write_bytes(resp.content)
+        path = upload_dir / f"up{index}-{uuid.uuid4().hex[:8]}.{kind}"
+        path.write_bytes(data)
         return str(path)
     return None
 
@@ -757,6 +915,9 @@ async def chat(request: Request,
         raise HTTPException(
             status_code=400,
             detail=f"问题过长（{len(text)} 字符，上限 {_MAX_QUESTION_CHARS}）")
+    # ★ 图片大小硬上限（安全审查 R6）：直接构造 JSON 就能绕开前端的拦截，
+    # 所以必须在**解码/落盘之前**在这里卡住（按 base64 长度估算，不解码）。
+    _check_image_budget(images)
 
     session_id = str(body.get("session_id") or "").strip().lower()
     if not _SID_RE.fullmatch(session_id):
