@@ -633,7 +633,10 @@ def index():
     page = _WEB_DIR / "index.html"
     if not page.is_file():
         raise HTTPException(status_code=404, detail="web/index.html 缺失")
-    return HTMLResponse(page.read_text(encoding="utf-8"))
+    # ★ 必须 no-store：整个前端就是这一个文件，浏览器**启发式缓存**会让用户
+    # 在部署后继续跑旧版本（实测：改了前端却仍看到旧渲染行为，排查方向被带偏）。
+    return HTMLResponse(page.read_text(encoding="utf-8"),
+                        headers={"Cache-Control": "no-store, must-revalidate"})
 
 
 @router.post("/api/title")

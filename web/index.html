@@ -214,12 +214,20 @@
   .bubble a{text-decoration:underline;text-underline-offset:2px}
   .bubble a:hover{text-decoration-thickness:2px}
 
-  /* 图示 LaTeX 源码折叠面板 */
-  details.src{margin-top:10px;font-size:12.5px}
-  details.src summary{cursor:pointer;color:var(--muted);list-style:none}
+  /* 图示 LaTeX 源码折叠面板（每张图各自一个，放在图的正下方） */
+  details.src{margin:8px 0 14px;font-size:12.5px}
+  details.src summary{display:flex;align-items:center;gap:8px;cursor:pointer;
+                      color:var(--muted);list-style:none}
+  details.src summary span{flex:1;min-width:0}
   details.src summary::-webkit-details-marker{display:none}
   details.src summary::before{content:"▸ "}
   details.src[open] summary::before{content:"▾ "}
+  details.src .srccopy{
+    flex:0 0 auto;border:1px solid var(--line);background:var(--surface);
+    color:var(--muted);font-size:11.5px;padding:2px 9px;border-radius:999px;
+  }
+  details.src .srccopy:hover{background:var(--hover);color:var(--ink)}
+  details.src .srccopy.done{color:var(--ok);border-color:var(--ok-line);background:var(--ok-bg)}
   details.src pre{margin:8px 0 0;max-height:340px;overflow:auto;font-size:12px;
                   background:var(--code-bg);color:var(--code-ink);
                   border-radius:var(--radius-sm);padding:11px 13px}
@@ -1511,12 +1519,21 @@ $("lightbox").addEventListener("click", (e) => {
 });
 $("lbClose").onclick = closeLightbox;
 
-/* 代码块"复制"：事件委托（流式内容不断重建，逐个绑定会失效） */
+/* 代码块 / 图示源码的"复制"：事件委托（流式内容不断重建，逐个绑定会失效） */
 elStream.addEventListener("click", async (e) => {
-  const btn = e.target && e.target.closest ? e.target.closest(".codecopy") : null;
-  if (!btn) return;
-  const wrap = btn.closest(".codewrap");
-  const code = wrap && wrap.querySelector("pre code");
+  const t = e.target;
+  if (!t || !t.closest) return;
+  const codeBtn = t.closest(".codecopy");
+  const srcBtn = t.closest(".srccopy");
+  if (!codeBtn && !srcBtn) return;
+  if (srcBtn){
+    // 别把所在 <details> 一起开合了
+    e.preventDefault();
+    e.stopPropagation();
+  }
+  const btn = codeBtn || srcBtn;
+  const scope = btn.closest(".codewrap") || btn.closest("details.src");
+  const code = scope && scope.querySelector("pre code");
   const ok = await copyText(code ? code.textContent : "");
   btn.textContent = ok ? "已复制 ✓" : "复制失败";
   btn.classList.toggle("done", ok);
@@ -1582,29 +1599,60 @@ function addActions(bubble, m){
       bDl.onclick = () => downloadUrl(imgs[0].getAttribute("src"), "化学图示.png");
       acts.appendChild(bDl);
     }
-    if (m.raw){
+    if (m.latex && m.latex.length){
       const bSrc = document.createElement("button");
-      wireCopy(bSrc, () => m.raw, "复制 LaTeX 源码");
+      wireCopy(bSrc, () => m.latex.join("\n\n"), "复制全部 LaTeX");
       acts.appendChild(bSrc);
     }
   }
   if (acts.children.length) bubble.appendChild(acts);
 }
 
-/** 图示 LaTeX 源码折叠面板（服务端在 stop 帧里带回的 TikZ 原文）。 */
-function addLatexPanel(bubble, raw){
-  if (!raw || bubble.querySelector("details.src")) return;
+/** 单张图的 LaTeX 源码面板。 */
+function latexPanel(code, n, many){
   const d = document.createElement("details");
   d.className = "src";
   const sum = document.createElement("summary");
-  sum.textContent = "查看图示 LaTeX 源码（可复制到 Overleaf）";
+  const label = document.createElement("span");
+  label.textContent = many
+    ? "查看第 " + n + " 张图的 LaTeX 源码"
+    : "查看图示 LaTeX 源码（可复制到 Overleaf）";
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "srccopy";
+  btn.textContent = "复制";
+  sum.appendChild(label);
+  sum.appendChild(btn);
   const pre = document.createElement("pre");
-  const code = document.createElement("code");
-  code.textContent = raw;
-  pre.appendChild(code);
+  const cd = document.createElement("code");
+  cd.textContent = code;
+  pre.appendChild(cd);
   d.appendChild(sum);
   d.appendChild(pre);
-  bubble.appendChild(d);
+  return d;
+}
+
+/** 把每张图的源码放在**它自己那张图的正下方**。
+    多张图时不再拼成一块 —— 那样根本分不清哪段源码对应哪张图。
+
+    ★ 用 alt 里的编号（`化学图示-N`）去配 `sources[N-1]`，**不能按下标硬配**：
+    某一块编译失败时正文里是"（图示未能渲染）"、没有 img，硬配会让后面所有图
+    与源码整体错位。 */
+function attachLatexPanels(bubble, sources){
+  const srcs = Array.isArray(sources) ? sources : [];
+  if (!srcs.length) return;
+  const imgs = bubble.querySelectorAll(".md-body img");
+  const many = imgs.length > 1;
+  imgs.forEach(img => {
+    const m = /化学图示-(\d+)/.exec(img.getAttribute("alt") || "");
+    if (!m) return;
+    const n = parseInt(m[1], 10);
+    const code = srcs[n - 1];
+    if (!code) return;
+    const host = img.closest("p") || img.parentElement;   // 图片可能内联在段落里
+    if (!host) return;
+    host.insertAdjacentElement("afterend", latexPanel(code, n, many));
+  });
 }
 
 function buildMsg(m){
@@ -1645,7 +1693,8 @@ function buildMsg(m){
     body.className = "md-body";
     body.innerHTML = md(m.content || "");
     bubble.appendChild(body);
-    if (m.raw) addLatexPanel(bubble, m.raw);
+    // 每张图各自带一份源码面板（服务端在 stop 帧回传 latex 数组）
+    if (m.latex && m.latex.length) attachLatexPanels(bubble, m.latex);
   }
   // 流式期间不挂操作条（那时内容还不完整、也还没有图）
   if (!m.streaming) addActions(bubble, m);
@@ -1734,13 +1783,22 @@ async function send(){
   // 4000 字的回答会来 200 个 chunk，浏览器可能在一两次 read() 里全收到。
   // 若每个 chunk 都全量 md()+innerHTML，就是一个循环里 200 次解析，还会把
   // 已渲染的 <img> 反复销毁重建（闪烁）。用 rAF 合并成一帧一次。
+  //
+  // ★★ 必须把"重渲染"和"挂源码面板"绑在一起：`innerHTML=` 会连同
+  // `attachLatexPanels` 插进去的 <details> 一起清掉。若只在一处挂面板，
+  // 任何一次迟到的 rAF 重渲染都会把它们悄悄抹掉（实测：流式结束时面板为 0，
+  // 刷新后重放才有 —— 就是这个原因）。
+  const renderBody = () => {
+    bodyEl.innerHTML = md(botMsg.content);
+    attachLatexPanels(bubble, botMsg.latex);
+  };
   let rafPending = false;
   const scheduleRender = () => {
     if (rafPending) return;
     rafPending = true;
     requestAnimationFrame(() => {
       rafPending = false;
-      bodyEl.innerHTML = md(botMsg.content);
+      renderBody();
       scrollDown(false);
     });
   };
@@ -1806,8 +1864,8 @@ async function send(){
             if (cur){ cur.serverId = d.session_id; saveIndex(); }
           }
           if (d.latex && d.latex.length){
-            // stop 帧带回 TikZ 原文 → 折叠面板（正文已被图片 URL 替换，取不回来）
-            botMsg.raw = d.latex.join("\n\n");
+            // stop 帧带回 TikZ 原文（数组，与"化学图示-N"一一对应）
+            botMsg.latex = d.latex;
           }
         }
       }
@@ -1820,7 +1878,7 @@ async function send(){
       noticeEl.className = "note err";
     }
     // 收尾：确保 markdown 已按最终内容渲染一遍（rAF 可能还没跑到）
-    bodyEl.innerHTML = md(botMsg.content);
+    renderBody();
     // 图示（PNG）异步加载完成后再滚一次（仅当用户仍贴底）
     setTimeout(() => scrollDown(false), 400);
   } catch (err){
@@ -1833,9 +1891,10 @@ async function send(){
     botMsg.pending = false;
     stopTyping(bubble);              // 任何出口都要收掉打字指示
     botMsg.streaming = false;
-    // 内容完整后才挂操作条（复制/放大/下载/源码）
+    // 内容完整后才挂操作条（复制/放大/下载/源码）；面板由 renderBody 负责，
+    // 这里再渲染一次兜住"异常路径"（那时上面那段可能没走到）
+    renderBody();
     addActions(bubble, botMsg);
-    addLatexPanel(bubble, botMsg.raw);
     setSending(false);
     await saveCurrent();
     renderSidebar();

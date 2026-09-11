@@ -636,6 +636,21 @@ def test_web_config_exposes_attachment_quota(web):
     assert "session_ttl_hours" not in d
 
 
+# ---------------------------------------------------------------- 页面与缓存
+
+def test_chat_page_is_served_no_store(web):
+    """★ 前端就是这一个文件，必须禁缓存。
+
+    否则浏览器**启发式缓存**会让用户在部署后继续跑旧版本 —— 实测踩到：
+    改了前端渲染逻辑却仍看到旧行为（流式结束时 LaTeX 面板为 0、刷新后才有），
+    排查方向被完全带偏。"""
+    r = web.get("/chat")
+    assert r.status_code == 200
+    assert "text/html" in r.headers["content-type"]
+    assert "no-store" in r.headers.get("cache-control", "")
+    assert web.get("/web").status_code == 200
+
+
 # ---------------------------------------------------------------- 图示源码 / AI 标题
 
 def test_stream_stop_frame_carries_latex_sources(web, answered):
