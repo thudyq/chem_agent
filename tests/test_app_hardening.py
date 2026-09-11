@@ -172,40 +172,61 @@ class TestSessionOwnership:
 # ================================================ R13 事件循环不被阻塞
 
 class TestEventLoopNotBlocked:
-    def _slow_then_fast(self, web, monkeypatch, slow_attr):
-        """把某个慢函数替换成 sleep，然后并发测量快请求的耗时。"""
+    def _fast_request_while_slow_is_held(self, web, monkeypatch, slow_attr):
+        """慢请求**确实还在跑**时，快请求必须能返回。
+
+        ★ 用 Event 精确控制时序，**不用 sleep 竞速**（20260911 修正）：
+        最初写的是"慢函数 sleep 0.6 秒 + 断言快请求 < 0.4 秒"，结果在压测里
+        12 轮抖 1 次（`assert 1.08 < 0.4`）——那是**测试自身不稳**，不是产品回归。
+        现在改成：慢函数一进入就 `entered.set()` 并阻塞在 `release` 上，我们等到
+        `entered` 再发快请求，断言它**在 release 之前**返回；`Timer` 兜底放行，
+        所以真回归时不会把测试挂死，而是以清晰的断言失败收场。
+        """
+        entered = threading.Event()
+        release = threading.Event()
+
         def slow(*a, **k):
-            time.sleep(0.6)
+            entered.set()
+            release.wait(10)                  # 一直占着这次请求，直到我们放行
             return "" if slow_attr == "_prepare_answer" else "慢答案"
 
         monkeypatch.setattr(web_api, slow_attr, slow)
-        done = {}
+        slow_done = threading.Event()
 
         def run_slow():
-            done["r"] = web.post("/api/chat", json=_payload(),
-                                 headers=KEY_HEADERS)
+            try:
+                web.post("/api/chat", json=_payload(), headers=KEY_HEADERS)
+            finally:
+                slow_done.set()
 
         t = threading.Thread(target=run_slow)
         t.start()
-        time.sleep(0.15)                      # 让慢请求先进入处理
-        t0 = time.time()
-        web.get("/api/web-config")            # 快请求
-        elapsed = time.time() - t0
-        t.join()
-        return elapsed, done.get("r")
+        watchdog = threading.Timer(10.0, release.set)   # 兜底：绝不挂死
+        watchdog.start()
+        try:
+            assert entered.wait(5), "慢请求没能进入（测试自身的问题）"
+            t0 = time.time()
+            web.get("/api/web-config")        # 快请求
+            elapsed = time.time() - t0
+            assert not slow_done.is_set(), "慢请求已结束，这次断言不成立"
+            assert elapsed < 1.0, \
+                f"事件循环被 {slow_attr} 阻塞了（快请求耗时 {elapsed:.2f}s）"
+        finally:
+            release.set()
+            watchdog.cancel()
+            t.join(5)
 
     def test_fast_request_not_blocked_by_slow_pipeline(self, web, monkeypatch):
         """★ R13 核心：慢请求在跑时，另一个请求**不该等它**。
 
-        修复前：`process_question` 同步跑在事件循环里 → 快请求要等满 0.6 秒。
+        修复前：`process_question` 同步跑在事件循环里 → 快请求会一直等到它结束。
         """
-        elapsed, _ = self._slow_then_fast(web, monkeypatch, "process_question")
-        assert elapsed < 0.4, f"事件循环被慢请求阻塞了（快请求耗时 {elapsed:.2f}s）"
+        self._fast_request_while_slow_is_held(web, monkeypatch,
+                                              "process_question")
 
     def test_fast_request_not_blocked_by_slow_latex_compile(self, web, monkeypatch):
         """LaTeX 编译（`_prepare_answer`）同样必须在事件循环之外。"""
-        elapsed, _ = self._slow_then_fast(web, monkeypatch, "_prepare_answer")
-        assert elapsed < 0.4, f"LaTeX 编译阻塞了事件循环（{elapsed:.2f}s）"
+        self._fast_request_while_slow_is_held(web, monkeypatch, "_prepare_answer")
 
     def test_threadpool_keeps_user_credentials(self, web, monkeypatch):
         """★ 线程池必须看得到用户凭证（contextvar 会随 context 拷贝过去）。
