@@ -186,7 +186,14 @@ class _HttpFailure(Exception):
     """上游返回非 200（携带状态码与响应体，供行为判定使用）。"""
 
     def __init__(self, status: int, body: str):
-        super().__init__(f"HTTP {status}: {body[:200]}")
+        # ★ 3xx：安全审查 R3 —— 出站请求**不跟随重定向**（否则一个公网域名可以
+        # 返回 302 跳到内网/云元数据，绕过 `client_host_allowed` 的校验）。
+        # 这里把"该怎么办"写进异常文本，让 CLI 日志与网页提示都能直接用。
+        hint = ""
+        if 300 <= status < 400:
+            hint = ("（端点返回重定向；为安全起见本服务不跟随跳转，"
+                    "请把**最终**的完整地址直接填进「接口地址」）")
+        super().__init__(f"HTTP {status}: {body[:200]}{hint}")
         self.status = status
         self.body = body or ""
 
@@ -203,8 +210,11 @@ def _stream_chat(url: str, headers: dict, payload: dict, on_piece=None) -> tuple
     reasoning_chars = 0
     observed_reasoning = False
     finish_reason = ""
+    # ★ `allow_redirects=False`（安全审查 R3）：端点地址已过 SSRF 校验，但
+    # 302 之后跳到哪不受那个校验管 —— 跟随重定向等于把校验作废。
     with credentials.session().post(
             url, headers=headers, json=payload, stream=True,
+            allow_redirects=False,
             timeout=DEFAULT_TIMEOUT) as resp:
         if resp.status_code != 200:
             body = (resp.text or "")[:500]

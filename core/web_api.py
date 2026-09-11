@@ -412,7 +412,9 @@ def _save_upload_image(ref: str, index: int, upload_dir: Path) -> str | None:
             return None
         import requests
         try:
-            resp = requests.get(ref, timeout=20)
+            # ★ 不跟随重定向（安全审查 R3）：URL 已过 `_validate_download_url`，
+            # 但 302 的目标不受校验管，跟随等于把 SSRF 防护作废。
+            resp = requests.get(ref, timeout=20, allow_redirects=False)
         except requests.exceptions.RequestException:
             return None
         if resp.status_code != 200:
@@ -936,6 +938,11 @@ def _sse_stream_inner(question: str, history: list, session_id: str,
 def _friendly_error(raw: str) -> str:
     """把管线异常翻译成用户能看懂的话（不泄漏服务端路径/堆栈）。"""
     low = (raw or "").lower()
+    # ★ 重定向（安全审查 R3）：我们主动不跟随，得告诉用户该改什么，否则
+    # 他只会看到一句"请稍后重试"，然后反复重试同一个会跳转的地址。
+    if re.search(r"http\s+30[12378]\b", raw or "", re.IGNORECASE):
+        return ("接口地址返回了重定向：本服务为安全起见**不跟随跳转**，"
+                "请把最终的完整地址直接填进设置里的「接口地址」")
     if "401" in low or "invalid_api_key" in low or "unauthorized" in low:
         return "API Key 无效或已过期，请在设置里检查后重试"
     if "404" in low or "model_not_found" in low or "does not exist" in low:

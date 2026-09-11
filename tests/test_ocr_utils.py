@@ -44,7 +44,7 @@ def fake_vision(monkeypatch):
     monkeypatch.setattr(ocr, "_read_image_b64", lambda path: "aGVsbG8=")
     state = {"content": "类型：结构式\n内容：苯环，SMILES: c1ccccc1", "status": 200}
 
-    def fake_post(url, headers=None, json=None, timeout=None):
+    def fake_post(url, **kw):   # 真身是 requests.post：用 **kw 免得新增参数（如 R3 的 allow_redirects）就炸
         return _fake_response(state["content"], state["status"])
 
     monkeypatch.setattr(ocr.requests, "post", fake_post)
@@ -129,7 +129,7 @@ def test_describe_retries_then_succeeds(fake_vision, monkeypatch):
     state, img = fake_vision
     calls = {"n": 0}
 
-    def flaky_post(url, headers=None, json=None, timeout=None):
+    def flaky_post(url, **kw):   # 真身是 requests.post：用 **kw 免得新增参数（如 R3 的 allow_redirects）就炸
         calls["n"] += 1
         if calls["n"] == 1:
             raise requests.exceptions.ConnectionError("boom")
@@ -147,7 +147,7 @@ def test_describe_all_attempts_fail(fake_vision, monkeypatch):
     _, img = fake_vision
     calls = {"n": 0}
 
-    def boom_post(url, headers=None, json=None, timeout=None):
+    def boom_post(url, **kw):   # 真身是 requests.post：用 **kw 免得新增参数（如 R3 的 allow_redirects）就炸
         calls["n"] += 1
         raise requests.exceptions.ConnectionError("boom")
 
@@ -162,7 +162,7 @@ def test_describe_5xx_retried(fake_vision, monkeypatch):
     _, img = fake_vision
     calls = {"n": 0}
 
-    def err_post(url, headers=None, json=None, timeout=None):
+    def err_post(url, **kw):   # 真身是 requests.post：用 **kw 免得新增参数（如 R3 的 allow_redirects）就炸
         calls["n"] += 1
         return _fake_response("", 500)
 
@@ -182,7 +182,7 @@ def test_describe_400_not_retried(fake_vision, monkeypatch):
     _, img = fake_vision
     calls = {"n": 0}
 
-    def bad_post(url, headers=None, json=None, timeout=None):
+    def bad_post(url, **kw):   # 真身是 requests.post：用 **kw 免得新增参数（如 R3 的 allow_redirects）就炸
         calls["n"] += 1
         return _fake_response("", 400)
 
@@ -196,7 +196,7 @@ def test_describe_empty_content_retried(fake_vision, monkeypatch):
     state, img = fake_vision
     calls = {"n": 0}
 
-    def flaky_post(url, headers=None, json=None, timeout=None):
+    def flaky_post(url, **kw):   # 真身是 requests.post：用 **kw 免得新增参数（如 R3 的 allow_redirects）就炸
         calls["n"] += 1
         if calls["n"] == 1:
             return _fake_response("")
@@ -214,7 +214,7 @@ def test_describe_max_attempts_param(fake_vision, monkeypatch):
     _, img = fake_vision
     calls = {"n": 0}
 
-    def boom_post(url, headers=None, json=None, timeout=None):
+    def boom_post(url, **kw):   # 真身是 requests.post：用 **kw 免得新增参数（如 R3 的 allow_redirects）就炸
         calls["n"] += 1
         raise requests.exceptions.ConnectionError("boom")
 

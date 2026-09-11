@@ -178,13 +178,22 @@ def _describe_once(url: str, headers: dict, payload: dict,
     dropped = set()
     while True:
         try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=60)
+            # ★ 不跟随重定向（安全审查 R3）：视觉端点地址已经过 SSRF 校验，
+            # 但 302 之后跳到哪不受校验管 —— 跟随等于把校验作废。
+            resp = requests.post(url, headers=headers, json=payload,
+                                 timeout=60, allow_redirects=False)
         except requests.exceptions.RequestException as e:
             print(f"[ocr] 请求异常: {e}")
             return None, True
 
         if resp.status_code == 200:
             break
+
+        # 3xx：配置性问题（端点会跳转），重试无意义，直接把话说清楚
+        if 300 <= resp.status_code < 400:
+            print(f"[ocr] 端点返回重定向（HTTP {resp.status_code}）→ 拒绝跟随"
+                  "（安全策略）；请把**最终**的完整地址填进「视觉接口地址」")
+            return None, False
 
         # 非 200：先尝试"摘字段重试"（仅 400/422，且还有可摘字段）
         if resp.status_code in (400, 422):
@@ -194,7 +203,7 @@ def _describe_once(url: str, headers: dict, payload: dict,
                 print(f"[ocr] HTTP {resp.status_code} → 摘掉 {field}={value!r} 重试")
                 try:
                     resp2 = requests.post(url, headers=headers, json=payload,
-                                          timeout=60)
+                                          timeout=60, allow_redirects=False)
                 except requests.exceptions.RequestException as e:
                     print(f"[ocr] 请求异常: {e}")
                     return None, True

@@ -475,7 +475,9 @@ def _fetch_image_to_temp(url: str, tmp_dir: str) -> str | None:
             print(f"[api] 拒绝下载图片（SSRF 防护）: {url[:80]}")
             return None
         try:
-            resp = requests.get(url, timeout=20)
+            # ★ 不跟随重定向（安全审查 R3）：URL 已过 `_validate_download_url`，
+            # 但 302 的目标不受校验管，跟随等于把 SSRF 防护作废。
+            resp = requests.get(url, timeout=20, allow_redirects=False)
         except requests.exceptions.RequestException:
             return None
         if resp.status_code != 200:
@@ -492,7 +494,7 @@ def _download_text(url: str, limit: int = 4000) -> str | None:
         print(f"[api] 拒绝下载文件（SSRF 防护）: {url[:80]}")
         return None
     try:
-        resp = requests.get(url, timeout=20)
+        resp = requests.get(url, timeout=20, allow_redirects=False)   # R3：不跟随跳转
     except requests.exceptions.RequestException:
         return None
     if resp.status_code != 200:
