@@ -651,6 +651,30 @@ def test_chat_page_is_served_no_store(web):
     assert web.get("/web").status_code == 200
 
 
+def test_message_actions_live_outside_the_bubble(web):
+    """★ 操作条（复制/编辑）必须挂在气泡**外面**。
+
+    踩过的坑：`.acts` 曾是 `bubble.appendChild(acts)`，而用户消息的气泡有蓝底
+    和 padding —— "复制/编辑"就画进了蓝色消息框里（用户截图可见）。
+    更隐蔽的是 `addActions()` 靠 `bubble.parentElement` 找 `.col`：若它跑在
+    `wrap.appendChild(col)` **之前**，parentElement 还是 null，就悄悄退回挂进
+    气泡。DOM 结构看着"有 .col"、布局却又是错的（实测第一版修复就是这样）。
+    所以两件事都锁住：挂载目标 + 调用顺序。"""
+    html = web.get("/chat").text
+
+    # 1) 不许再把操作条塞进气泡
+    assert "bubble.appendChild(acts)" not in html
+    # 2) 挂载点：优先气泡所在的那一列
+    assert "actsHost(bubble)" in html
+    assert 'p.classList.contains("col")' in html
+    # 3) buildMsg 内部顺序：先建列、后挂操作条
+    body = html[html.index("function buildMsg("):]
+    body = body[:body.index("\n}")]
+    assert body.index("wrap.appendChild(col)") < body.index("addActions(bubble, m, idx)")
+    # 4) 列本身要把气泡包住（否则操作条会跟头像并排）
+    assert body.index("col.appendChild(bubble)") < body.index("addActions(bubble, m, idx)")
+
+
 # ---------------------------------------------------------------- 图示源码 / AI 标题
 
 def test_stream_stop_frame_carries_latex_sources(web, answered):

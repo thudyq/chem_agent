@@ -143,10 +143,19 @@
   /* 用户消息右对齐、无头像、填充气泡（与 DeepSeek/ChatGPT 一致） */
   .msg.user{justify-content:flex-end}
   .msg.user .who{display:none}
-  .bubble{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}
+  /* ★ 气泡与操作条是**兄弟**、共用一个竖直列：操作条必须在气泡**外面**
+     （早先塞进 .bubble，用户消息有蓝底和内边距，按钮就画在框里了）。
+     宽度/对齐由 .col 承担，气泡只管背景与内边距。
+     ★ 列用默认的 align-items:stretch —— 助手气泡必须**撑满**（改前是
+     flex:1 1 auto），写成 flex-start 会缩到内容宽度，正文里的
+     `table{width:100%}`、长代码块跟着塌（实测过）。只有用户消息才靠
+     flex-end 让气泡和操作条贴右边。 */
+  .col{display:flex;flex-direction:column;min-width:0;flex:1 1 auto}
+  .bubble{min-width:0;max-width:100%;overflow-wrap:anywhere}
   .msg.bot .bubble{padding-top:2px}
+  .msg.user .col{flex:0 1 auto;max-width:min(80%,620px);align-items:flex-end}
   .msg.user .bubble{
-    flex:0 1 auto;max-width:min(80%,620px);background:var(--user);
+    max-width:100%;background:var(--user);
     border:1px solid var(--user-line);border-radius:16px;padding:10px 14px;
   }
   .bubble img{
@@ -449,7 +458,7 @@
     main{padding:14px 12px 4px}
     footer{padding:8px 12px calc(10px + env(safe-area-inset-bottom))}
     header .sub{display:none}
-    .msg.user .bubble{max-width:88%}
+    .msg.user .col{max-width:88%}
     .bubble h1{font-size:18px}
     .jump{right:12px;padding:6px 13px}
   }
@@ -2017,7 +2026,14 @@ function addActions(bubble, m, idx){
       acts.appendChild(b);
     });
   }
-  if (acts.children.length) bubble.appendChild(acts);
+  if (acts.children.length) actsHost(bubble).appendChild(acts);
+}
+
+/** 操作条挂到气泡**外面**（同一列的兄弟节点）。气泡有背景时（用户消息）
+    挂进 .bubble 就会画在色块里面 —— 复制/编辑不该在消息框里。 */
+function actsHost(bubble){
+  const p = bubble.parentElement;
+  return (p && p.classList.contains("col")) ? p : bubble;
 }
 
 /** 单张图的 LaTeX 源码面板。 */
@@ -2108,9 +2124,14 @@ function buildMsg(m, idx){
     // 每张图各自带一份源码面板（服务端在 stop 帧回传 latex 数组）
     if (m.latex && m.latex.length) attachLatexPanels(bubble, m.latex);
   }
+  // ★ 先把气泡放进列、列放进消息，**再**挂操作条：addActions 靠 parentElement
+  // 找挂载点，顺序反了它就只能挂回气泡里（用户消息就又画进蓝框了）。
+  const col = document.createElement("div");
+  col.className = "col";
+  col.appendChild(bubble);
+  wrap.appendChild(who); wrap.appendChild(col);
   // 流式期间不挂操作条（那时内容还不完整、也还没有图）
   if (!m.streaming) addActions(bubble, m, idx);
-  wrap.appendChild(who); wrap.appendChild(bubble);
   return wrap;
 }
 
@@ -2218,6 +2239,10 @@ function startEditMsg(idx){
   const node = nodes[idx];
   if (!node) return;
   const bubble = node.querySelector(".bubble");
+  // 操作条是气泡的兄弟节点，清空 innerHTML 清不掉它 —— 手动收走，
+  // 免得"复制/编辑"还悬在编辑框下面。
+  const acts = bubble.nextElementSibling;
+  if (acts && acts.classList.contains("acts")) acts.remove();
   bubble.innerHTML = "";
 
   const ta = document.createElement("textarea");
