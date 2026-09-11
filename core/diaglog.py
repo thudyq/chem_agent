@@ -11,6 +11,18 @@
 - 每条回答一行：{"type":"answer", ... 最终采用的原始标记文本（渲染前，
   供本地 python -m core.replay 精确重放）}。
 
+★ 隐私与权限（安全审查 R12，20260911）
+------------------------------------
+这个文件里有**真人的提问原文**（`question`，带图时还含视觉模型对图的描述）
+与模型原始输出（`raw`）；只有凭证是**指纹**（不含密钥）。因此：
+* 文件以 **0600** 创建/纠正（见 `_open_owner_only`），别让同机其他用户读到；
+* **清小搭（/v1）与网页写的是同一个文件**，靠 `cid` 前缀区分
+  （`chatcmpl-*` = 清小搭，`web-*` = 网页）；
+* Streamlit **不得**再往这个文件写（它会截断），它用自己的
+  `data/streamlit_diagnostics.jsonl`；
+* 页面上有对应的一句话告知（`web/index.html` 的设置面板与输入区提示）。
+要"只留元信息、不留原文"时，改这里：`question` 置空 / 换哈希，`raw` 不写。
+
 journald 摘要打印保持不变（健康检查不能刷屏）。文件超上限（默认 8MB）
 轮转为 .1（覆盖旧 .1）。任何写盘异常静默降级（不拖垮回答主流程）。
 """
@@ -37,6 +49,21 @@ def _resolve_path(path=None) -> Path:
 def _rotate_if_needed(p: Path, max_bytes: int) -> None:
     if p.exists() and p.stat().st_size > max_bytes:
         p.replace(p.with_suffix(".1.jsonl"))
+
+
+def _open_owner_only(p: Path):
+    """以 **0600（只属主可读写）** 打开日志文件（安全审查 R12）。
+
+    为什么：这个文件里有**真人的提问原文**与模型原始输出（只不含密钥）。
+    默认 umask 下新建文件是 0644 —— 本机任何用户都能读。这里显式建 0600，
+    并对**已存在的**文件补一次 chmod（把它从 0644 纠正过来，无需人工操作）。
+    """
+    fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        os.chmod(p, 0o600)          # 尽力而为（Windows 上只影响只读位）
+    except OSError:
+        pass
+    return os.fdopen(fd, "a", encoding="utf-8")
 
 
 def log_request(question: str, cid: str, diag: list = None,
@@ -74,7 +101,7 @@ def log_request(question: str, cid: str, diag: list = None,
             return
         with _LOCK:
             _rotate_if_needed(p, max_bytes)
-            with p.open("a", encoding="utf-8") as f:
+            with _open_owner_only(p) as f:
                 for ln in lines:
                     f.write(ln + "\n")
     except Exception as e:  # 诊断落盘是旁路，任何异常不影响主流程

@@ -546,6 +546,7 @@
     </div>
     <div class="hint">
       <span>🔒 密钥只存在你的浏览器（<span class="kbd">sessionStorage</span>），随请求头发送，服务端不保存</span>
+      <span title="为排查图示渲染/校验失败，服务端会记录提问原文与模型原始输出，不含 API Key">📝 提问与模型原始输出会记录到服务端日志（不含 Key）</span>
       <span id="hintEndpoint"></span>
       <span class="kbd">Ctrl+K</span> 新对话 ·
       <span class="kbd">/</span> 搜索 ·
@@ -577,6 +578,13 @@
       由你自己的账号计费。密钥仅保存在浏览器本地，随请求头一次性发送给本服务，
       服务端<b>不写日志、不落盘、不回显</b>。
     </p>
+    <div class="desc" style="margin:-8px 0 14px;font-size:11.5px;color:var(--muted)">
+      📝 <b>隐私说明</b>：为了排查化学图示渲染/校验失败，服务端会把
+      <b>你的提问原文</b>（带图时还包含模型对图片的识别结果）与
+      <b>模型的原始输出</b>记录到服务器上的日志文件；其中<b>不包含</b>你的 API Key
+      （只记一个不可逆的指纹）。日志按 8MB 滚动覆盖，仅运维可读。
+      对话正文本身只保存在你自己的浏览器里。
+    </div>
     <div class="desc" style="margin:-8px 0 14px;font-size:11.5px;color:var(--muted)">
       ℹ️ 每个<b>新对话</b>会额外发一次极小的标题生成请求（上限 64 token），
       由你的 key 计费；后续追问与它无关。

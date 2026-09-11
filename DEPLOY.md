@@ -277,6 +277,9 @@ python -m utils.latex_compile --security-check --strict   # 没拦住则以退�
 - [ ] 服务器日志里**看不到**任何完整密钥（只有 `sk-abc…f3d2` 形式的指纹）：
       `sudo journalctl -u chem_agent -n 50 --no-pager | grep '\[web\]'`
 - [ ] 清小搭侧照旧可用（`/v1` 契约未变）。
+- [ ] 设置面板里能看到「📝 隐私说明」（写明会记录提问原文、不含 Key），
+      输入框下方也有常驻提示。
+- [ ] 诊断日志权限是 0600：`ls -l data/diagnostics.jsonl`（应为 `-rw-------`）。
 
 ---
 
@@ -294,7 +297,8 @@ python -m utils.latex_compile --security-check --strict   # 没拦住则以退�
 | 单个会话附件上限 | 64MB（`core/web_api.py` 的 `WEB_SESSION_MAX_BYTES`）；超了先回收**该会话内部**最旧的图，再走全局配额 |
 | 浏览器来源（CORS） | 默认只放行本机调试地址 + `.env` 的 `PUBLIC_BASE_URL`（网页与接口同源，同源请求不需要 CORS）。把页面托管到**别的域名**时（§2.5），用 `CORS_ALLOW_ORIGINS=https://a.com,https://b.com` 显式列出 |
 | 安全响应头 | 所有响应带 `X-Frame-Options: DENY`、CSP `frame-ancestors 'none'`、`nosniff`、`Referrer-Policy: no-referrer`（防 iframe 套框/点击劫持） |
-| 用户密钥去向 | 只在请求内存；日志只打指纹；`data/diagnostics.jsonl` 里存的是标记文本与凭证指纹，**不含密钥** |
+| 用户密钥去向 | 只在请求内存；journald 日志只打指纹（`sk-abc…f3d2`）；**不含密钥** |
+| 诊断日志（★ 含真人提问） | `data/diagnostics.jsonl`（权限 **0600**，安全审查 R12）：清小搭与网页**共用**这一个文件，靠 `cid` 前缀区分（`chatcmpl-*` / `web-*`）；每行含**提问原文**与模型原始输出，只有凭证是指纹。超 8MB 轮转为 `.1.jsonl`（磁盘最多约 16MB）。Streamlit 用**独立**的 `data/streamlit_diagnostics.jsonl`。要清空：`sudo truncate -s 0 data/diagnostics.jsonl` |
 
 ### 常见问题
 

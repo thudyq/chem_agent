@@ -76,18 +76,36 @@ _LEGACY_FILE = Path(__file__).resolve().parent / "data" / "chat_history.json"
 # 提问原文、原始标记（responses，含模型最终采用的标记文本；**不含渲染后
 # TikZ**）、诊断列表（每轮校验/渲染失败的 round/stage/type/raw/reason/
 # resolved）。用于质量回溯/统计，不参与页面逻辑。
-_DIAGNOSTICS_FILE = Path(__file__).resolve().parent / "data" / "diagnostics.jsonl"
-# 一次性清空旧诊断（每次启动首次运行时执行一次，之后 append）
-_DIAG_CLEARED_KEY = "_diagnostics_cleared"
+_DIAGNOSTICS_FILE = (Path(__file__).resolve().parent / "data"
+                     / "streamlit_diagnostics.jsonl")
+# 一次性清空旧诊断：**进程级**只做一次（原来用 `st.session_state` 判断，那是
+# "每个浏览器会话"级别的——每个新访客都会再清一次；日志已独立后影响虽小，
+# 但仍按注释原意改成进程级）
+_DIAG_FLUSHED = False
 
 
 def _flush_diagnostics_file() -> None:
-    """清空 diagnostics.jsonl（幂等：仅首次运行时真正执行）。"""
-    if st.session_state.get(_DIAG_CLEARED_KEY):
+    """清空本调试日志（进程内只执行一次，之后 append）。
+
+    ★ 用**独立文件**、不碰 `data/diagnostics.jsonl`（安全审查 R12，20260911）：
+    那个文件是**线上**的 /v1（清小搭）与网页共用的诊断流水，而本函数会把它
+    **清空**——两者共用一个文件时，跑一次 Streamlit 就会把线上诊断记录抹掉。
+    格式也不同（本文件带 responses/diagnostics 列表，diaglog 是逐行
+    failure/answer）。Streamlit 只是本地调试界面，日志理应分开。
+    """
+    global _DIAG_FLUSHED
+    if _DIAG_FLUSHED:
         return
-    _DIAGNOSTICS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _DIAGNOSTICS_FILE.write_text("", encoding="utf-8")
-    st.session_state[_DIAG_CLEARED_KEY] = True
+    _DIAG_FLUSHED = True
+    try:
+        _DIAGNOSTICS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        # 与 core/diaglog 同口径：日志里有真人提问原文 → 只属主可读（0600）
+        fd = os.open(_DIAGNOSTICS_FILE,
+                     os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        os.close(fd)
+        os.chmod(_DIAGNOSTICS_FILE, 0o600)
+    except OSError as e:
+        print(f"[streamlit] 诊断文件初始化失败: {e}")
 
 
 def _append_diagnostic(session_id: str, question: str,
