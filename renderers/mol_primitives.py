@@ -10,11 +10,13 @@ import re
 
 try:
     from .collide import CHARGE_CIRCLE_R, DOT_R
+    from core.tag_parser import REAL_ELEMENTS as _FORMULA_LABEL_ELEMENTS
 except ImportError:  # 直接脚本运行（无包上下文）
     import sys
     from pathlib import Path
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from renderers.collide import CHARGE_CIRCLE_R, DOT_R
+    from core.tag_parser import REAL_ELEMENTS as _FORMULA_LABEL_ELEMENTS
 
 
 # 氢化物惯例：H 写在元素前的非金属（电负性 > 2.0，如 HF/HCl/HBr/HI/H2O/H2S）。
@@ -123,45 +125,9 @@ def mol_default_labeler(mol):
     return atom_label
 
 
-def condensed_atom_label(atom) -> str | None:
-    """结构简式标签：非环碳原子同样写出（CH₃/CH₂/CH/C），环上碳原子
-    保持键线式（返回 None）。
-
-    **已弃用**：默认选择已由 `mol_default_labeler` 的重原子数规则取代
-    （结构简式只用于 ≤2 重原子小分子，此时不可能出现环内碳），保留仅
-    为兼容外部引用；与 atom_main_label 的带电环内碳差异在新规则下不触发。
-    """
-    if atom.GetAtomicNum() == 6 and atom.GetFormalCharge() == 0 and atom.IsInRing():
-        return None
-    return atom_label(atom) if atom.GetAtomicNum() != 6 else _carbon_label(atom)
-
-
-def _carbon_label(atom) -> str:
-    parts = "C"
-    h = atom.GetTotalNumHs()
-    if h == 1:
-        parts += "H"
-    elif h > 1:
-        parts += f"H$_{{{h}}}$"
-    return parts
-
-
 def label_plain_len(label: str) -> int:
     """标签去掉 LaTeX 排版符号后的可视字符数，用于估算键线留白宽度。"""
     return len(re.sub(r"[$_{}^\\]", "", label))
-
-
-# 纯化学式 label 识别用元素表（有机/常见无机，与 core.tag_validator 的
-# _REAL_ELEMENTS 一致）。刻意不含 Ar/Ac（prompt 允许的通用基团缩写）。
-_FORMULA_LABEL_ELEMENTS = {
-    "H", "B", "C", "N", "O", "F", "Si", "P", "S", "Cl", "Br", "I",
-    "Li", "Na", "K", "Mg", "Ca", "Al", "Fe", "Cu", "Zn", "Ag", "Au",
-    "Hg", "Pb", "Sn", "Se", "Te",
-    "Be", "Sc", "Ti", "V", "Cr", "Mn", "Co", "Ni", "Ga", "Ge", "As",
-    "Rb", "Sr", "Y", "Zr", "Nb", "Mo", "Ru", "Rh", "Pd", "Cd", "In",
-    "Sb", "Cs", "Ba", "La", "Ce", "Hf", "Ta", "W", "Re", "Os", "Ir",
-    "Pt", "Tl", "Bi",
-}
 _FORMULA_LABEL_RE = re.compile(r"^([A-Z][a-z]?\d*)+([+-]\d*)?$")
 
 # 配离子/配合物分子式：[Ag(NH3)2]+、[Cu(NH3)4]2+、[Fe(CN)6]3-，及带反
@@ -263,20 +229,6 @@ def parse_charge_pairs(charges_str: str) -> dict:
             except ValueError:
                 pass
     return result
-
-
-def parse_hbond_pairs(pairs_str: str) -> list:
-    """'0-2,3-5' → [(0, 2), (3, 5)]（氢键两端原子序号）。"""
-    pairs = []
-    for s in (pairs_str or "").split(","):
-        s = s.strip()
-        if "-" in s:
-            try:
-                f, t = s.split("-", 1)
-                pairs.append((int(f.strip()), int(t.strip())))
-            except ValueError:
-                pass
-    return pairs
 
 
 def _bond_path(mol, x_idx: int, y_idx: int) -> list | None:
@@ -513,7 +465,7 @@ def h_label_edge_point(hx: float, hy: float, toward: tuple[float, float],
 
 
 def hbond_dots_tikz(fx: float, fy: float, tx: float, ty: float, *,
-                    spacing: float = 0.3, radius: float = 0.028,
+                    spacing: float = 0.3, radius: float = DOT_R,
                     inset_start: float = 0.18, inset_end: float = 0.25,
                     max_dots: int = 10) -> list:
     r"""氢键 H···Y 点状虚线（teal 圆点，3~10 点）。
@@ -550,7 +502,6 @@ _LP_DIST = 0.24           # 孤对电子点到原子的固定距离（原 0.30�
 _BOND_GAP = 0.08          # 双键/三键平行线间距（与 bond_segments 一致）
 _MECH_LABEL_GAP = 0.05    # 箭头始末端点距"标签所占位置"边缘的间距（0~0.10 浮动基准）
 _LABEL_SQUARE_HALF = 0.13 # 原子标签"所占位置"按边长 0.26 正方形（中心=符号中心，半=单字符半宽）
-_LP_DOT_RADIUS = 0.028    # 孤对电子/单电子点半径（lone_pair_tikz 同值）
 _ARROW_POINT_GAP = 0.05   # 机理箭头端点与"点/线"（孤对电子、单电子、键线段）的空隙
 _ORTHO = [90.0, 180.0, 270.0, 0.0]      # 正交槽位（优先）
 _DIAG = [45.0, 135.0, 225.0, 315.0]     # 斜向槽位（正交占满时兜底）
@@ -1051,10 +1002,10 @@ def lone_pair_tikz(mol, idx: int, shift=(0.0, 0.0), explicit_hs: int = 0) -> lis
     groups, singles = lone_pair_dot_groups(mol, idx, shift, explicit_hs)
     lines = []
     for (x1, y1), (x2, y2) in groups:
-        lines.append(f"\\fill ({x1:.2f},{y1:.2f}) circle (0.028);")
-        lines.append(f"\\fill ({x2:.2f},{y2:.2f}) circle (0.028);")
+        lines.append(f"\\fill ({x1:.2f},{y1:.2f}) circle ({DOT_R});")
+        lines.append(f"\\fill ({x2:.2f},{y2:.2f}) circle ({DOT_R});")
     for x, y in singles:
-        lines.append(f"\\fill ({x:.2f},{y:.2f}) circle (0.028);")
+        lines.append(f"\\fill ({x:.2f},{y:.2f}) circle ({DOT_R});")
     return lines
 
 
@@ -1143,7 +1094,6 @@ def aromatic_ring_info(mol) -> list:
     """
     out = []
     try:
-        from rdkit import Chem
         ri = mol.GetRingInfo()
     except Exception:
         return out
@@ -1167,48 +1117,6 @@ def aromatic_ring_info(mol) -> list:
         radius = 0.70 * sum(radii) / len(radii)
         out.append((set(ring), cx, cy, radius))
     return out
-
-
-def _regularize_kekule(mol) -> None:
-    """全芳香单环按几何规则重排交替单双键（同类环画法一致）。
-
-    PrepareMolForDrawing 的 Kekulé 由原子规范序决定，同一苯环在不同分子
-    （苯 / 苯胺 / 硝基苯）中可能得到不同键型，反应前后看起来像两个共振式。
-    改为按环键中点绕环质心的角度排序，从最小角起 0/2/4 位设双键——
-    同类环几何一致则键型一致。仅处理全芳香原子组成的单环（不碰并环）。
-    """
-    try:
-        from rdkit import Chem
-    except ImportError:
-        return
-    ring_info = mol.GetRingInfo()
-    for ring in ring_info.AtomRings():
-        if not all(mol.GetAtomWithIdx(i).GetIsAromatic() for i in ring):
-            continue
-        if any(ring_info.NumAtomRings(i) != 1 for i in ring):
-            continue
-        xs = [atom_pos(mol, i)[0] for i in ring]
-        ys = [atom_pos(mol, i)[1] for i in ring]
-        cx, cy = sum(xs) / len(xs), sum(ys) / len(ys)
-        bonds = []
-        for k, ai in enumerate(ring):
-            aj = ring[(k + 1) % len(ring)]
-            b = mol.GetBondBetweenAtoms(ai, aj)
-            if b is None:
-                bonds = None
-                break
-            x1, y1 = atom_pos(mol, ai)
-            x2, y2 = atom_pos(mol, aj)
-            ang = math.degrees(
-                math.atan2((y1 + y2) / 2 - cy, (x1 + x2) / 2 - cx)) % 360.0
-            bonds.append((ang, b))
-        if bonds is None:
-            continue
-        bonds.sort()
-        for k, (_, b) in enumerate(bonds):
-            b.SetBondType(Chem.BondType.DOUBLE if k % 2 == 0
-                          else Chem.BondType.SINGLE)
-            b.SetIsAromatic(False)
 
 
 def has_aromatic_lowercase(smiles: str) -> bool:
@@ -1318,8 +1226,8 @@ def prepare_mol(smiles: str, *, add_hs: bool = False, kekulize: bool = False,
         else:
             AllChem.Compute2DCoords(mol)
 
-    # 不再调用 _regularize_kekule：芳香/凯库勒画法由原始 SMILES 大小写决定
-    # （has_aromatic_lowercase）。把判断结果存到 mol property——
+    # 芳香/凯库勒画法由原始 SMILES 大小写决定（has_aromatic_lowercase）。
+    # 把判断结果存到 mol property——
     # molecule_scope_lines 等调用方可直接读取决定画圈（避免逐层传参）。
     if mol is not None:
         try:
@@ -1579,11 +1487,6 @@ def bond_segments_for(mol, a: int, b: int, *, labeler=atom_label,
     return None
 
 
-def fmt_coord(x: float, y: float) -> str:
-    """把坐标格式化为 TikZ 常用的两位小数字符串。"""
-    return f"({x:.2f},{y:.2f})"
-
-
 _SUBSCRIPT_RE = re.compile(r"([A-Za-z\)])(\d+)")
 _CHARGE_TAIL_RE = re.compile(r"(?:(?<![A-Za-z\)])(\d+))?([+-])$")
 
@@ -1815,7 +1718,7 @@ def main_arrow_lines(x1: float, x2: float, condition: str = "", *,
 
     if k == "resonance":
         return [f"  \\node[font=\\large] at ({(x1 + x2) / 2:.2f},{y:.2f}) "
-                f"{{\\$\\leftrightarrow$}};"]
+                f"{{$\\leftrightarrow$}};"]
     if k == "retro":
         # 逆合成双线推导箭头（⇒，与 retro.py 画法一致，提取为共享）
         tip, add = 0.23, 0.14
@@ -1896,8 +1799,7 @@ def bond_order_of(mol, spec: str) -> int:
 def mech_arrow_origin(mol, spec: str, shift=(0.0, 0.0),
                       lone_pair_offset: bool = True, toward=None,
                       prefer_single: bool = False, labeler=None,
-                      label_gap: float = _MECH_LABEL_GAP, bend_side: float = 1.0,
-                      as_target: bool = False):
+                      label_gap: float = _MECH_LABEL_GAP, bend_side: float = 1.0):
     """解析机理箭头端点引用为画布坐标。
 
     参数:
@@ -1920,8 +1822,6 @@ def mech_arrow_origin(mol, spec: str, shift=(0.0, 0.0),
         label_gap: aim_end 末端到标签正方形边缘的间距（_MECH_LABEL_GAP）。
         bend_side: 弯向（-1 向下 / +1 向上），多键端点按弯向取"靠外杠"：
             <0 取 y 最小杠（下）、>0 取 y 最大杠（上），再沿弯向外移 0.05。
-        as_target: True 时本端为箭头**终点**——H 原子端点定位到 H 节点本身
-            （箭头尖指向 H）；False（起点）时普通原子端点语义。
 
     返回:
         (x, y, from_bond, on_electron, on_label)；spec 无效或原子越界返回 None。
@@ -1979,10 +1879,8 @@ def mech_arrow_origin(mol, spec: str, shift=(0.0, 0.0),
             angles = single_electron_angles(mol, ia)
         else:
             angles = lone_pair_angles(mol, ia)
-        is_single = prefer_single
         if not angles and not prefer_single:
             angles = single_electron_angles(mol, ia)
-            is_single = True
         if angles:
             cx, cy = _dot_center(mol, ia)
             cx += shift[0]
@@ -2169,12 +2067,3 @@ def mech_arrow_tikz(fx: float, fy: float, tx: float, ty: float,
             f".. controls ({mx:.2f},{my:.2f}) .. ({ex:.2f},{ey:.2f});"
         )
     return lines
-
-
-def tikz_draw_line(x1: float, y1: float, x2: float, y2: float, style: str = "") -> str:
-    r"""生成一条 \draw 命令。"""
-    cmd = "  \\draw"
-    if style:
-        cmd += f"[{style}]"
-    cmd += f" {fmt_coord(x1, y1)} -- {fmt_coord(x2, y2)};"
-    return cmd

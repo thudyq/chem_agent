@@ -17,11 +17,6 @@ RENDERER_REGISTRY = {
 }
 
 
-def get_renderer(tag_type: str):
-    """按标记类型取渲染函数；未注册返回 None。"""
-    return RENDERER_REGISTRY.get(tag_type)
-
-
 def render_tag(tag) -> str:
     """按标记渲染（统一入口，替代各处 `renderer(*tag.args)`）。
 

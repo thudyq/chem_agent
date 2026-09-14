@@ -22,7 +22,7 @@ def render_lewis(smiles: str, label: str = None) -> str:
     label 可选：置于结构下方（如 水、H₂O——中文/化学式名称）。
     """
     try:
-        from rdkit import Chem
+        from rdkit import Chem  # noqa: F401
     except ImportError:
         return "（Lewis 渲染失败：rdkit 未安装）"
 

@@ -158,8 +158,9 @@ cp .env.example .env
 # 可选：VISION_*（仅当主模型不支持图片识别时才需要；原生多模态模型留空即可）
 # 可选：CHEM_AGENT_TMPDIR（只读 /tmp 的容器里指定可写临时目录；见 DEPLOY.md §2.2）
 # 接入清小搭时还需设置 SERVICE_API_KEY（服务端密钥）
-# 已废弃：FALLBACK_MODEL_NAME / UPGRADE_MODEL_NAME / UPGRADE_KEYWORDS /
-#         THINKING_MODE / REASONING_EFFORT（旧 .env 仍可保留，代码不再读取）
+# 已废弃：FALLBACK_MODEL_NAME / UPGRADE_MODEL_NAME / UPGRADE_KEYWORDS（代码不再读取）；
+#         THINKING_MODE / REASONING_EFFORT 仅作过渡期兜底——新变量未设置时才读取
+#         并打废弃告警，建议尽快改名
 
 # 5. 验证安装
 python -c "from utils.rdkit_utils import validate_smiles; print(validate_smiles('C'))"

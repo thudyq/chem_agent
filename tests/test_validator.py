@@ -683,28 +683,6 @@ class TestChemicalChecks:
 
 
 
-    def test_degrade_text_chem_clean_for_user(self):
-        """用户可见降级消息：去「化学校验：」前缀与括号详情/修正指导，
-        只留主因；完整原因仍保留在 reason 中供 P2 修正与 metrics 使用。"""
-        pytest.importorskip("rdkit")
-        _, invalid = _validate(
-            "[COMPOSITE:reaction][STRUCT:CCO,id=a][PLUS][STRUCT:O,id=w]"
-            "[ARROW:type=single,Cu, Δ][STRUCT:CC=O,id=b][/COMPOSITE]")
-        tag, reason = invalid[0].tag, invalid[0].reason
-        shown = tv.degrade_text(tag, reason)
-        assert shown == "（复合图图示无法渲染：第 1 步两侧原子不守恒，已省略）"
-        assert "化学校验：" not in shown
-        assert "辅助试剂" not in shown          # 修正指导不再面向用户
-        assert "C2H8O2" in reason               # 完整原因仍保留
-
-    def test_degrade_text_non_chem_unchanged(self):
-        """非化学校验原因（无效 SMILES）降级文本保持原样。"""
-        _, invalid = _validate("[STRUCT:XYZABC]")
-        tag, reason = invalid[0].tag, invalid[0].reason
-        shown = tv.degrade_text(tag, reason)
-        assert "无效 SMILES" in shown
-        assert shown.startswith("（结构式图示无法渲染：")
-
     def test_degrade_text_friendly_omits_details(self):
         """用户可见友好降级：不含校验技术细节（无效 SMILES/守恒等）。
 
@@ -803,7 +781,7 @@ class TestCoeffAndBalanceRules:
 
     def test_coeff_parse(self):
         """系数解析：整数、1/2、3/2、负系数；非法（0、1/3、2/3）拒绝。"""
-        from core.tag_validator import _parse_coeff, _split_multi_coeff
+        from core.tag_validator import _parse_coeff
         assert _parse_coeff("2CCO") == (2, "CCO")
         assert _parse_coeff("1/2O2") == (0.5, "O2")
         assert _parse_coeff("3/2O2") == (1.5, "O2")
@@ -812,7 +790,6 @@ class TestCoeffAndBalanceRules:
         assert _parse_coeff("0CCO") is None
         assert _parse_coeff("1/3O2") is None
         assert _parse_coeff("2/3O2") is None
-        assert _split_multi_coeff("2CCO;1/2O2") == [(2, "CCO"), (0.5, "O2")]
 
     def test_balance_reason_gives_element_diff(self):
         """守恒失败原因含两侧元素差——可操作化（H -2 提示脱氢漏 H2）。"""
@@ -1088,48 +1065,6 @@ def test_pipeline_degrades_invalid_tags(fake_rdkit, fake_renderers, monkeypatch)
     assert any("无效 SMILES" in d["reason"] for d in diag)
     assert any("label 过长" in d["reason"] for d in diag)
     assert all(d["resolved"] is True for d in diag)
-
-
-def test_benzene_style_consistency_warning():
-    """软提示：同一机理内苯环写法不一致（圆圈式/凯库勒A/B）→ 警告。
-
-    不拦截（标记仍通过校验），通过 get_last_warnings() 暴露。
-    """
-    pytest.importorskip("rdkit")
-    from core.tag_validator import get_last_warnings
-
-    # 场景1：苯用凯库勒A，硝基苯用凯库勒B → 警告
-    # （20260828：箭头补全为完整机理——π 进攻需配 N=O 补偿，脱质子源应为
-    # C—H 键中点 sigma:3-4 而非 H 原子 sigma:4；电子流模拟器要求完整配对）
-    text = (
-        "[COMPOSITE:reaction][STRUCT:C1C=CC=CC=1,label=苯,id=ar]"
-        "[PLUS][STRUCT:[N+](=O)=O,label=NO2+,id=nu]"
-        "[ARROW:type=single][STRUCT:O=[N+]([O-])C([H])1C=CC=C[CH+]1,label=σ 络合物,id=sigma]"
-        "[MECHARROW:ar:0-5>nu:0][MECHARROW:nu:0-1>nu:1][/COMPOSITE]"
-        "\n"
-        "[COMPOSITE:reaction][STRUCT:O=[N+]([O-])C([H])1C=CC=C[CH+]1,label=σ 络合物,id=sigma]"
-        "[ARROW:type=single][STRUCT:O=[N+]([O-])C1=CC=CC=C1,label=硝基苯][PLUS][STRUCT:[H+],label=H+]"
-        "[MECHARROW:sigma:3-4>sigma:3-9][/COMPOSITE]"
-    )
-    _, invalid = _validate(text)
-    assert len(invalid) == 0  # 不拦截
-    assert get_last_warnings(), "应产生苯环写法不一致警告"
-
-    # 场景2：都用凯库勒A → 无警告
-    text2 = text.replace("O=[N+]([O-])C1=CC=CC=C1", "O=[N+]([O-])C1C=CC=CC=1")
-    _, invalid2 = _validate(text2)
-    assert len(invalid2) == 0
-    assert not get_last_warnings(), "写法一致不应警告"
-
-    # 场景3：圆圈式 + 凯库勒混用 → 警告
-    text3 = (
-        "[COMPOSITE:row][STRUCT:c1ccccc1,label=苯,id=ar][/COMPOSITE]"
-        "\n"
-        "[COMPOSITE:row][STRUCT:C1=CC=CC=C1,label=苯,id=ar][/COMPOSITE]"
-    )
-    _, invalid3 = _validate(text3)
-    assert len(invalid3) == 0
-    assert get_last_warnings(), "圆圈+凯库勒混用应警告"
 
 
 # ---------------------------------------------------------------------------

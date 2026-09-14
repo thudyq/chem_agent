@@ -38,10 +38,7 @@
 from __future__ import annotations
 
 import base64
-import contextvars
 import ipaddress
-import json
-import queue
 import re
 import threading
 import time
@@ -54,7 +51,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app import process_question
 from core import answer_cache, credentials, diaglog
-from core.attachments import (build_attachments, extract_code_blocks,
+from core.attachments import (_within_quota, build_attachments, extract_code_blocks,
                               replace_code_blocks_with_images)
 from core.config import settings
 
@@ -280,15 +277,6 @@ def _session_dir(session_id: str) -> Path:
     return d
 
 
-def _within_web_quota(total_bytes: int, total_files: int,
-                      max_bytes: int, max_files: int) -> bool:
-    if max_bytes > 0 and total_bytes > max_bytes:
-        return False
-    if max_files > 0 and total_files > max_files:
-        return False
-    return True
-
-
 def _collect_web_pngs(root: Path) -> tuple:
     """收集 `web_sessions/` 下所有 `*.png` → (文件列表, 总字节数)。"""
     files, total_bytes = [], 0
@@ -383,14 +371,14 @@ def prune_web_attachments(max_bytes: int = WEB_ATTACHMENT_MAX_BYTES,
     removed = _prune_oversized_sessions(root, cutoff)     # 第一道：单会话上限
     files, total_bytes = _collect_web_pngs(root)          # 重新统计
 
-    if _within_web_quota(total_bytes, len(files), max_bytes, max_files):
+    if _within_quota(total_bytes, len(files), max_bytes, max_files):
         if removed:
             _drop_empty_session_dirs(root)
         return removed
 
     freed = 0
     for p in sorted(files, key=lambda x: x.stat().st_mtime):
-        if _within_web_quota(total_bytes, len(files), max_bytes, max_files):
+        if _within_quota(total_bytes, len(files), max_bytes, max_files):
             break
         try:
             if p.stat().st_mtime > cutoff:      # 新文件不删
@@ -434,36 +422,13 @@ def _extract_question(messages) -> tuple[str, list]:
     """取最后一条 user 消息 → (文本, 图片引用列表)。
 
     图片引用支持 `data:image/...;base64,...`（前端读文件后内联）与 http(s)
-    URL（做 SSRF 校验）。与 api.py 的 /v1 路径口径一致但更窄：网页端
-    不需要音频/文件（前端未提供入口），出现时按文本忽略。
+    URL（做 SSRF 校验）。复用 `api.py` 的实现——同一套多模态 part 解析口径；
+    网页端不需要音频/文件（前端未提供入口），出现时按文本忽略，且图片数按
+    `_MAX_IMAGES` 截断。
     """
-    if not isinstance(messages, list):
-        return "", []
-    for m in reversed(messages):
-        if not isinstance(m, dict) or m.get("role") != "user":
-            continue
-        content = m.get("content")
-        if isinstance(content, str):
-            return content, []
-        if isinstance(content, list):
-            texts, images = [], []
-            for part in content:
-                if isinstance(part, str):
-                    texts.append(part)
-                    continue
-                if not isinstance(part, dict):
-                    continue
-                ptype = part.get("type", "")
-                if ptype in ("text", "input_text"):
-                    texts.append(part.get("text", ""))
-                elif ptype in ("image_url", "input_image", "image"):
-                    ref = part.get("image_url") or part.get("url") or ""
-                    if isinstance(ref, dict):
-                        ref = ref.get("url", "")
-                    if ref:
-                        images.append(ref)
-            return "\n".join(t for t in texts if t), images[:_MAX_IMAGES]
-    return "", []
+    from api import _extract_question as _impl
+    text, images, _, _ = _impl(messages)
+    return text, images[:_MAX_IMAGES]
 
 
 def _extract_history(messages) -> list:
@@ -603,53 +568,41 @@ def _save_upload_image(ref: str, index: int, upload_dir: Path) -> str | None:
     return None
 
 
+# 网页 BYOK 路径的图片提示文案束（`api._image_question_parts` 的 msgs 参数；
+# 与 /v1 不同：指向设置面板、以原图为准，且失败不打后端日志）。
+_WEB_IMAGE_MSGS = {
+    "no_vision": "（用户上传了图片，但未配置视觉模型（设置面板里的「视觉模型」），"
+                 "无法识别图片内容。请在回答中提示用户：填写视觉模型后即可识别图片，"
+                 "或先用文字描述结构）",
+    "fetch_fail": "（第 {i} 张图片下载/解码失败，已忽略）",
+    "smiles_bad": "（提示：图片 {i} 识别出的结构式无法解析，识别可能"
+                  "有误；请在回答中提醒用户核对，必要时请用户用文字描述）",
+    "downgraded": "（提示：图片 {i} 识别受限，以上为尽力提取的片段，"
+                  "可能不完整；请提醒用户以原图为准）",
+    "generic": "（提示：图片 {i} 为视觉模型自动识别，识别可能有误；"
+               "请在回答中提醒用户以原图为准、核对识别内容）",
+    "recog_fail": "（用户上传的图片 {i} 识别失败：视觉模型未能理解图片内容。"
+                  "请基于文字作答，并提示用户重新上传或用文字描述）",
+}
+
+
 def _build_question(text: str, images: list, session_dir: Path) -> str:
     """文本 + 图片识别结果拼成最终问题（视觉模型可用时）。
 
     图片落盘到**会话目录的 uploads 子目录**（不是系统 Temp——沙箱/容器里
     系统 Temp 常不可写，且会话目录便于 TTL 清理；独立子目录避免与图示
     PNG 混在一起）；识别完即删原图，不留用户数据。识别失败明确告知主模型，
-    不静默丢弃。
+    不静默丢弃。识别骨架复用 `api.py` 的 `_image_question_parts`（与 /v1
+    同一流程），取图与文案是本路径自己的。
     """
+    from api import _image_question_parts as _impl
     parts = [text] if text else []
     if not images:
         return "\n".join(parts) or "（空消息）"
-
-    vconf = credentials.vision_config()
-    if not vconf.is_configured:
-        parts.append(
-            "（用户上传了图片，但未配置视觉模型（设置面板里的「视觉模型」），"
-            "无法识别图片内容。请在回答中提示用户：填写视觉模型后即可识别图片，"
-            "或先用文字描述结构）")
-        return "\n".join(parts)
-
-    from utils.ocr_utils import describe_image
     upload_dir = session_dir / "uploads"
-    for i, ref in enumerate(images, 1):
-        path = _save_upload_image(ref, i, upload_dir)
-        if not path:
-            parts.append(f"（第 {i} 张图片下载/解码失败，已忽略）")
-            continue
-        desc = describe_image(path)
-        try:
-            Path(path).unlink(missing_ok=True)   # 识别完即删原图
-        except OSError:
-            pass
-        if desc and desc.get("content"):
-            parts.append(f"（用户上传的图片 {i} 的内容（{desc['type']}）："
-                         f"{desc['content']}）")
-            if desc.get("smiles_ok") is False:
-                parts.append(f"（提示：图片 {i} 识别出的结构式无法解析，识别可能"
-                             "有误；请在回答中提醒用户核对，必要时请用户用文字描述）")
-            elif desc.get("downgraded"):
-                parts.append(f"（提示：图片 {i} 识别受限，以上为尽力提取的片段，"
-                             "可能不完整；请提醒用户以原图为准）")
-            else:
-                parts.append(f"（提示：图片 {i} 为视觉模型自动识别，识别可能有误；"
-                             "请在回答中提醒用户以原图为准、核对识别内容）")
-        else:
-            parts.append(f"（用户上传的图片 {i} 识别失败：视觉模型未能理解图片内容。"
-                         "请基于文字作答，并提示用户重新上传或用文字描述）")
+    parts.extend(_impl(images,
+                       lambda url, i: _save_upload_image(url, i, upload_dir),
+                       _WEB_IMAGE_MSGS, cleanup=True))
     return "\n".join(parts)
 
 
@@ -759,11 +712,10 @@ def _prepare_answer(answer: str, session_id: str) -> str:
 
 def _sse_frame(delta: dict, finish: str | None = None,
                error: dict | None = None) -> str:
-    chunk = {"object": "chat.completion.chunk",
-             "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}
-    if error is not None:
-        chunk["error"] = error
-    return f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+    """网页 BYOK 的 SSE 帧：复用 `api.py` 的帧构造；本路径的帧不带
+    id/created/usage/x_soda（前端用不到，stop 帧的会话信息走 delta）。"""
+    from api import _sse_frame as _impl
+    return _impl(None, None, delta, finish=finish, error=error)
 
 
 # ---------------------------------------------------------------- 路由
@@ -1004,13 +956,12 @@ async def chat(request: Request,
 
 
 def _diag_meta(diag: list) -> dict:
-    """会话去锚定摘要所需的 meta（是否仍有未解决失败 + 原因）。"""
-    unresolved = [d for d in (diag or []) if d.get("resolved") is False]
-    if not unresolved:
-        return {"failed": False, "reason": ""}
-    return {"failed": True,
-            "reason": "; ".join((d.get("reason") or "")
-                                for d in unresolved)[:500]}
+    """会话去锚定摘要所需的 meta（是否仍有未解决失败 + 原因）。
+
+    复用 `api.py` 的实现（与 /v1 路径同一口径）。
+    """
+    from api import _diag_meta as _impl
+    return _impl(diag)
 
 
 def _sse_stream(question: str, history: list, session_id: str,
@@ -1050,24 +1001,16 @@ def _sse_stream_inner(question: str, history: list, session_id: str,
                       thinking: str = None,
                       effort: str = None, max_tokens: int = None,
                       creds: dict = None, client_ip: str = None):
-    """`_sse_stream` 的主体；用户凭证在 `work()` 内落地（见 `_sse_stream`）。"""
-    yield _sse_frame({"role": "assistant"})
-    yield _sse_frame({"reasoning": "正在思考并绘制化学图示…"})
+    """`_sse_stream` 的主体；用户凭证在 `work()` 内落地（见 `_sse_stream`）。
+    流骨架（保活轮询、content 增量、收尾排空）复用 `api.py` 的
+    `_sse_stream_core`；本路径的差异（凭证/IP 落地、会话附件、LaTeX 源码、
+    友好错误、stop 帧带回 session_id）全部在下面的钩子里。"""
+    from api import _sse_stream_core as _core
 
-    answer_q: queue.Queue = queue.Queue(maxsize=1)
-    progress_q: queue.Queue = queue.Queue(maxsize=200)
-    correction_mark = object()
-
-    def _safe_put(item) -> None:
-        try:
-            progress_q.put_nowait(item)
-        except queue.Full:
-            pass
-
-    def work():
-        # ★ 凭证必须在这里 set：work() 整体跑在下面那一个 `ctx.run(...)` 里，
-        # 上下文只有一个，set 之后本线程内所有管线代码（以及它们用
-        # copy_context() 拉起的子线程）都能读到用户凭证。
+    def work(answer_q, progress_q, correction_mark, safe_put):
+        # ★ 凭证必须在这里 set：work() 整体跑在 `_sse_stream_core` 那一个
+        # `ctx.run(...)` 里，上下文只有一个，set 之后本线程内所有管线代码
+        # （以及它们用 copy_context() 拉起的子线程）都能读到用户凭证。
         credentials.apply_credentials(creds)
         # 按 IP 的在途闸门（安全审查 R5）：与凭证同理，必须在 work() 里设 ——
         # 生成器的每段都在新 Context 里跑。
@@ -1077,7 +1020,7 @@ def _sse_stream_inner(question: str, history: list, session_id: str,
             answer = process_question(
                 question, history=history,
                 progress_callback=progress_q.put,
-                correction_callback=lambda: _safe_put(correction_mark),
+                correction_callback=lambda: safe_put(correction_mark),
                 diagnostics=diag, responses=responses,
                 thinking=thinking, effort=effort, max_tokens=max_tokens)
         except Exception as e:                       # 管线异常兜底为 error 帧
@@ -1094,62 +1037,22 @@ def _sse_stream_inner(question: str, history: list, session_id: str,
         # `_prepare_answer` 已把代码块换成图片 URL，所以必须从**原始回答**里取。
         answer_q.put((display, latex_sources(raw)))
 
-    # 子线程**不自动继承** contextvars（新线程拿到的是创建时的空 context），
-    # 必须显式 copy_context().run() 把当前请求的用户凭证带进工作线程——
-    # 否则线程里的管线会退回服务器 .env 配置（BYOK 失效）。
-    ctx = contextvars.copy_context()
-    threading.Thread(target=lambda: ctx.run(work), daemon=True).start()
-    last_flush = time.time()
-    payload = None
-    while True:
-        try:
-            payload = answer_q.get_nowait()
-            break
-        except queue.Empty:
-            pass
-        correction = False
-        while True:
-            try:
-                p = progress_q.get_nowait()
-            except queue.Empty:
-                break
-            if p is correction_mark:
-                correction = True
-        if correction:
-            yield _sse_frame({"reasoning": "正在修正回答…"})
-            last_flush = time.time()
-        elif time.time() - last_flush >= _SSE_HEARTBEAT:
-            yield _sse_frame({"reasoning": "正在思考并绘制化学图示…"})
-            last_flush = time.time()
-        else:
-            time.sleep(0.2)
-
-    # 收尾排空（保留修正提示）
-    correction = False
-    while True:
-        try:
-            p = progress_q.get_nowait()
-        except queue.Empty:
-            break
-        if p is correction_mark:
-            correction = True
-    if correction:
-        yield _sse_frame({"reasoning": "正在修正回答…"})
-
-    if isinstance(payload, Exception):
-        yield _sse_frame({}, finish="stop",
-                         error={"type": "upstream_error",
-                                "message": _friendly_error(str(payload))})
-        yield "data: [DONE]\n\n"
-        return
-
-    answer, sources = payload if isinstance(payload, tuple) else (payload, [])
-    text = answer or "（未能生成回答）"
-    for i in range(0, len(text), _ANSWER_CHUNK):
-        yield _sse_frame({"content": text[i:i + _ANSWER_CHUNK]})
-    # stop 帧带上会话 id 与图示源码（前端据此渲染"查看 LaTeX 源码"折叠面板）
-    yield _sse_frame({"session_id": session_id, "latex": sources}, finish="stop")
-    yield "data: [DONE]\n\n"
+    yield from _core(
+        _sse_frame,
+        work,
+        error_frame=lambda e: _sse_frame(
+            {}, finish="stop",
+            error={"type": "upstream_error",
+                   "message": _friendly_error(str(e))}),
+        # stop 帧带上会话 id 与图示源码（前端据此渲染"查看 LaTeX 源码"折叠面板）
+        stop_frame=lambda _text, sources: _sse_frame(
+            {"session_id": session_id, "latex": sources}, finish="stop"),
+        unpack=lambda payload: (
+            payload if isinstance(payload, tuple) else (payload, [])),
+        exc_first=False,
+        heartbeat=_SSE_HEARTBEAT,
+        chunk=_ANSWER_CHUNK,
+    )
 
 
 def _friendly_error(raw: str) -> str:

@@ -61,17 +61,18 @@ if __name__ == "__main__":
     from pathlib import Path
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from renderers.collide import Occupancy
+    from core.tag_parser import MECH_ARROW_RE as _MECH_ARROW_RE
+    from renderers.collide import Occupancy, _seg_point_dist
     from renderers.mol_primitives import (
         _ARROW_POINT_GAP, _LABEL_SQUARE_HALF, _MECH_LABEL_GAP,
         bond_order_of, format_chem_text,
         format_partial_charge,
         hbond_dots_tikz, mech_arrow_between, mech_arrow_origin,
-        mol_visual_bbox, mol_visual_bbox_xh, parse_charge_pairs, parse_hbond_pairs, atom_label,
+        mol_visual_bbox, mol_visual_bbox_xh, parse_charge_pairs, atom_label,
         atom_main_label, bond_segments, bond_segments_for, label_bond_margin,
         label_edge_point, h_label_edge_point, prepare_mol, rotate_mol_coords, scale_mol_coords,
         symbol_center,
-        atom_pos, place_donor_h, place_explicit_hs, place_h_avoiding,
+        atom_pos, place_explicit_hs, place_h_avoiding,
         adjust_hbond_conformation, lone_pair_angles, _ang_diff,
         _covalent_bond_len,
         partial_charge_pos, main_arrow_lines, split_species_coeff, wrap_format_text,
@@ -82,17 +83,18 @@ if __name__ == "__main__":
         layout_row, layout_rows, molecule_scope_lines, place_bbox,
     )
 else:
-    from .collide import Occupancy
+    from core.tag_parser import MECH_ARROW_RE as _MECH_ARROW_RE
+    from .collide import Occupancy, _seg_point_dist
     from .mol_primitives import (
         _ARROW_POINT_GAP, _LABEL_SQUARE_HALF, _MECH_LABEL_GAP,
         bond_order_of, format_chem_text,
         format_partial_charge,
         hbond_dots_tikz, mech_arrow_between, mech_arrow_origin,
-        mol_visual_bbox, mol_visual_bbox_xh, parse_charge_pairs, parse_hbond_pairs, atom_label,
+        mol_visual_bbox, mol_visual_bbox_xh, parse_charge_pairs, atom_label,
         atom_main_label, bond_segments, bond_segments_for, label_bond_margin,
         label_edge_point, h_label_edge_point, prepare_mol, rotate_mol_coords, scale_mol_coords,
         symbol_center,
-        atom_pos, place_donor_h, place_explicit_hs, place_h_avoiding,
+        atom_pos, place_explicit_hs, place_h_avoiding,
         adjust_hbond_conformation, lone_pair_angles, _ang_diff,
         _covalent_bond_len,
         partial_charge_pos, main_arrow_lines, split_species_coeff, wrap_format_text,
@@ -116,15 +118,6 @@ def _fmt_coeff(c: float) -> str:
     if c == int(c):
         return str(int(c))
     return f"{int(c * 2)}/2"
-
-# 端点支持两种：原子序号（0，含显式 H 原子）、键中点（0-1）
-# （20260821：XH 并入 STRUCT 后显式 H 是真实原子参与编号，a#k 语法废弃）
-_MECH_PT_RE = r"\d+(?:-\d+)?"
-_MECH_ARROW_RE = re.compile(
-    rf"^\s*([A-Za-z0-9_]+)\s*:\s*({_MECH_PT_RE})\s*(>>|>)\s*"
-    rf"([A-Za-z0-9_]+)\s*:\s*({_MECH_PT_RE})"
-    r"(?:\s*\+\s*([A-Za-z0-9_]+)\s*:\s*(\d+))?\s*$"
-)
 
 _SUPPORTED_LAYOUTS = ("reaction", "row", "energy")
 
@@ -209,22 +202,6 @@ def _bond_form_midpoint(mols: dict, id_a: str, pt_a: str,
     return (mx, my, False, False, False)
 
 
-def _seg_point_dist(seg, pt):
-    """点到线段的最短距离（空间感知弯向用）。"""
-    x1, y1, x2, y2 = seg
-    px, py = pt
-    vx, vy = x2 - x1, y2 - y1
-    wx, wy = px - x1, py - y1
-    c1 = vx * wx + vy * wy
-    if c1 <= 0:
-        return math.hypot(px - x1, py - y1)
-    c2 = vx * vx + vy * vy
-    if c2 <= c1:
-        return math.hypot(px - x2, py - y2)
-    b = c1 / c2
-    return math.hypot(px - (x1 + b * vx), py - (y1 + b * vy))
-
-
 def _arrow_near_segments(sm, dm):
     """源/目标组件的键线段（全局坐标），供弯向空间感知。
 
@@ -275,8 +252,8 @@ def _pick_bend_side(p0, p1, from_bond, aim_end, sm, dm):
            else min(0.22 * dist + 0.15, 0.6))
     m1 = _arc_mid(fx, fy, tx, ty, mag, side)
     m2 = _arc_mid(fx, fy, tx, ty, mag, -side)
-    d1 = min(_seg_point_dist(s, m1) for s in segs)
-    d2 = min(_seg_point_dist(s, m2) for s in segs)
+    d1 = min(_seg_point_dist(*s, *m1) for s in segs)
+    d2 = min(_seg_point_dist(*s, *m2) for s in segs)
     if d1 < 0.20 and d2 > d1 + 0.05:
         return -side
     return side
@@ -370,8 +347,7 @@ def draw_mech_arrows(mols: dict, arrows: list,
         dlab = _mech_labeler(dm)
         if dst2_id is None:
             p1 = mech_arrow_origin(dm["mol"], dst_pt, dm["shift"],
-                                   lone_pair_offset=False,
-                                   as_target=True)
+                                   lone_pair_offset=False)
         else:
             p1 = _bond_form_midpoint(mols, dst_id, dst_pt, dst2_id, dst2_pt,
                                      avoid=plus_positions)
@@ -388,8 +364,7 @@ def draw_mech_arrows(mols: dict, arrows: list,
             p1 = mech_arrow_origin(dm["mol"], dst_pt, dm["shift"],
                                    lone_pair_offset=False,
                                    toward=(p0[0], p0[1]), labeler=dlab,
-                                   bend_side=-1.0 if p0[2] else 1.0,
-                                   as_target=True)
+                                   bend_side=-1.0 if p0[2] else 1.0)
             if p1 is None:
                 continue
         # 断键起点：σ 键中点（a-b，含 C–H 显式键）——从键出发
@@ -407,7 +382,6 @@ def draw_mech_arrows(mols: dict, arrows: list,
         tb = None
         aim_end = False
         if p1[4] and "-" not in dst_pt:
-            da = dm["mol"].GetAtomWithIdx(int(dst_pt))
             ax, ay = symbol_center(dm["mol"], int(dst_pt))
             tb = (ax + dm["shift"][0], ay + dm["shift"][1],
                   _LABEL_SQUARE_HALF, _LABEL_SQUARE_HALF)
@@ -686,7 +660,6 @@ def _frag_lines_and_bbox(frags, *, show_numbers=False, show_lone_pairs=False):
 def _shift_scope_lines(scope_lines, dx, dy):
     """scope lines 整体平移 (dx, dy)（解析 shift 行 + 坐标行）。"""
     out = []
-    shift_re = None
     for ln in scope_lines:
         if "\\begin{scope}" in ln:
             # 平移 scope shift
@@ -1202,8 +1175,7 @@ def render_composite(layout: str, children: list) -> str:
                     f"  \\node[{align}below] at ({cx:.2f},{ly:.2f}) {{{text}}};"
                 )
         for rx in blayout.resarrows:
-            b_lines.append(
-                f"  \\node[font=\\large] at ({rx:.2f},0) {{$\\leftrightarrow$}};")
+            b_lines.extend(main_arrow_lines(rx, rx, kind="resonance"))
         # 块内 MECHARROW（块内↔块内，块内坐标系）：共振式间电子流向
         if b_mech:
             b_lines.extend(draw_mech_arrows(
@@ -1439,7 +1411,7 @@ def render_composite(layout: str, children: list) -> str:
         lines.append(f"  \\node at ({px:.2f},{-yoff:.2f}) {{$+$}};")
 
     for rx, yoff in res_positions:
-        lines.append(f"  \\node[font=\\large] at ({rx:.2f},{-yoff:.2f}) {{$\\leftrightarrow$}};")
+        lines.extend(main_arrow_lines(rx, rx, y=-yoff, kind="resonance"))
 
     # 附件与箭头的通用边距（20260820 布局避让，实测校准）：
     # 附件垂直位置由 bbox 朝向箭头的**真实边**决定（charge_mirror=False——

@@ -17,7 +17,7 @@ from .mol_primitives import (
     _label_flip_for, aromatic_ring_info, atom_label, atom_main_label, atom_pos,
     bond_segments, charge_tikz, heavy_atom_count, label_bond_margin,
     label_node_pos, label_visual_width,
-    label_wrapped_size, lone_pair_dot_groups, lone_pair_tikz, mol_visual_bbox,
+    label_wrapped_size, lone_pair_dot_groups, mol_visual_bbox,
 )
 
 
@@ -369,14 +369,14 @@ def molecule_scope_lines(mol, shift: Tuple[float, float], *,
                 mol, idx, explicit_hs=hs.get(idx, 0))
             for (x1, y1), (x2, y2) in groups:
                 for dx, dy in ((x1, y1), (x2, y2)):
-                    lines.append(f"    \\fill ({dx:.2f},{dy:.2f}) circle (0.028);")
+                    lines.append(f"    \\fill ({dx:.2f},{dy:.2f}) circle ({DOT_R});")
                     occ.add_circle(dx, dy, DOT_R)
             # 带电原子的"单电子"是 RDKit 对缺电子离子的簿记（如 [Br+] 的
             # 2 个），不是自由基——带形式电荷时不画单电子点
             if atom.GetFormalCharge() != 0:
                 singles = []
             for dx, dy in singles:
-                lines.append(f"    \\fill ({dx:.2f},{dy:.2f}) circle (0.028);")
+                lines.append(f"    \\fill ({dx:.2f},{dy:.2f}) circle ({DOT_R});")
                 occ.add_circle(dx, dy, DOT_R)
     else:
         # 自由基单电子不受孤对电子开关影响：不画点会被误读为离子
@@ -389,7 +389,7 @@ def molecule_scope_lines(mol, shift: Tuple[float, float], *,
             _, singles = lone_pair_dot_groups(
                 mol, idx, explicit_hs=hs.get(idx, 0))
             for dx, dy in singles:
-                lines.append(f"    \\fill ({dx:.2f},{dy:.2f}) circle (0.028);")
+                lines.append(f"    \\fill ({dx:.2f},{dy:.2f}) circle ({DOT_R});")
                 occ.add_circle(dx, dy, DOT_R)
     lines.append("  \\end{scope}")
     return lines

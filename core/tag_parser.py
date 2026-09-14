@@ -50,6 +50,28 @@ _OPENERS = {
 # REASONING 配对正则（内容不与括号冲突，可用正则）
 _REASONING_RE = re.compile(r"\[REASONING\](.*?)\[/REASONING\]", re.DOTALL)
 
+# 机理弯箭头 spec 正则（校验 tag_validator / 模拟 electron_sim / 渲染
+# composite 三方共用同一编译实例，避免三份拷贝漂移）。
+# 端点支持两种：原子序号（0，含显式 H 原子）、键中点（0-1）。
+_MECH_PT = r"\d+(?:-\d+)?"
+MECH_ARROW_RE = re.compile(
+    rf"^\s*([A-Za-z0-9_]+)\s*:\s*({_MECH_PT})\s*(>>|>)\s*"
+    rf"([A-Za-z0-9_]+)\s*:\s*({_MECH_PT})"
+    r"(?:\s*\+\s*([A-Za-z0-9_]+)\s*:\s*(\d+))?\s*$"
+)
+
+# 纯化学式识别用元素表（有机/常见无机；tag_validator 与 mol_primitives
+# 共用）。刻意不含 Ar/Ac（prompt 允许的通用基团缩写）。
+REAL_ELEMENTS = {
+    "H", "B", "C", "N", "O", "F", "Si", "P", "S", "Cl", "Br", "I",
+    "Li", "Na", "K", "Mg", "Ca", "Al", "Fe", "Cu", "Zn", "Ag", "Au",
+    "Hg", "Pb", "Sn", "Se", "Te",
+    "Be", "Sc", "Ti", "V", "Cr", "Mn", "Co", "Ni", "Ga", "Ge", "As",
+    "Rb", "Sr", "Y", "Zr", "Nb", "Mo", "Ru", "Rh", "Pd", "Cd", "In",
+    "Sb", "Cs", "Ba", "La", "Ce", "Hf", "Ta", "W", "Re", "Os", "Ir",
+    "Pt", "Tl", "Bi",
+}
+
 # COMPOSITE 容器配对串
 _COMPOSITE_OPEN = "[COMPOSITE:"
 _COMPOSITE_CLOSE = "[/COMPOSITE]"

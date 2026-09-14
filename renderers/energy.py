@@ -20,7 +20,6 @@ def render_energy(points_str: str) -> str:
     if len(values) < 2:
         return "（势能面渲染失败：至少需要 2 个能量点）"
 
-    n = len(values)
     info = energy_point_coords(values)
     x_last = info["x_last"]
     roles = energy_point_roles(values)

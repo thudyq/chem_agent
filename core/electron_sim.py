@@ -25,19 +25,13 @@
 的组件参与的步、BLOCK 内外混合引用、不认识的箭头形态。
 """
 
-import re
-
 from rdkit import Chem
 
+from core.tag_parser import MECH_ARROW_RE
 from renderers.mol_primitives import _VALENCE_ELECTRONS, lone_pair_count
 
-# 箭头 spec 解析（与 tag_validator._MECH_ARROW_RE 同构，独立成一份避免
-# 模块循环依赖）
-_PT = r"(?:\d+|\d+-\d+)"
-_ARROW_SPEC_RE = re.compile(
-    rf"^\s*([A-Za-z0-9_]+)\s*:\s*({_PT})\s*(>>|>)\s*"
-    rf"([A-Za-z0-9_]+)\s*:\s*({_PT})"
-    r"(?:\s*\+\s*([A-Za-z0-9_]+)\s*:\s*(\d+))?\s*$")
+# 箭头 spec 解析：与校验/渲染共用 core.tag_parser.MECH_ARROW_RE
+_ARROW_SPEC_RE = MECH_ARROW_RE
 
 _BOND_UP = {1: Chem.BondType.DOUBLE, 2: Chem.BondType.TRIPLE}
 _BOND_DOWN = {2: Chem.BondType.SINGLE, 3: Chem.BondType.DOUBLE}
@@ -321,8 +315,8 @@ def _ambiguous_variants(specs, mol_by_cid) -> list:
         m = _ARROW_SPEC_RE.match(spec)
         if not m or m.group(3) != ">":
             continue
-        src_id, src_pt, dst_id, dst_pt = (m.group(1), m.group(2),
-                                          m.group(4), m.group(5))
+        src_id, src_pt, _dst_id, dst_pt = (m.group(1), m.group(2),
+                                           m.group(4), m.group(5))
         if "-" not in src_pt or "-" in dst_pt:
             continue
         mol = mol_by_cid.get(src_id)
@@ -995,7 +989,6 @@ def fix_arrows_by_diff(tag):
 
     返回 (新 raw, 说明) 或 None（无法干净 diff / 分解不唯一）。
     调用方必须全量重校验后再采用（校验器 + 模拟器把关）。"""
-    from core.tag_parser import parse_tags
     if tag.type != "COMPOSITE" or len(tag.args) < 2:
         return None
     children = tag.args[1]
@@ -1073,7 +1066,6 @@ def flip_products_to_simulated(tag):
     仅当逐步右侧物种数与预测数对齐（或可通过"两声明物种合并为一预测
     物种"对齐，如 乙醚+H+ ← 质子化乙醚）时进行；替换保留原组件 id/label。
     返回 (新 raw, 说明) 或 None。调用方必须全量重校验后再采用。"""
-    from core.tag_parser import parse_tags
     if tag.type != "COMPOSITE" or len(tag.args) < 2:
         return None
     children = tag.args[1]

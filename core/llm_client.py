@@ -265,36 +265,6 @@ def _capability_key(base_url: str, model: str, api_key: str) -> str:
     return capabilities.make_key(base_url, model, api_key)
 
 
-def _stage_plan(cap, on: bool, effort, cap_key: str) -> tuple:
-    """按能力表调整首选意图，返回 (on, effort, 是否被静默改写)。
-
-    * 能力表已知"不能关"（force_on）而用户要关 → 退到该端点允许范围内最能体现
-      "想省"的档位（优先 low），并标记 downgraded（供诚实上报）。
-    * 能力表已知"不支持思考"（unsupported）而用户要开 → 改为关思考并标记。
-    * 强度取值被拒过 → 就近换档（Gemini 拒 medium → low）。
-    """
-    if not on:
-        if cap.allows_off() is False:
-            # 端点始终思考 → 退到最低可用档
-            alt = cap.best_effort_at_most(EFFORT_LOW) or EFFORT_LOW
-            print(f"[ask_llm] 能力表：该端点不支持关闭思考，改用最低档 {alt}")
-            return True, alt, True
-        return False, None, False
-
-    allows_on = cap.allows_on()
-    if allows_on is False:
-        print("[ask_llm] 能力表：该端点不支持思考，改为关闭")
-        return False, None, True
-    if effort and not cap.supports_effort(effort):
-        alt = cap.best_effort_at_most(effort)
-        if alt is None:
-            print(f"[ask_llm] 能力表：该端点不接受任何思考强度，忽略强度 {effort}")
-            return True, None, True
-        print(f"[ask_llm] 能力表：强度 {effort} 不被接受，就近改用 {alt}")
-        return True, alt, True
-    return True, effort, False
-
-
 def _downgrade_notice(requested_on: bool, eff_on: bool, eff_effort) -> str:
     """生成"用户意图被静默改写"的用户可见提示（§4.5.5）。
 

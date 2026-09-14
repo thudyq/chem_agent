@@ -14,7 +14,6 @@ import time
 import requests
 
 from core import credentials
-from core.config import settings
 
 # 视觉调用超时拆成（建连, 读取）（安全审查 R5）：不可达/被丢包的端点快速失败，
 # 不再让每个请求干等满整个超时（识图本身不需要长思考，读取 60s 足够）。
@@ -57,58 +56,6 @@ def _parse_description(text: str) -> dict:
     m2 = re.search(r"内容[:：]\s*(.*)", t, re.DOTALL)
     content = (m2.group(1) if m2 else t).strip()
     return {"type": ctype, "content": content}
-
-
-def _extract_description(text: str, max_len: int = 600) -> dict:
-    """从文本中提取"类型：/内容："结构化描述；提取不出时收敛而非整段透传。
-
-    reasoning_content 兜底时，文本可能是无格式的思考草稿（"Let me look.../
-    Wait/Actually"），直接整段当 content 会污染下游（_structure_smiles_ok 拿
-    它去匹配 SMILES，可能误判）。此函数：
-    - 文本内含"类型:"与"内容:"两行 → 正常解析（_parse_description）；
-    - 否则：截断到 max_len 并把 type 标为"未分类_草稿"，明确标注这是未
-      结构化的思考回退，避免后续当成结构化描述。
-    返回 {"type", "content"}。
-    """
-    t = (text or "").strip()
-    if not t:
-        return {"type": "未分类", "content": ""}
-    if re.search(r"类型\s*[:：]", t) and re.search(r"内容\s*[:：]", t):
-        return _parse_description(t)
-    if len(t) > max_len:
-        t = t[:max_len] + "…"
-    return {"type": "未分类_草稿", "content": t}
-
-
-def _best_effort_extract(reasoning: str, max_len: int = 600) -> dict:
-    """从思考链里尽量抢救可用的描述（降级时的兜底增强）。
-
-    当模型没写出正式"类型/内容"两行、只留下思考草稿时，这张图往往有
-    文字或关键信息（题目/数值/结构描述）。尽量从中提取片段而非直接放弃：
-    - 优先找像是"结论"的句子（含分子/结构/SMILES/文字转录线索的连续中文/英文行）；
-    - 找不到就用草稿前段截断。
-    与 _extract_description 不同，这里不要求"类型/内容"两行，而是尽力给下游
-    一点可用信息（尤其文字），使降级不至完全空白。
-    """
-    t = (reasoning or "").strip()
-    if not t:
-        return {"type": "未分类", "content": ""}
-    # 找带化学关键词或疑似转录内容的句子（尽量选信息密度高的段）
-    candidates = re.split(r"\n{2,}|(?<=[。！？?.])\s+", t)
-    hits = []
-    for c in candidates:
-        c = c.strip()
-        if len(c) < 8:
-            continue
-        # 含化学/结构/数字/转录线索的句子优先
-        if re.search(r"SMILES|结构|分子|苯|环|键|反应|机理|过渡态|原子|"
-                     r"\d|C\d|文字|题目|标注|图中|内容[:：]", c):
-            hits.append(c)
-    picked = hits[:3] if hits else [t]
-    out = "\n".join(picked)
-    if len(out) > max_len:
-        out = out[:max_len] + "…"
-    return {"type": "未分类_草稿", "content": out}
 
 
 def _is_valid_smiles(smi: str) -> bool:
@@ -288,11 +235,8 @@ def describe_image(image_path: str, max_attempts: int = _VISION_MAX_ATTEMPTS) ->
     """上传图片 → 视觉 LLM 理解 → {"type", "content", "smiles_ok", "downgraded"}。
 
     glm-5.3-flash（当前模型）：开启思考（thinking.enabled，实测 disabled 报错）。
-    若模型把结论写进 reasoning_content 致 content 空，回退时先用
-    _extract_description 提取"类型/内容"两行；没有两行（复杂图思考过长、
-    未及输出正式结论）则用 _best_effort_extract 尽量抢救文字/结构片段，
-    并把 type 标为"未分类_草稿"、附加 downgraded=True——调用方可据此走
-    "识别受限"降级，同时保留抢救到的文字（至少图上的文字不因降级而全丢）。
+    若模型把结论写进 reasoning_content 致 content 空，不再回退抢救草稿，
+    直接判失败返回 None（缺陷 B 修复：草稿透传会污染下游 SMILES 校验）。
 
     连接不稳定容错（20260818）：失败（网络异常 / 5xx / 空响应）自动重试，
     默认最多 max_attempts=3 次（初始 1 次 + 重试 2 次）；配置性失败

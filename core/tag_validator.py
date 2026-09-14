@@ -16,14 +16,13 @@
 宽松阈值避免误杀合法标记；渲染器内部的二次校验保留为兜底防线。
 """
 
-import contextlib
 import itertools
 import re
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Tuple
 
-from .tag_parser import RenderTag
+from .tag_parser import MECH_ARROW_RE as _MECH_ARROW_RE, REAL_ELEMENTS as _REAL_ELEMENTS, RenderTag
 
 # rdkit 可用性探测：缺失时跳过 SMILES / 原子数语义校验（渲染器内部会兜底）
 try:
@@ -102,17 +101,6 @@ LABEL_MAX_LEN = 24
 # reaction（反应式/多步序列 + 守恒 + 机理）、row（横向排列）、energy（势能面）
 COMPOSITE_LAYOUTS = ("reaction", "row", "energy")
 
-# 与 renderers/composite.py 相同的引用/端点提取正则
-# 端点支持两种：原子序号（0，含显式 H 原子）、键中点（0-1）。
-# 与 renderers/composite.py 的 _MECH_PT_RE 保持一致。
-# （20260821：XH 并入 STRUCT 后显式 H 是真实原子参与编号，a#k 语法废弃——
-# 端点只支持原子序号（含显式 H 原子）与 a-b 键中点。）
-_MECH_PT_RE = r"\d+(?:-\d+)?"
-_MECH_ARROW_RE = re.compile(
-    rf"^\s*([A-Za-z0-9_]+)\s*:\s*({_MECH_PT_RE})\s*(>>|>)\s*"
-    rf"([A-Za-z0-9_]+)\s*:\s*({_MECH_PT_RE})"
-    r"(?:\s*\+\s*([A-Za-z0-9_]+)\s*:\s*(\d+))?\s*$"
-)
 # 离去基团卤素（自动修复 LG 规则用）：F/Cl/Br/I 无 H 歧义
 _LG_HALOGENS = {9, 17, 35, 53}
 
@@ -123,23 +111,6 @@ _TAG_NAMES = {
     "ENERGY": "势能面",
     "HBOND": "氢键标注",
 }
-
-# SMILES 字段提取器：输入 RenderTag，返回需要校验的 SMILES 字符串列表。
-# 返回 None 表示该标记类型不携带 SMILES（如 ENERGY / PLUS）。
-_SMILES_FIELDS = {
-    "STRUCT": lambda a: [a[0]] if a and a[0] else [],
-    "HBOND": lambda a: [a[0]] if a and a[0] else [],
-}
-
-
-def _split_multi(seg: str) -> list:
-    """把多组分段拆为 SMILES 列表（过滤空串）。
-
-    契约分隔符为分号；LLM 偶发用逗号分隔或写出尾逗号（SMILES 不含逗号），
-    按 [;,] 拆分归一化。
-    """
-    return [s.strip() for s in re.split(r"[;,]", seg or "") if s.strip()]
-
 
 # 系数前缀：整数（2CCO）或 n/2（n 为奇数，1/2O2、3/2O2）。负系数仅用于
 # 箭头补足（2b，-H2O），不用于物种列表。
@@ -165,20 +136,6 @@ def _parse_coeff(token: str) -> tuple | None:
     return (num / 2.0, token.strip()[m.end():].strip())
 
 
-def _split_multi_coeff(seg: str) -> list:
-    """多组分段拆为 (coeff, smiles) 列表（过滤空串/非法系数）。
-
-    系数缺失视为 1；非法系数（0、1/3、2/3）的组分整体丢弃（校验层另行
-    报格式错误，此处只负责安全拆分）。
-    """
-    out = []
-    for tok in _split_multi(seg):
-        parsed = _parse_coeff(tok)
-        if parsed is not None and parsed[1]:
-            out.append(parsed)
-    return out
-
-
 @dataclass
 class ValidationResult:
     """单个标记的校验结果。"""
@@ -186,11 +143,6 @@ class ValidationResult:
     tag: RenderTag
     ok: bool
     reason: str = ""
-    warnings: list = None  # 软提示（非拦截）：通过但附提醒，如苯环写法不一致
-
-    def __post_init__(self):
-        if self.warnings is None:
-            self.warnings = []
 
 
 def tag_name(tag_type: str) -> str:
@@ -232,22 +184,6 @@ def _label_ok(label) -> Tuple[bool, str]:
 _CHEM_PREFIX = "化学校验："
 
 _FORMULA_TOKEN_RE = re.compile(r"([A-Z][a-z]?)(\d*)")
-
-# 可识别的真实元素（有机/常见无机，及常见无机/氧化还原元素 Mn、Cr、
-# Ba 等——KMnO4、H2SO4、MnSO4、K2SO4、CrCl3 等教科书化学式由此可解析）。
-# 刻意不含 Ar（氩）、Ac（锕）等——它们是 prompt 允许的通用基团缩写
-# （Ar=芳基、Ac=乙酰基，见主提示 STRUCT 条目），
-# 误判为化学式会把缩写 label 打回。
-_REAL_ELEMENTS = {
-    "H", "B", "C", "N", "O", "F", "Si", "P", "S", "Cl", "Br", "I",
-    "Li", "Na", "K", "Mg", "Ca", "Al", "Fe", "Cu", "Zn", "Ag", "Au",
-    "Hg", "Pb", "Sn", "Se", "Te",
-    "Be", "Sc", "Ti", "V", "Cr", "Mn", "Co", "Ni", "Ga", "Ge", "As",
-    "Rb", "Sr", "Y", "Zr", "Nb", "Mo", "Ru", "Rh", "Pd", "Cd", "In",
-    "Sb", "Cs", "Ba", "La", "Ce", "Hf", "Ta", "W", "Re", "Os", "Ir",
-    "Pt", "Tl", "Bi",
-}
-
 
 def _parse_plain_formula(text: str):
     """把纯化学式（CH3Cl / OH- / NO2+ / H3O+ / FeBr4- 等）解析为候选
@@ -518,105 +454,6 @@ def _balance_guidance(left_counts: dict, right_counts: dict,
                 "（或箭头条件写 H2O 补足）")
     return ("请核对物种 SMILES 是否多写/漏写原子；辅助试剂请写入箭头条件"
             "而非省略主物种")
-
-
-# ---------------------------------------------------------------------------
-# 箭头补足物种（REACTION 2b）：条件字段中可解析为具体化学式的 token，
-# 无符号前缀 = 反应物侧补足，"-" 前缀 = 产物侧补足。
-# 禁止 [O]/[H] 等占位符作为配平物质（prompt 约束；此处解析不到即忽略）。
-# ---------------------------------------------------------------------------
-
-# 条件 token 拆分：逗号分隔（含中文逗号）；系数（如 1/2、-1/2）由 _parse_coeff 处理
-_ARROW_TOKEN_SPLIT = re.compile(r"[,，]")
-
-
-def _arrow_supplement_tokens(condition: str) -> list:
-    """把条件字段拆为可参与补足的 (coeff, counts, charge, side) token 列表。
-
-    side: "L"（无符号前缀，补反应物侧）或 "R"（- 前缀，补产物侧）。
-    不可解析为具体化学式的 token（催化剂、Δ、温度等）被忽略——
-    只有"恰好能匹配差额"的 token 才会在 _balance_reason 2b 分支被选中，
-    催化剂不匹配差额 → 自然排除，不误判。
-    """
-    tokens = []
-    for raw in _ARROW_TOKEN_SPLIT.split(condition or ""):
-        tok = raw.strip()
-        if not tok:
-            continue
-        if tok in ("[O]", "[H]"):
-            continue  # 裸占位符禁止作为配平物质（[H+]/[OH-] 等具体离子放行）
-        neg = tok.startswith("-")
-        body = tok[1:].strip() if neg else tok
-        parsed = _parse_coeff(body)
-        if parsed is None:
-            continue
-        coeff, formula = parsed
-        cands = _parse_plain_formula(formula)
-        if not cands:
-            # 括号式具体物种（[H+]/[OH-] 等合法 SMILES 离子）回退 RDKit 计数
-            mc = _formula_or_smiles_counts(formula)
-            if mc is None:
-                continue
-            counts, charge = mc
-        else:
-            counts, charge = cands[0]  # 纯化学式候选唯一（无 SMILES 定夺需求）
-        if neg:
-            coeff = -coeff
-        tokens.append((coeff, counts, charge, "L" if not neg else "R"))
-    return tokens
-
-
-def _sum_supplements(tokens: list) -> tuple | None:
-    """箭头补足 token 加总（元素 + 电荷）；分数原子返回 None。"""
-    total_c, total_q = {}, 0
-    for coeff, counts, charge, side in tokens:
-        for sym, n in counts.items():
-            v = n * coeff
-            if v != int(v):
-                return None
-            total_c[sym] = total_c.get(sym, 0) + int(v)
-        total_q += charge * coeff
-    return total_c, total_q
-
-
-def _arrow_supplement_matches(left, right, condition: str,
-                              strict_h: bool, check_charge: bool) -> bool:
-    """2b：条件字段中的具体物质 token 子集恰好补足两侧差额。
-
-    无符号 token 补反应物侧、-X 补产物侧；补足成立 ⟺
-    Σ(L) - Σ(R) == 差额（元素，strict_h 时含 H；电荷按 check_charge 比对）。
-    禁止 [O]/[H] 占位符（_arrow_supplement_tokens 已过滤）。
-    """
-    tokens = _arrow_supplement_tokens(condition)
-    if not tokens:
-        return False
-    if not strict_h:
-        # H 差容忍：token 的 H 计数与两侧 H 一样不参与比对
-        tokens = [(c, {k: v for k, v in ct.items() if k != "H"}, q, s)
-                  for c, ct, q, s in tokens]
-    lc, rc = dict(left[0]), dict(right[0])
-    if not strict_h:
-        lc.pop("H", None)
-        rc.pop("H", None)
-    deficit_c = {k: rc.get(k, 0) - lc.get(k, 0)
-                 for k in set(lc) | set(rc)}
-    deficit_c = {k: v for k, v in deficit_c.items() if v}
-    deficit_q = (right[1] - left[1]) if check_charge else 0
-    from itertools import combinations
-    for r in range(1, len(tokens) + 1):
-        for comb in combinations(tokens, r):
-            sup = _sum_supplements(list(comb))
-            if sup is None:
-                continue
-            sc, sq = sup
-            if ((sq == deficit_q if check_charge else True)
-                    and all(sc.get(k, 0) == deficit_c.get(k, 0)
-                            for k in set(sc) | set(deficit_c))):
-                return True
-    return False
-
-
-
 
 
 # 箭头类型（大一统架构，20260819）：single=正向 → / reversible=可逆 ⇌ /
@@ -2205,43 +2042,6 @@ def _check_newman_bond(smi: str, bond_spec: str) -> Tuple[bool, str]:
     return True, ""
 
 
-def _validate_newman(args: list) -> Tuple[bool, str]:
-    """NEWMAN 校验：SMILES + 投影键（a-b，可缺省）+ 二面角（0~360）。
-
-    兼容旧格式 [NEWMAN:SMILES,角度]（第二参数为角度、无键参数）——
-    第二参数形如 `a-b` 时按新格式（第三参数为角度）解析。
-    """
-    if not args or not args[0]:
-        return False, "SMILES 为空"
-    smi = args[0].strip()
-    if not _smiles_ok(smi):
-        return False, f"无效 SMILES「{smi}」"
-    arg1 = (args[1] or "").strip() if len(args) > 1 else ""
-    arg2 = (args[2] or "").strip() if len(args) > 2 else ""
-    if _NEWMAN_BOND_RE.match(arg1):
-        # 新格式：[SMILES, a-b, 角度]
-        bond_spec, angle = arg1, arg2
-        if not angle:
-            return False, "缺少角度"
-        if _RDKIT_OK:
-            ok, reason = _check_newman_bond(smi, bond_spec)
-            if not ok:
-                return False, reason
-    else:
-        # 旧格式：[SMILES, 角度]
-        bond_spec, angle = "", arg1
-    if not angle:
-        return False, "缺少角度"
-    try:
-        a = float(angle)
-    except (TypeError, ValueError):
-        return False, f"角度「{angle}」不是数字"
-    if not 0 <= a <= 360:
-        return False, f"角度 {a:g} 超出 0~360"
-    return True, ""
-
-
-
 def _validate_energy(args: list) -> Tuple[bool, str]:
     if not args or not args[0]:
         return False, "点序列为空"
@@ -3115,120 +2915,7 @@ def validate_tag(tag: RenderTag) -> ValidationResult:
         ok, reason = _validate_struct_args(args, tag.attrs)
         return ValidationResult(tag, ok, reason)
 
-    # 通用带 SMILES 字段的标记：字段非空 + SMILES 合法
-    fields = _SMILES_FIELDS.get(ttype)
-    if fields is not None:
-        smi_list = fields(args)
-        if not smi_list:
-            return ValidationResult(tag, False, "缺少 SMILES 字段")
-        for smi in smi_list:
-            if not smi:
-                return ValidationResult(tag, False, "SMILES 为空")
-            if not _smiles_ok(smi):
-                return ValidationResult(tag, False, f"无效 SMILES「{smi}」")
-        return ValidationResult(tag, True)
     return ValidationResult(tag, True)  # 未知类型放行（注入时保留原文）
-
-
-def _ring_double_pairs(smi: str) -> tuple:
-    """苯环写法标识：环内双键的**相对位置**（与取代基无关）。
-
-    圆圈式（含芳香小写）→ ("circle",)；凯库勒大写 → 环内双键在
-    环中的相对索引（0~5，按环原子顺序），如 (1,3,5)。同一种凯库勒
-    写法在不同取代基（苯 vs 硝基苯）下相对位置一致，可正确比对。
-    """
-    import re
-    if not smi or not isinstance(smi, str):
-        return ()
-    if re.search(r"(?<![a-z])[cnops](?![a-z])", smi):
-        return ("circle",)
-    from rdkit import Chem
-    try:
-        m = Chem.MolFromSmiles(smi, sanitize=False)
-        if m is None:
-            return ()
-        m.UpdatePropertyCache(strict=False)
-        Chem.SanitizeMol(m, Chem.SanitizeFlags.SANITIZE_ALL
-                         ^ Chem.SanitizeFlags.SANITIZE_SETAROMATICITY
-                         ^ Chem.SanitizeFlags.SANITIZE_KEKULIZE)
-        ri = m.GetRingInfo()
-        if not ri.AtomRings():
-            return ()
-        ring = sorted(ri.AtomRings()[0])
-        # 环边：ring[k]-ring[(k+1)%6]，索引 k
-        idx = {a: k for k, a in enumerate(ring)}
-        double_idx = []
-        for b in m.GetBonds():
-            if b.GetBondTypeAsDouble() >= 1.5:
-                ia, ib = b.GetBeginAtomIdx(), b.GetEndAtomIdx()
-                if ia in idx and ib in idx:
-                    ka, kb = idx[ia], idx[ib]
-                    # 环边索引 = min 序号（相邻原子）
-                    if abs(ka - kb) == 1 or {ka, kb} == {0, len(ring) - 1}:
-                        double_idx.append(min(ka, kb) if abs(ka-kb) == 1
-                                          else max(ka, kb))
-    except Exception:
-        return ()
-    return tuple(sorted(double_idx)) if len(double_idx) == 3 else ()
-
-
-def _warn_benzene_consistency(tags: List[RenderTag],
-                              results: List[ValidationResult]) -> None:
-    """跨 COMPOSITE 软提示：机理中苯环写法不一致。
-
-    同一机理的多步 COMPOSITE 中，所有含苯环的分子（苯/硝基苯/含苯中间体）
-    应保持同一种苯环写法（圆圈式，或同一种凯库勒双键位置），否则
-    MECHARROW 引用键时 σ/π 判断混淆。按"环内双键对"分组：
-    圆圈式=("circle",)、凯库勒=双键对——组间不同即警告（挂到后出现的
-    result.warnings，不拦截）。
-    """
-    from rdkit import Chem
-
-    style_groups = {}  # style_key -> [result_idx, ...]
-    for ri, tag in enumerate(tags):
-        if tag.type != "COMPOSITE" or not tag.args or len(tag.args) < 2:
-            continue
-        for child in tag.args[1]:
-            if child.type != "STRUCT" or not child.args:
-                continue
-            smi = child.args[0].strip()
-            if not smi:
-                continue
-            # 化学计量系数前缀（2CCO 等）剥离后再探测；探测性解析统一
-            # 静音——化学式组件（KMnO4 等）解析失败是常态，无诊断价值
-            parsed_c = _parse_coeff(smi)
-            smi = parsed_c[1] if parsed_c else smi
-            try:
-                with mute_rdkit_warnings(include_error=True):
-                    m = Chem.MolFromSmiles(smi)
-                if m is None:
-                    continue
-            except Exception:
-                continue
-            pairs = _ring_double_pairs(smi)
-            if not pairs:
-                continue  # 非苯环分子（σ 络合物、NO₂⁺ 等）
-            style_groups.setdefault(pairs, []).append(ri)
-
-    if len(style_groups) <= 1:
-        return
-    # 多种苯环写法并存：给最后出现的 result 挂警告
-    last_ri = max(max(idxs) for idxs in style_groups.values())
-    if 0 <= last_ri < len(results) and results[last_ri].ok:
-        desc = [("圆圈式" if k == ("circle",) else f"凯库勒{k}") for k in style_groups]
-        results[last_ri].warnings.append(
-            f"苯环写法不一致：同一机理中用了 {desc} "
-            f"（应统一为一种写法，避免 MECHARROW 引用键时 σ/π 混淆）")
-
-
-# 最近一次 validate_tags 的软提示（跨 COMPOSITE 苯环写法一致性等）。
-# 校验通过但附提醒的警告——调用方（app.py 等）可读取并展示给用户。
-_LAST_WARNINGS: list = []
-
-
-def get_last_warnings() -> list:
-    """最近一次 validate_tags 产生的软提示列表（字符串）。"""
-    return list(_LAST_WARNINGS)
 
 
 def validate_tags(tags: List[RenderTag]) -> Tuple[List[RenderTag], List[ValidationResult]]:
@@ -3238,45 +2925,20 @@ def validate_tags(tags: List[RenderTag]) -> Tuple[List[RenderTag], List[Validati
         (valid_tags, invalid_results)：
         valid_tags — 通过校验的标记（顺序保持）；
         invalid_results — 校验失败的 ValidationResult 列表（含失败原因）。
-    软提示（不拦截，如苯环写法不一致）通过 get_last_warnings() 获取。
     """
-    global _LAST_WARNINGS
     valid, invalid = [], []
-    results = []
     for tag in tags:
         result = validate_tag(tag)
-        results.append(result)
         if result.ok:
             valid.append(tag)
         else:
             invalid.append(result)
-
-    # 软提示：跨 COMPOSITE 苯环写法一致性（挂到后出现的 result 上）
-    _LAST_WARNINGS = []
-    if _RDKIT_OK:
-        _warn_benzene_consistency(tags, results)
-        for r in results:
-            _LAST_WARNINGS.extend(r.warnings)
     return valid, invalid
 
 
 def _tag_name_for(tag: RenderTag) -> str:
-    """降级提示的标记中文名：分子旧标记归一化后 type=STRUCT，
-    优先用 attrs.orig_type（LEWIS→"Lewis 结构式"等）保留友好名。"""
-    return _TAG_NAMES.get(tag.attrs.get("orig_type") or tag.type, tag.type)
-
-
-def degrade_text(tag: RenderTag, reason: str) -> str:
-    """校验失败标记的降级提示文本。
-
-    用户可见版本：去掉内部校验类别前缀（化学校验：）与括号内详情/修正指导，
-    只留主因（如"方程式两侧原子不守恒"）——完整原因（含元素计数明细）仍
-    通过 P2 修正 prompt 与 metrics 详情供内部使用。
-    """
-    msg = reason
-    if msg.startswith(_CHEM_PREFIX):
-        msg = msg[len(_CHEM_PREFIX):].split("（", 1)[0].strip()
-    return f"（{_tag_name_for(tag)}图示无法渲染：{msg}，已省略）"
+    """降级提示的标记中文名（旧标记已在解析层归一化为 STRUCT+mode）。"""
+    return _TAG_NAMES.get(tag.type, tag.type)
 
 
 def degrade_text_friendly(tag: RenderTag) -> str:

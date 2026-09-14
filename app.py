@@ -8,7 +8,6 @@ process_question(user_question) 是核心编排函数，FastAPI 适配层
 import re
 
 from core import credentials
-from core.config import settings
 from core.llm_client import (MAX_TOKENS_FIX, MAX_TOKENS_MAIN,
                               MAX_TOKENS_REWRITE, MAX_TOKENS_TINY,
                               ask_llm)
@@ -58,7 +57,6 @@ def _is_role_label(label: str) -> bool:
     return bool(label) and (
         label in _ROLE_LABELS or any(s in label for s in _ROLE_SUBSTRINGS))
 
-# 难题预判关键词（未配置 UPGRADE_KEYWORDS 时的内置默认）：
 # SMILES 相关失败原因关键词（值得 PubChem 兜底的类型）
 _SMILES_FAILURE_KEYWORDS = (
     "无效 SMILES", "价态", "化学校验", "显式 H", "XH",
@@ -693,7 +691,6 @@ def _generate_with_corrections(user_question: str, model=None,
                                diagnostics: list = None,
                                stage: str = "main",
                                responses: list = None,
-                               seed_text: str = None,
                                thinking: str = None, effort: str = None,
                                max_tokens: int = None) -> str:
     """单模型生成 + P2 修正闭环；末尾统一追加"档位被静默改写"的提示（§4.5.5）。"""
@@ -701,7 +698,7 @@ def _generate_with_corrections(user_question: str, model=None,
         user_question, model=model, max_corrections=max_corrections,
         history=history, progress_callback=progress_callback,
         correction_callback=correction_callback, diagnostics=diagnostics,
-        stage=stage, responses=responses, seed_text=seed_text,
+        stage=stage, responses=responses,
         thinking=thinking, effort=effort, max_tokens=max_tokens)
     if notice and text:
         # 诚实上报放在最后：用户看到完整回答后，知道实际以什么档位跑的
@@ -736,7 +733,6 @@ def _generate_inner(user_question: str, model=None,
                     diagnostics: list = None,
                     stage: str = "main",
                     responses: list = None,
-                    seed_text: str = None,
                     thinking: str = None, effort: str = None,
                     max_tokens: int = None) -> tuple:
     """生成 + 修正闭环主体；返回 (文本, 待追加的档位提示)。
@@ -748,59 +744,55 @@ def _generate_inner(user_question: str, model=None,
     max_corrections=0 时不做修正（校验失败即返回原始标记文本）。
     responses: 可选 list，最终采用的原始 LLM 输出（标记文本）append 到此
     （渲染前版本，供质量回溯）。
-    seed_text: 非 None 时跳过 LLM 主生成，直接以该文本进入校验/修正循环。
     """
     notice = ""
-    if seed_text is not None:
-        full_response = seed_text
-    else:
-        # 1. 调用 LLM（自动加载 system prompt，含标记协议）
-        #    可选增强：用户问题含明确化学名称（"画 X 的结构/分子式"）时，
-        #    PubChem 反查 SMILES 作为参考上下文注入，帮助 LLM 输出正确结构
-        llm_input = user_question
-        try:
-            from utils.name_resolver import name_to_smiles
-            import re as _re
-            # 提取化学名称（中文/英文/混合），排除"反应/机理/方程"类问题
-            m = _re.search(
-                r"(?:画出|画|绘制)?\s*"
-                r"([\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-z0-9\- ]{0,29}?)\s*(?:的)?"
-                r"(?:结构(?:式)?|分子式|怎么写|是什么结构)", user_question)
-            if m:
-                chem_name = m.group(1).strip()
-                for _p in ("画出", "画 ", "绘制", "画"):
-                    if chem_name.startswith(_p):
-                        chem_name = chem_name[len(_p):].strip()
-                        break
-                if chem_name and not _re.search(r"反应|机理|方程", user_question):
-                    # 8s 硬超时：PubChem 慢/被限流时跳过增强（不阻塞主流程，
-                    # 否则清小搭端表现为"正在思考"长时间无进展）
-                    pub_smiles = _run_with_timeout(
-                        lambda: name_to_smiles(chem_name), 8.0, None)
-                    if pub_smiles:
-                        llm_input = (
-                            f"[参考] 化合物「{chem_name}」的 PubChem 标准 SMILES 为"
-                            f" `{pub_smiles}`（仅作结构参考，请用 [STRUCT:...] 输出）。\n"
-                            f"用户问题：{user_question}"
-                        )
-                        print(f"[process_question] PubChem 名称→SMILES: "
-                              f"{chem_name} -> {pub_smiles}")
-        except Exception as e:
-            print(f"[process_question] PubChem 增强跳过: {e}")
+    # 1. 调用 LLM（自动加载 system prompt，含标记协议）
+    #    可选增强：用户问题含明确化学名称（"画 X 的结构/分子式"）时，
+    #    PubChem 反查 SMILES 作为参考上下文注入，帮助 LLM 输出正确结构
+    llm_input = user_question
+    try:
+        from utils.name_resolver import name_to_smiles
+        import re as _re
+        # 提取化学名称（中文/英文/混合），排除"反应/机理/方程"类问题
+        m = _re.search(
+            r"(?:画出|画|绘制)?\s*"
+            r"([\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-z0-9\- ]{0,29}?)\s*(?:的)?"
+            r"(?:结构(?:式)?|分子式|怎么写|是什么结构)", user_question)
+        if m:
+            chem_name = m.group(1).strip()
+            for _p in ("画出", "画 ", "绘制", "画"):
+                if chem_name.startswith(_p):
+                    chem_name = chem_name[len(_p):].strip()
+                    break
+            if chem_name and not _re.search(r"反应|机理|方程", user_question):
+                # 8s 硬超时：PubChem 慢/被限流时跳过增强（不阻塞主流程，
+                # 否则清小搭端表现为"正在思考"长时间无进展）
+                pub_smiles = _run_with_timeout(
+                    lambda: name_to_smiles(chem_name), 8.0, None)
+                if pub_smiles:
+                    llm_input = (
+                        f"[参考] 化合物「{chem_name}」的 PubChem 标准 SMILES 为"
+                        f" `{pub_smiles}`（仅作结构参考，请用 [STRUCT:...] 输出）。\n"
+                        f"用户问题：{user_question}"
+                    )
+                    print(f"[process_question] PubChem 名称→SMILES: "
+                          f"{chem_name} -> {pub_smiles}")
+    except Exception as e:
+        print(f"[process_question] PubChem 增强跳过: {e}")
 
-        res = ask_llm(llm_input, history=history,
-                      on_piece=progress_callback, model=model,
-                      thinking=thinking, effort=effort,
-                      # 主生成默认上限用调用点常量（§4.2.1）；
-                      # 网页用户可在设置里覆盖（max_tokens 参数）
-                      max_tokens=(max_tokens or MAX_TOKENS_MAIN),
-                      return_result=True)
-        if not res:
-            return "（LLM 调用失败，请检查 .env 配置与网络）", notice
-        # `return_result=True` 时是 LLMResult；纯文本替身也兼容
-        notice = (_note_effort_notice(getattr(res, "notice", ""), diagnostics)
-                  if getattr(res, "downgraded", False) else notice)
-        full_response = (res.text if hasattr(res, "text") else res) or ""
+    res = ask_llm(llm_input, history=history,
+                  on_piece=progress_callback, model=model,
+                  thinking=thinking, effort=effort,
+                  # 主生成默认上限用调用点常量（§4.2.1）；
+                  # 网页用户可在设置里覆盖（max_tokens 参数）
+                  max_tokens=(max_tokens or MAX_TOKENS_MAIN),
+                  return_result=True)
+    if not res:
+        return "（LLM 调用失败，请检查 .env 配置与网络）", notice
+    # `return_result=True` 时是 LLMResult；纯文本替身也兼容
+    notice = (_note_effort_notice(getattr(res, "notice", ""), diagnostics)
+              if getattr(res, "downgraded", False) else notice)
+    full_response = (res.text if hasattr(res, "text") else res) or ""
 
     prev_fps = None   # 上一轮失败 fingerprint（P3 逃生比对）
     surgical_tried = set()  # 已尝试过手术式箭头重写的标记原文（每标记只试一次）
@@ -1006,8 +998,8 @@ def _generate_inner(user_question: str, model=None,
             responses.append(full_response)  # 最终采用的原始标记文本
         result_text = inject_tags_into_text(full_response, tags, rendered)
         # G2 内容完整性对账（20260906，Q10 病例）：修正/重写后标记总数少于
-        # 首跑输出 = 内容被删（"删内容保合法"）——按未解决记账（路由升级判定
-        # 随之视为失败），并在回答末尾显式告知，不允许无声通过
+        # 首跑输出 = 内容被删（"删内容保合法"）——按未解决记账，并在回答
+        # 末尾显式告知，不允许无声通过
         if baseline_counts:
             missing = []
             final_counts = _tag_inventory(full_response)

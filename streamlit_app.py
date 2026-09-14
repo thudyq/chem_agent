@@ -45,15 +45,8 @@ from pathlib import Path
 import streamlit as st
 
 from app import process_question
+from core.attachments import _CODE_RE
 from utils.latex_compile import compile_tikz_to_png, detect_backends
-
-# 代码段：tikzpicture 整块 | schemestart 反应式 | 单个 \chemfig{...}
-_CODE_RE = re.compile(
-    r"\\begin\{tikzpicture\}.*?\\end\{tikzpicture\}"
-    r"|\\schemestart.*?\\schemestop"
-    r"|\\chemfig\{(?:[^{}]|\{[^{}]*\})*\}",
-    re.DOTALL,
-)
 
 # 多轮对话：传给 LLM 的最大历史消息数（最近 N 条）
 _MAX_HISTORY = 10

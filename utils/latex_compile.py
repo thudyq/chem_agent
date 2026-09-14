@@ -340,7 +340,7 @@ def _find_pdftoppm() -> Optional[str]:
     return None
 
 
-def _pdf_to_png_pdftoppm(pdf_path: str, dpi: int, engine_is_exe: bool) -> Optional[bytes]:
+def _pdf_to_png_pdftoppm(pdf_path: str, dpi: int) -> Optional[bytes]:
     """用 pdftoppm（原生或 .exe）转 PNG，返回首个 PNG 字节。"""
     conv = _find_pdftoppm()
     if not conv:
@@ -522,7 +522,7 @@ def _compile_doc_to_png(latex_doc: str, dpi: int) -> Optional[bytes]:
         png = _pdf_to_png_pymupdf(pdf_path, dpi)
         if png:
             return png
-        return _pdf_to_png_pdftoppm(pdf_path, dpi, _is_windows_exe(engine))
+        return _pdf_to_png_pdftoppm(pdf_path, dpi)
 
 
 def compile_tikz_to_png(code: str, title: str = "", dpi: int = 300) -> Optional[bytes]:

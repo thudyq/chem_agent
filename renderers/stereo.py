@@ -8,8 +8,8 @@ RDKit 解析含 @/@@ 的 SMILES → PrepareMolForDrawing（含坐标+楔形方�
 
 import math
 
-from .mol_primitives import _label_flip_for, atom_label, atom_pos, charge_tikz, \
-    label_bond_margin, label_node_pos, mol_visual_bbox, prepare_mol, wrap_format_text
+from .mol_primitives import _label_flip_for, atom_label, atom_pos, bond_type_order, \
+    charge_tikz, label_bond_margin, label_node_pos, mol_visual_bbox, prepare_mol, wrap_format_text
 
 
 def stereo_scope_lines(mol) -> list:
@@ -26,8 +26,7 @@ def stereo_scope_lines(mol) -> list:
         xi, yi = atom_pos(mol, i)
         xj, yj = atom_pos(mol, j)
 
-        order = b.GetBondTypeAsDouble()
-        order = 3 if order >= 2.5 else (2 if order >= 1.5 else 1)
+        order = bond_type_order(b)
         dx, dy = xj - xi, yj - yi
         L = math.hypot(dx, dy) or 1.0
         ux, uy = dx / L, dy / L

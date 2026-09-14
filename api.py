@@ -358,26 +358,7 @@ def _log_diagnostics(diag: list) -> None:
               f"{d.get('raw', '')[:60]} → {d.get('reason', '')[:120]}")
 
 
-_TIKZ_RE = re.compile(r"\\begin\{tikzpicture\}.*?\\end\{tikzpicture\}",
-                      re.DOTALL)
-_CHEMFIG_RE = re.compile(r"\\chemfig\{[^}]*\}")
 _MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)\s]*\)")
-
-
-def _strip_render_code(text: str) -> str:
-    """剥离 assistant 历史消息中的渲染产物（TikZ/chemfig/图片 markdown）。
-
-    多轮对话时，assistant 历史消息是我们返回的**渲染后**文本（含 TikZ 代码）。
-    这些代码不能回传给 LLM（会污染上下文、浪费 token），需剥离。
-    20260828：行内图片 markdown（![化学图示-N](fileUrl)）一并剥离——保留
-    会让 LLM 在下轮模仿手写图片链接（编造不存在的 fileUrl，前端 404 空白，
-    que_test_retry 实测：同一对话第二轮图片全丢、URL 为递增规律假 uuid）。
-    """
-    text = _TIKZ_RE.sub("", text)
-    text = _CHEMFIG_RE.sub("", text)
-    text = _MD_IMAGE_RE.sub("[化学图示]", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
 
 
 def _strip_md_images(text: str) -> str:
@@ -548,6 +529,82 @@ def _download_text(url: str, limit: int = 4000) -> str | None:
     return resp.content.decode("utf-8", errors="replace")[:limit]
 
 
+def _image_question_parts(images: list, fetch_image, msgs: dict,
+                          cleanup: bool = False) -> list:
+    """图片 → 视觉识别 → 问题片段列表（/v1 与网页 BYOK 共用的骨架）。
+
+    `fetch_image(url, i) -> 本地路径 | None` 由各路径自备取图实现（/v1：下载到
+    系统 Temp；网页：落会话 uploads 目录，含 SSRF/魔数/大小闸门）。`msgs` 为
+    各路径自己的提示文案束（带 `_log` 后缀的键是可选日志行，{url} 已截断
+    80 字符；其余键支持 {i} 占位）。`cleanup=True` 时识别完即删原图（网页：
+    不留用户数据）。视觉模型不可用（含回退主模型也不可用）时只回 no_vision
+    一段。所有失败都给出明确原因，不静默丢弃。
+    """
+    # 视觉可用性经凭证层判定：`.env` 没配 VISION_* 时**回退用主模型**
+    # （原生多模态模型自带视觉，见 Model-Config-Refactor §4.9）。
+    if not credentials.vision_config().is_configured:
+        if msgs.get("no_vision_log"):
+            print(msgs["no_vision_log"])
+        return [msgs["no_vision"]]
+    from utils.ocr_utils import describe_image
+    parts = []
+    for i, url in enumerate(images, 1):
+        path = fetch_image(url, i)
+        if not path:
+            if msgs.get("fetch_fail_log"):
+                print(msgs["fetch_fail_log"].format(url=url[:80]))
+            parts.append(msgs["fetch_fail"].format(i=i))
+            continue
+        desc = describe_image(path)
+        if cleanup:
+            try:
+                Path(path).unlink(missing_ok=True)   # 识别完即删原图
+            except OSError:
+                pass
+        if desc and desc.get("content"):
+            # 图片描述与用户文字合并为同一问题（多模态两段式，B 方案）
+            parts.append(f"（用户上传的图片 {i} 的内容（{desc['type']}）："
+                         f"{desc['content']}）")
+            # B3（20260826）：图像为视觉模型自动识别，提示用户识别可能有误
+            if desc.get("smiles_ok") is False:
+                parts.append(msgs["smiles_bad"].format(i=i))
+            # 20260828：识别降级（未产出结构化两行，仅保留尽力提取的片段）
+            elif desc.get("downgraded"):
+                parts.append(msgs["downgraded"].format(i=i))
+            else:
+                parts.append(msgs["generic"].format(i=i))
+        else:
+            # 识别失败：空内容 + 用户文字照常传给主 LLM，并明确告知
+            if msgs.get("recog_fail_log"):
+                print(msgs["recog_fail_log"].format(url=url[:80]))
+            parts.append(msgs["recog_fail"].format(i=i))
+    return parts
+
+
+# /v1 路径的图片提示文案束（`_image_question_parts` 的 msgs 参数）。
+_API_IMAGE_MSGS = {
+    "no_vision_log": "[api] 收到图片，但视觉模型与主模型凭证都不可用",
+    "no_vision": "（用户上传了图片，但服务未配置可用的视觉模型（VISION_MODEL 等，"
+                 "或可识图的主模型），无法识别图片内容，请提示用户先描述结构"
+                 "或联系管理员配置视觉模型）",
+    "fetch_fail_log": "[api] 图片下载/解码失败: {url}",
+    "fetch_fail": "（一张图片下载失败，已忽略）",
+    "smiles_bad": "（提示：图片 {i} 识别出的结构式 SMILES 经校验无法解析，"
+                  "识别可能有误；请在回答中提醒用户核对图片/结构，"
+                  "必要时请用户用文字描述该结构）",
+    "downgraded": "（提示：图片 {i} 识别受限，以上为尽力提取的片段，"
+                  "可能不完整或有误；请在回答中提醒用户以图片为准，"
+                  "必要时请用户用文字补充说明）",
+    "generic": "（提示：图片 {i} 为视觉模型自动识别，识别可能有误；"
+               "请在回答中提醒用户以图片为准、核对识别内容，"
+               "如有出入可请用户用文字补充说明）",
+    "recog_fail_log": "[api] 视觉模型未能理解图片: {url}",
+    "recog_fail": "（用户上传的图片 {i} 识别失败：视觉模型多次尝试仍"
+                  "无法理解图片内容，图片内容不可用。请基于文字内容"
+                  "作答，并提示用户重新上传图片或改用文字描述）",
+}
+
+
 def _build_question(text: str, images: list, audios: list, files: list,
                     tmp_dir: str) -> str:
     """文本 + 各模态附件处理结果拼成最终问题。
@@ -559,58 +616,9 @@ def _build_question(text: str, images: list, audios: list, files: list,
     """
     parts = [text] if text else []
     if images:
-        # 视觉可用性经凭证层判定：`.env` 没配 VISION_* 时**回退用主模型**
-        # （原生多模态模型自带视觉，见 Model-Config-Refactor §4.9）。
-        if not credentials.vision_config().is_configured:
-            print("[api] 收到图片，但视觉模型与主模型凭证都不可用")
-            parts.append(
-                "（用户上传了图片，但服务未配置可用的视觉模型（VISION_MODEL 等，"
-                "或可识图的主模型），无法识别图片内容，请提示用户先描述结构"
-                "或联系管理员配置视觉模型）"
-            )
-        else:
-            from utils.ocr_utils import describe_image
-            for i, url in enumerate(images, 1):
-                path = _fetch_image_to_temp(url, tmp_dir)
-                if not path:
-                    print(f"[api] 图片下载/解码失败: {url[:80]}")
-                    parts.append("（一张图片下载失败，已忽略）")
-                    continue
-                desc = describe_image(path)
-                if desc and desc.get("content"):
-                    # 图片描述与用户文字合并为同一问题（多模态两段式，B 方案）
-                    parts.append(
-                        f"（用户上传的图片 {i} 的内容（{desc['type']}）："
-                        f"{desc['content']}）"
-                    )
-                    # B3（20260826）：图像为视觉模型自动识别，提示用户识别可能有误
-                    if desc.get("smiles_ok") is False:
-                        parts.append(
-                            f"（提示：图片 {i} 识别出的结构式 SMILES 经校验"
-                            "无法解析，识别可能有误；请在回答中提醒用户核对"
-                            "图片/结构，必要时请用户用文字描述该结构）")
-                    # 20260828：识别降级（未产出结构化两行，仅保留尽力提取的
-                    # 片段）→ 明确提示"识别受限、仅供参考"，避免下游把不完整
-                    # 片段当完整描述
-                    elif desc.get("downgraded"):
-                        parts.append(
-                            f"（提示：图片 {i} 识别受限，以上为尽力提取的片段，"
-                            "可能不完整或有误；请在回答中提醒用户以图片为准，"
-                            "必要时请用户用文字补充说明）")
-                    else:
-                        parts.append(
-                            f"（提示：图片 {i} 为视觉模型自动识别，识别可能"
-                            "有误；请在回答中提醒用户以图片为准、核对识别内容，"
-                            "如有出入可请用户用文字补充说明）")
-                else:
-                    print(f"[api] 视觉模型未能理解图片: {url[:80]}")
-                    # 识别失败：空内容 + 用户文字照常传给主 LLM，并明确
-                    # 告知"图片识别失败"（视觉重试已耗尽，仍继续问答流程）
-                    parts.append(
-                        f"（用户上传的图片 {i} 识别失败：视觉模型多次尝试仍"
-                        "无法理解图片内容，图片内容不可用。请基于文字内容"
-                        "作答，并提示用户重新上传图片或改用文字描述）"
-                    )
+        parts.extend(_image_question_parts(
+            images, lambda url, _i: _fetch_image_to_temp(url, tmp_dir),
+            _API_IMAGE_MSGS))
     for url, fmt in audios:
         print(f"[api] 收到音频输入（{fmt or '未知格式'}），暂不支持: {url[:80]}")
         parts.append("（用户上传了一段音频，本服务暂不支持音频输入，请改用文字描述）")
@@ -642,12 +650,19 @@ def _public_base(request: Request) -> str:
     return str(request.base_url).rstrip("/")
 
 
-def _sse_frame(cid: str, created: int, delta: dict,
+def _sse_frame(cid: str | None, created: int | None, delta: dict,
                finish: str | None = None, usage: dict | None = None,
                error: dict | None = None, x_soda: dict | None = None) -> str:
+    """SSE data 帧。cid/created 传 None 时省略对应顶层键（网页 BYOK 路径的
+    帧不带 id/created，见 core/web_api.py）。"""
     choice = {"index": 0, "delta": delta, "finish_reason": finish}
-    chunk = {"id": cid, "object": "chat.completion.chunk",
-             "created": created, "choices": [choice]}
+    chunk = {}
+    if cid is not None:
+        chunk["id"] = cid
+    chunk["object"] = "chat.completion.chunk"
+    if created is not None:
+        chunk["created"] = created
+    chunk["choices"] = [choice]
     if usage is not None:
         chunk["usage"] = usage
     if error is not None:
@@ -657,13 +672,117 @@ def _sse_frame(cid: str, created: int, delta: dict,
     return f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
 
 
-# P2 修正触发标记：correction_callback 经 progress_q 传给主循环的哨兵（非文本片段）
-_CORRECTION_MARK = object()
-
 # 思考期心跳间隔（秒）：SSE 长时间无数据帧时 Nginx 等网关可能断开
 # （proxy_read_timeout 默认 60s），需要保活帧；但清小搭等前端对 reasoning
 # 帧是逐条追加显示，心跳太频繁会刷屏——10s 一次是保活与观感的折中。
 _HEARTBEAT_INTERVAL = 10.0
+
+
+def _sse_stream_core(frame, work, error_frame, stop_frame, unpack,
+                     exc_first: bool,
+                     heartbeat: float = _HEARTBEAT_INTERVAL, chunk: int = 20):
+    """/v1 与网页 BYOK 共用的 SSE 流骨架：role/思考帧 → work 线程跑管线 →
+    保活轮询（修正提示 + 低频心跳）→ content 增量 → stop 帧 → [DONE]。
+
+    progress_q 只消费不转发：草稿增量不作为 reasoning 帧（清小搭等前端对
+    reasoning 帧逐条追加显示，草稿帧会造成"正在生成… 草稿"无限叠加错乱），
+    但**必须**持续消费（否则队列满会阻塞 process_question 的 on_piece 回调）。
+    各路径的差异全部以钩子注入：
+
+    * `frame(delta)`：data 帧构造（/v1 带 id/created；网页只有 object/choices）；
+    * `work(answer_q, progress_q, correction_mark, safe_put)`：管线执行与结果
+      整备（/v1：编译附件 + 剥离手写图片链接；网页：凭证/按 IP 闸门在 work 内
+      落地 + 会话附件 + LaTeX 源码）。完成时把 payload 放进 answer_q，异常原样
+      放入。correction_mark 是 P2 修正触发的哨兵（correction_callback 经
+      progress_q 传给主循环的非文本片段）；safe_put 在队列满时丢弃（修正提示是
+      装饰性的，不阻塞管线）；
+    * `error_frame(exc)`：异常收尾帧（/v1 带 usage + 原始 message；网页用
+      _friendly_error 翻译、不泄漏服务端细节）；
+    * `stop_frame(text, extra)`：正常 stop 帧（/v1：空 delta + usage；网页：
+      delta 带 session_id 与 latex 源码）；
+    * `unpack(payload) -> (text, extra)`：从 work 的 payload 拆出展示文本与
+      附带数据（/v1 无附带；网页附带 latex 源码列表）；
+    * `exc_first`：异常判定在收尾排空**之前**（/v1）还是之后（网页）——两侧
+      既有帧序不同，各保其序。
+
+    ★ 工作线程**不自动继承** contextvars（新线程拿到的是创建时的空 context），
+    必须显式 copy_context().run() 把请求上下文带进去。BYOK 凭证则必须由
+    `work()` 在自己内部 set：本生成器被 Starlette 逐块迭代时每次 next() 都从
+    请求上下文重新拷贝一份 Context，迭代处 set 的值传不到后续迭代
+    （20260830 实测病例，详见 core/web_api.py `_sse_stream` 的说明）。
+    """
+    yield frame({"role": "assistant"})
+    yield frame({"reasoning": "正在思考并绘制化学图示…"})
+
+    answer_q = queue.Queue(maxsize=1)    # process_question 完成（文本就绪）
+    progress_q = queue.Queue(maxsize=200)
+    correction_mark = object()
+
+    def _safe_put(item) -> None:
+        try:
+            progress_q.put_nowait(item)
+        except queue.Full:
+            pass
+
+    import contextvars as _contextvars
+    _ctx = _contextvars.copy_context()
+    threading.Thread(
+        target=lambda: _ctx.run(
+            lambda: work(answer_q, progress_q, correction_mark, _safe_put)),
+        daemon=True).start()
+    last_flush = time.time()
+    while True:
+        try:
+            payload = answer_q.get_nowait()
+            break
+        except queue.Empty:
+            pass
+        correction = False
+        while True:
+            try:
+                p = progress_q.get_nowait()
+            except queue.Empty:
+                break
+            if p is correction_mark:
+                correction = True
+        if correction:
+            yield frame({"reasoning": "正在修正回答…"})
+            last_flush = time.time()
+        elif time.time() - last_flush >= heartbeat:
+            yield frame({"reasoning": "正在思考并绘制化学图示…"})
+            last_flush = time.time()
+        else:
+            time.sleep(0.2)
+
+    if exc_first and isinstance(payload, Exception):
+        yield error_frame(payload)
+        yield "data: [DONE]\n\n"
+        return
+
+    # 收尾排空：answer 就绪时队列里可能仍有未消费的修正标记（快速回答时
+    # 主循环来不及取出）——只保留修正提示；草稿片段一律丢弃（不再转发）。
+    correction = False
+    while True:
+        try:
+            p = progress_q.get_nowait()
+        except queue.Empty:
+            break
+        if p is correction_mark:
+            correction = True
+    if correction:
+        yield frame({"reasoning": "正在修正回答…"})
+
+    if not exc_first and isinstance(payload, Exception):
+        yield error_frame(payload)
+        yield "data: [DONE]\n\n"
+        return
+
+    text, extra = unpack(payload)
+    text = text or "（未能生成回答）"
+    for i in range(0, len(text), chunk):
+        yield frame({"content": text[i:i + chunk]})
+    yield stop_frame(text, extra)
+    yield "data: [DONE]\n\n"
 
 
 def _sse_stream(question: str, history: list, cid: str, created: int,
@@ -677,28 +796,16 @@ def _sse_stream(question: str, history: list, cid: str, created: int,
     work 线程与 content 发送并行、完成后挂 stop 帧——用户先读到完整文字
     回答，图示随后到达（与本地界面"文本先行、图片回填"同构）。
     """
-    yield _sse_frame(cid, created, {"role": "assistant"})
-    yield _sse_frame(cid, created, {"reasoning": "正在思考并绘制化学图示…"})
-
-    answer_q = queue.Queue(maxsize=1)    # process_question 完成（文本就绪）
     result_q = queue.Queue(maxsize=1)    # attachments 编译完成
-    progress_q = queue.Queue(maxsize=200)
 
-    def _safe_put(item) -> None:
-        # 修正标记是装饰性提示，队列满时丢弃即可，不阻塞管线
-        try:
-            progress_q.put_nowait(item)
-        except queue.Full:
-            pass
-
-    def work():
+    def work(answer_q, progress_q, correction_mark, safe_put):
         diag = []
         responses = []
         try:
             answer = process_question(
                 question, history=history,
                 progress_callback=progress_q.put,
-                correction_callback=lambda: _safe_put(_CORRECTION_MARK),
+                correction_callback=lambda: safe_put(correction_mark),
                 diagnostics=diag, responses=responses)
         except Exception as e:  # 管线异常兜底为 stop 帧 + error 字段
             answer_q.put(e)
@@ -724,72 +831,21 @@ def _sse_stream(question: str, history: list, cid: str, created: int,
         answer_q.put(display)
         result_q.put(attachments)
 
-    # 把当前请求的 contextvars 显式带进工作线程（新线程**不自动继承**）。
-    # `/v1` 走的是服务器 `.env` 配置、本就不设用户凭证，这里只是保持
-    # "请求上下文完整传递"的约定，避免将来在此挂载 BYOK 时静默丢失配置。
-    # ★ 注意：若将来 `/v1` 要支持 BYOK，凭证必须在 `work()` **内部** set，
-    # 不能依赖生成器迭代处 set —— Starlette 逐块迭代时每次 `next()` 都从
-    # 请求上下文重新拷贝一份 Context，迭代处 set 的值传不到后续迭代。
-    import contextvars as _contextvars
-    _ctx = _contextvars.copy_context()
-    threading.Thread(target=lambda: _ctx.run(work), daemon=True).start()
-    last_flush = time.time()
-    while True:
-        try:
-            answer = answer_q.get_nowait()
-            break
-        except queue.Empty:
-            pass
-        # 消费 progress_q（防止队列满阻塞 process_question 的 on_piece 回调）；
-        # 不把草稿增量作为 reasoning 帧转发（清小搭对 reasoning 帧逐条追加，
-        # 草稿帧会无限叠加错乱），只发低频状态帧避免长时间只有 "..."。
-        correction = False
-        while True:
-            try:
-                p = progress_q.get_nowait()
-            except queue.Empty:
-                break
-            if p is _CORRECTION_MARK:
-                correction = True
-        if correction:
-            yield _sse_frame(cid, created, {"reasoning": "正在修正回答…"})
-            last_flush = time.time()
-        elif time.time() - last_flush >= _HEARTBEAT_INTERVAL:
-            yield _sse_frame(cid, created, {"reasoning": "正在思考并绘制化学图示…"})
-            last_flush = time.time()
-        else:
-            time.sleep(0.2)
-
-    if isinstance(answer, Exception):
-        yield _sse_frame(cid, created, {}, finish="stop",
-                         usage=_usage(question, ""),
-                         error={"type": "upstream_error", "message": str(answer)})
-        yield "data: [DONE]\n\n"
-        return
-
-    # 收尾排空：answer 就绪时队列里可能仍有未消费的修正标记（快速回答时
-    # 主循环来不及取出）——只保留修正提示；草稿片段一律丢弃（不再转发）。
-    correction = False
-    while True:
-        try:
-            p = progress_q.get_nowait()
-        except queue.Empty:
-            break
-        if p is _CORRECTION_MARK:
-            correction = True
-    if correction:
-        yield _sse_frame(cid, created, {"reasoning": "正在修正回答…"})
-
-    answer = answer or "（未能生成回答）"   # answer_q 已是 display（含行内图片）
-    step = 20
-    for i in range(0, len(answer), step):
-        yield _sse_frame(cid, created, {"content": answer[i:i + step]})
-
-    # 图已通过行内 markdown 引用（content 里的 ![化学图示-N](fileUrl)）展示，
-    # 且内容帧在编译完成后才发出（文件已落盘），无需等待/挂 x_soda。
-    yield _sse_frame(cid, created, {}, finish="stop",
-                     usage=_usage(question, answer))
-    yield "data: [DONE]\n\n"
+    # `/v1` 走服务器 `.env` 配置、本就不设用户凭证；工作线程的 context 拷贝
+    # 与保活/收尾帧序都由 `_sse_stream_core` 保证（与网页 BYOK 同一骨架）。
+    yield from _sse_stream_core(
+        lambda delta: _sse_frame(cid, created, delta),
+        work,
+        error_frame=lambda e: _sse_frame(
+            cid, created, {}, finish="stop", usage=_usage(question, ""),
+            error={"type": "upstream_error", "message": str(e)}),
+        # 图已通过行内 markdown 引用（content 里的 ![化学图示-N](fileUrl)）
+        # 展示，且内容帧在编译完成后才发出（文件已落盘），无需等待/挂 x_soda。
+        stop_frame=lambda text, _extra: _sse_frame(
+            cid, created, {}, finish="stop", usage=_usage(question, text)),
+        unpack=lambda payload: (payload, None),
+        exc_first=True,
+    )
 
 
 @app.get("/")

@@ -558,17 +558,6 @@ _FAKE_MD_IMAGE = ("![化学图示-1](https://60.205.181.60/files/"
                   "2d4b8e9f0a5e4d2f9a1b3c6d7e8f9a0b.png)")
 
 
-def test_strip_render_code_removes_md_images():
-    """历史侧：assistant 历史中的行内图片 markdown 被剥离为 [化学图示]
-    占位——不剥离则 LLM 下轮模仿手写假链接（文件不存在，前端 404）。"""
-    text = f"决速步。\n\n{_FAKE_MD_IMAGE}\n\n碳正离子是平面的。"
-    out = api._strip_render_code(text)
-    assert "files/" not in out and "2d4b8e9f" not in out
-    assert "![" not in out                       # 不再有可模仿的图片语法
-    assert "[化学图示]" in out                    # 保留叙述占位
-    assert "碳正离子是平面的" in out
-
-
 def test_extract_history_strips_md_images():
     """_extract_history：assistant 历史以去锚定状态摘要回喂（20260830
     主题摘要方案）——图片 markdown/标记/TikZ 都不可能进入历史；
