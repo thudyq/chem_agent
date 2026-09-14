@@ -108,7 +108,7 @@ def test_multi_arrows_sequence():
 
 
 def test_resarrow_connector():
-    """共振箭头 ↔ 连接符：占位并记录中心 x（R-6）。"""
+    """共振箭头 ↔ 连接符：占位并记录中心 x。"""
     items = [("mol", "a", _mol("C1=CC=CC=C1")),
              ("resarrow",),
              ("mol", "b", _mol("C1C=CC=CC=1"))]

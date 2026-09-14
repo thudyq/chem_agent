@@ -14,8 +14,8 @@ COMPOSITE 容器内允许的子标记：
     [PLUS]                             加号连接符
     [ARROW:type=类型,sup=附件,条件]     主反应箭头（single/reversible/resonance/retro）
     [MECHARROW:src:atom>dst:atom]      机理弯箭头；>> 为鱼钩箭头
-    [CHARGE:ref|idx:δ+,...]            组件 ref 上的部分电荷标注（R-2）
-    [HBOND:ref|from-to,...]            组件 ref 内的氢键虚线（R-2）
+    [CHARGE:ref|idx:δ+,...]            组件 ref 上的部分电荷标注
+    [HBOND:ref|from-to,...]            组件 ref 内的氢键虚线
 
 COMPOSITE 解析结果为单个 RenderTag：type="COMPOSITE"，
 args=[布局名, 子标记 RenderTag 列表]，raw 覆盖整个配对块。
@@ -125,14 +125,17 @@ _INNER_TOKENS = {
     "NEWLINE": "[NEWLINE]",
 }
 
-# 共振块定界（20260819 大一统架构）：[BLOCK]...[/BLOCK]——块内为
+# 共振块定界（大一统架构）：[BLOCK]...[/BLOCK]——块内为
 # STRUCT + 共振箭头序列，作为复合结构参与外层反应序列。
 _BLOCK_OPEN = "[BLOCK]"
 _BLOCK_CLOSE = "[/BLOCK]"
 
 
-# STRUCT 支持的绘制模式（skeleton=默认键线式/结构简式）
-_STRUCT_MODES = ("skeleton", "lewis", "stereo", "chair", "newman")
+# STRUCT 支持的绘制模式：
+# skeleton=键线式/结构简式（默认）；lewis=电子式（+孤对）；stereo=楔形式；
+# chair=椅式构象；newman=纽曼投影。
+STRUCT_MODES = ("skeleton", "lewis", "stereo", "chair", "newman")
+_STRUCT_MODES = STRUCT_MODES
 
 
 def _normalize_render_tag(tag_type: str, content: str, raw: str,
@@ -231,7 +234,7 @@ def _parse_content(tag_type: str, content: str) -> list:
         return [_strip_fake_label(content), ""]
     if tag_type == "ARROW":
         if (content or "").strip().startswith("type="):
-            # 容器内新语法（20260819 大一统架构）：[ARROW:type=..., sup=..., 条件]
+            # 容器内新语法（大一统架构）：[ARROW:type=..., sup=..., 条件]
             # 返回 [type, sup附件列表, 条件]。sup 附件 = "+id"（副反应物，箭头上方）
             # / "-id"（副产物，箭头下方），逗号分隔（与用户示例一致：sup=+E,-F）。
             # 附件列表吸收以 +/- 开头且形如 id 的后续逗号项，消除与条件文本歧义。
@@ -257,8 +260,8 @@ def _parse_content(tag_type: str, content: str) -> list:
                 in_sup = False
                 rest2.append(t)
             return [type_, sup_items, ", ".join(rest2)]
-        # 顶层旧语法（[ARROW:反应物,产物,类型]，B1 清理后不再解析顶层
-        # ARROW，此处仅为容器内缺 type= 的容错兜底）
+        # 顶层旧语法（[ARROW:反应物,产物,类型]；顶层 ARROW 已不再解析，
+        # 此处仅为容器内缺 type= 的容错兜底）
         parts = content.split(",", 2)
         while len(parts) < 3:
             parts.append("")

@@ -10,7 +10,7 @@
 
 为什么必须有这一层
 ------------------
-20260830 用户实测：网页面板填 `deepseek-flash`，"测试连接"显示正确，但一提问
+用户实测：网页面板填 `deepseek-flash`，"测试连接"显示正确，但一提问
 日志里走的却是服务器 `.env` 的 `gemini-3.7-flash`。根因在凭证的 Context
 作用域（SSE 生成器跨迭代时 ContextVar 会丢，详见 Test-Method §21.5-5）——
 **mock 掉管线的用例看不见这一类问题**，因为链路根本没走到真正读凭证的地方。
@@ -42,7 +42,7 @@ ANSWER = "苯（Benzene）是最基本的芳香族化合物，分子式为 C6H6�
 class _QuietHTTPServer(HTTPServer):
     """mock 上游服务器：把"对端正常断开连接"当成噪声忽略掉。
 
-    背景（20260911 排查）：`protocol_version = "HTTP/1.1"` 会**keep-alive**，
+    背景：`protocol_version = "HTTP/1.1"` 会**keep-alive**，
     处理器读完一个请求后会继续等**下一个请求行**；而客户端是产品里那个模块级
     `requests.Session`（连接池），测试跑完/回收时会把 socket 直接关掉 —— 服务端
     阻塞中的 `readline` 于是抛 `ConnectionResetError`（Windows 上是 WinError 10054）。
@@ -274,7 +274,7 @@ def test_v1_history_isolation_via_cache(client, upstream):
     assert {c.model for c in upstream.calls} == {USER_MODEL}
 
 
-# ─────────────────────────────────────── mock 上游的噪声（20260911 排查）
+# ─────────────────────────────────────── mock 上游的噪声（排查）
 
 def test_quiet_server_suppresses_client_disconnect(capsys):
     """★ 客户端断开（keep-alive 连接被关掉）不该打印 traceback。

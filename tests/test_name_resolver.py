@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""utils/name_resolver 单元测试：PubChem 名称→SMILES。
+"""tests/test_name_resolver.py — utils/name_resolver 单元测试：PubChem 名称→SMILES。
 
 网络请求用 monkeypatch 模拟（不依赖真实 PubChem 可达性）：
 - http_get 返回构造的响应对象（status_code / text）。

@@ -21,7 +21,7 @@ PUBCHEM_TEMPLATE = (
     "/property/CanonicalSMILES/TXT"
 )
 DEFAULT_TIMEOUT = 10
-_503_MAX_WAIT = 30
+_503_MAX_WAIT = 30   # PubChem 503 限流时按 Retry-After 等待的上限（秒）
 
 # 常见化合物的中文名 → PubChem 查询用英文名（PubChem 不识别中文）。
 # 覆盖 AGENT.md 指定的 20 个常用化合物；其他中文名可扩展或由英文/IUPAC 兜底。

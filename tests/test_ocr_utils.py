@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""utils/ocr_utils.describe_image 单元测试（mock 视觉 API，不访问网络）。
+"""tests/test_ocr_utils.py — utils/ocr_utils.describe_image 单元测试（mock 视觉 API，不访问网络）。
 
 运行: python -m pytest tests/test_ocr_utils.py -v
 """
@@ -35,7 +35,7 @@ def fake_vision(monkeypatch):
     解析（无请求覆盖时读**基准配置**）。早先 patch `ocr.settings` 是重构前的
     失效写法——`ocr.settings` 只是导入时的引用，改了它 `describe_image` 根本
     不读，用例于是退化成"看开发者 .env 里有没有 VISION_*"：本机配了
-    `VISION_MODEL=glm-5.3-flash` 就全绿，删掉就整文件变红（20260910 实测）。
+    `VISION_MODEL=glm-5.3-flash` 就全绿，删掉就整文件变红（实测）。
 
     读图层（_read_image_b64）整体 mock 掉——沙箱禁止测试进程写文件
     （含项目内临时目录），describe_image 只依赖 base64 字符串。
@@ -89,7 +89,7 @@ def test_describe_unconfigured_returns_none(monkeypatch):
     assert ocr.describe_image("no-such-file.png") is None
 
 
-# ---------------- B1：结构式 SMILES RDKit 硬校验（20260826） ----------------
+# ---------------------------------------------------------------- 结构式 SMILES RDKit 硬校验
 
 def test_describe_structure_good_smiles_ok(fake_vision):
     """结构式内容含合法 SMILES（c1ccccc1）→ smiles_ok=True。"""
@@ -122,7 +122,7 @@ def test_describe_structure_text_desc_ok(fake_vision):
     assert desc["smiles_ok"] is True
 
 
-# ---------------- 重试容错（连接不稳定，20260818） ----------------
+# ---------------------------------------------------------------- 重试容错（连接不稳定）
 
 def test_describe_retries_then_succeeds(fake_vision, monkeypatch):
     """网络异常（连接不稳定）→ 重试成功（默认最多 3 次尝试）。"""
@@ -175,7 +175,7 @@ def test_describe_5xx_retried(fake_vision, monkeypatch):
 def test_describe_400_not_retried(fake_vision, monkeypatch):
     """400（模型不支持视觉，配置性错误）不**整轮重试**。
 
-    注意（20260830 重构）：第一次 400 会先做一次"摘字段重试"（行为判定，
+    注意：第一次 400 会先做一次"摘字段重试"（行为判定，
     见 ocr._describe_once），因此 post 被调用 2 次；但**不会**进入
     `max_attempts` 的整轮重试（否则会是 3 次）。
     """

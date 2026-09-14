@@ -45,7 +45,7 @@ def load_system_prompt() -> str:
     """从 prompts/system_prompt.txt 加载系统提示，并追加 SMILES 书写规范。
 
     文件不存在时返回空串，调用方可据此降级。箭头/结构式/氢键规范已并入
-    主提示（20260821 重构），SMILES 规范作为唯一独立文件维护。
+    主提示，SMILES 规范作为唯一独立文件维护。
     """
     if not _PROMPT_PATH.exists():
         return ""

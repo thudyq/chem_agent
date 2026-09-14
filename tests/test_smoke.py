@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""渲染器冒烟测试：核心渲染器对代表性输入产出合法完整 TikZ。
+"""tests/test_smoke.py — 渲染器冒烟测试：核心渲染器对代表性输入产出合法完整 TikZ。
 
 替代端到端视觉验证——快速确认每个渲染器链路可运行、输出结构完整
 （\\begin{tikzpicture} 与 \\end{tikzpicture} 闭合、无错误串），
@@ -50,7 +50,7 @@ def test_smoke_struct():
 
 
 def test_smoke_struct_no_lone_pairs():
-    """顶层 STRUCT 不画孤对电子（键线式规范第 3 条，20260818 回归锚点）。
+    """顶层 STRUCT 不画孤对电子（键线式规范第 3 条，回归锚点）。
 
     此前 render_structure 漏传 show_lone_pairs=False（molecule_scope_lines
     默认 True）→ [STRUCT:CCl] 的 Cl 画出 3 对孤对电子点（6 个 \\fill）。
@@ -244,7 +244,7 @@ def test_smoke_reaction_block_mecharrow_and_brackets():
 
 
 def test_smoke_reaction_block_labels():
-    """BLOCK 内 STRUCT 的 label 正常渲染（20260821 修复：此前块内 label 丢失）。"""
+    """BLOCK 内 STRUCT 的 label 正常渲染。"""
     outs, bad = _render(
         "[COMPOSITE:reaction]"
         "[BLOCK][STRUCT:C1=CC=CC=C1,label=式 I]"
@@ -265,7 +265,7 @@ def test_smoke_lewis_with_label():
 
 
 def test_smoke_struct_bond_charge_params():
-    """20260821：STRUCT 参数化标注（bond=/charge=）——单分子键突出 + δ± 节点。"""
+    """STRUCT 参数化标注（bond=/charge=）——单分子键突出 + δ± 节点。"""
     outs, bad = _render("[STRUCT:CCC=O, bond=1-2, charge=0:+,3:-]")
     assert len(outs) == 1 and bad == 0, [r.reason for r in bad]
     _assert_ok(outs[0], "very thick, red")   # bond= 键突出
@@ -288,7 +288,7 @@ def test_smoke_hbond_toplevel_rejected():
 
 
 def test_smoke_complex_ion_formula():
-    """20260821：配离子分子式通道——[Ag(NH3)2]+ 渲染为文本节点，
+    """配离子分子式通道——[Ag(NH3)2]+ 渲染为文本节点，
     无需 SMILES 结构式（银镜反应组件）。"""
     outs, bad = _render(
         "[COMPOSITE:reaction]"
@@ -325,7 +325,7 @@ def test_smoke_pipeline_inject():
 
 
 def test_smoke_complex_compound_counterion():
-    """20260821：带反离子的中性配合物分子式——[Ag(NH3)2]OH、K4[Fe(CN)6]
+    """带反离子的中性配合物分子式——[Ag(NH3)2]OH、K4[Fe(CN)6]
     等同样走文本通道并参与守恒计数。"""
     from core.tag_validator import _parse_complex_ion
     from renderers.mol_primitives import is_formula_label
@@ -355,7 +355,7 @@ def test_smoke_complex_compound_counterion():
 
 
 def test_smoke_toplevel_struct_formula():
-    """20260821：顶层 STRUCT 双轨制——纯化学式/配离子（KMnO4、
+    """顶层 STRUCT 双轨制——纯化学式/配离子（KMnO4、
     [Ag(NH3)2]+）渲染为文本节点（与 COMPOSITE textcomps 一致）。"""
     outs, bad = _render("[STRUCT:[Ag(NH3)2]+]")
     assert len(outs) == 1 and bad == 0

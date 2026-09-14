@@ -39,7 +39,7 @@ def _data_url(data: bytes, mime="image/png") -> str:
     return f"data:{mime};base64," + base64.b64encode(data).decode()
 
 
-# ------------------------------------------------------------ 1. 大小估算
+# ---------------------------------------------------------------- 1. 大小估算
 
 @pytest.mark.parametrize("n", [0, 1, 2, 3, 100, 1023, 1024, 65536])
 def test_b64_size_estimate_matches_decode(n):
@@ -82,7 +82,7 @@ def test_budget_ignores_http_urls():
     web_api._check_image_budget(["https://example.com/a.png"])
 
 
-# ------------------------------------------------------------ 2. 真实类型
+# ---------------------------------------------------------------- 2. 真实类型
 
 @pytest.mark.parametrize("data,kind", [(PNG, "png"), (JPG, "jpg"), (GIF, "gif"),
                                        (BMP, "bmp"), (WEBP, "webp")])
@@ -122,7 +122,7 @@ def test_save_accepts_normal_image(tmp_path):
     assert Path(out).read_bytes() == PNG
 
 
-# ---------------------------------------------------- 3. http(s) 边下边卡
+# ---------------------------------------------------------------- 3. http(s) 边下边卡
 
 class _StreamResp:
     """替身响应：`iter_content` 能吐出比上限多得多的数据。"""
@@ -189,7 +189,7 @@ def test_http_download_uses_streaming(tmp_path, monkeypatch):
     assert out and out.endswith(".png")
 
 
-# ------------------------------------------------- 4. 端点接线（真的会 400）
+# ---------------------------------------------------------------- 4. 端点接线（真的会 400）
 
 @pytest.fixture
 def web(tmp_path, monkeypatch):
@@ -238,7 +238,7 @@ def test_endpoint_rejects_oversized_total(web, monkeypatch):
     assert "单次上限" in r.json()["detail"]
 
 
-# ------------------------------------------------- 5. 回收：先会话内，再全局
+# ---------------------------------------------------------------- 5. 回收：先会话内，再全局
 
 def _mkpng(path, size, age=3 * 3600):
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -286,7 +286,7 @@ def test_global_quota_still_works(tmp_path, monkeypatch):
     assert removed == 1 and not old.exists() and new.exists()
 
 
-# --------------------------------------------- 6. 前后端上限不许漂移
+# ---------------------------------------------------------------- 6. 前后端上限不许漂移
 
 def test_frontend_and_backend_limits_match():
     """前端提示的 8MB/16MB 必须与后端常量一致（否则用户会撞上"前端放行、后端拒绝"）。"""

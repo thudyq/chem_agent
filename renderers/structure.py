@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """renderers/structure.py — [STRUCT] 标记渲染器：SMILES → TikZ 结构式。
 
-统一到 TikZ scope 新逻辑（prepare_mol + molecule_scope_lines，与 ARROW/
-REACTION/COMPOSITE/XH/BOND 一致），弃用 mol2chemfigPy3：
+统一到 TikZ scope 新逻辑（prepare_mol + molecule_scope_lines，与 COMPOSITE
+一致），弃用 mol2chemfigPy3：
   - 芳香小写（c1ccccc1）→ 全芳香环画圈
   - 凯库勒大写（C1=CC=CC=C1）→ 交替单双键
   - label 置于结构下方
@@ -14,17 +14,16 @@ def render_structure(smiles: str, label: str = None, mode: str = "skeleton",
                      charge: str = "") -> str:
     """[STRUCT] 渲染：SMILES → TikZ 结构式；可选 label 置于结构下方。
 
-    分子家族统一入口（20260818 重构）：mode 分派各画法——
+    分子家族统一入口：mode 分派各画法——
         skeleton（默认）：键线式/结构简式（本函数主体逻辑）
         lewis：电子式（+孤对电子点）    stereo：楔形式
         chair：椅式构象                newman：纽曼投影
     旧标记（[LEWIS]/[STEREO]/[CHAIR]/[NEWMAN]）经解析层归一化为
     STRUCT+mode 后同样进入本入口。
 
-    20260821：bond=/charge= 并入 STRUCT 参数（单分子标注，替代顶层
-    BOND/CHARGE 新写法）——skeleton（及其他非 newman）模式下：
-        bond=a-b：该键加粗红色突出（复用 BOND 渲染原语）；
-        charge=idx:+/-列表：对应原子旁标 δ+/δ-（复用 CHARGE 渲染原语）。
+    bond=/charge= 单分子标注参数——skeleton（及其他非 newman）模式下：
+        bond=a-b：该键加粗红色突出；
+        charge=idx:+/-列表：对应原子旁标 δ+/δ-。
 
     芳香小写（c1ccccc1）画圈；凯库勒大写保留输入单双键位置（不同 Kekulé
     式渲染不同——如硝基苯 C1C=CC=CC=1 vs C1=CC=CC=C1 双键错开）。
@@ -74,13 +73,13 @@ def render_structure(smiles: str, label: str = None, mode: str = "skeleton",
 
     rings = aromatic_ring_info(mol) if is_aromatic else None
     lines = ["\\begin{tikzpicture}"]
-    # 键线式默认不标孤对电子（规范第 3 条，与 ARROW/REACTION/RETRO 一致）：
-    # 孤对电子仅在 LEWIS / 机理容器（MECHARROW/RESARROW）中显示。
+    # 键线式默认不标孤对电子（规范第 3 条）：孤对电子仅在 LEWIS /
+    # 机理容器（MECHARROW）中显示。
     # 注意 molecule_scope_lines 默认 show_lone_pairs=True，此处必须显式关闭
-    # （20260818 修复：此前顶层 STRUCT 漏传 → [STRUCT:CCl] 的 Cl 画出 3 对孤对电子）。
+    # （否则 [STRUCT:CCl] 的 Cl 会多出 3 对孤对电子）。
     lines.extend(molecule_scope_lines(mol, (0.0, 0.0), aromatic_rings=rings,
                                       show_lone_pairs=False))
-    # 20260821：STRUCT 参数化标注（bond= 键突出 / charge= 部分电荷）
+    # STRUCT 参数化标注（bond= 键突出 / charge= 部分电荷）
     if bond or charge:
         lines.extend(_struct_annotation_lines(mol, bond, charge))
     if label:
@@ -100,8 +99,8 @@ def render_structure(smiles: str, label: str = None, mode: str = "skeleton",
 def _struct_annotation_lines(mol, bond_spec: str = "", charge_spec: str = "") -> list:
     """STRUCT 参数化标注行：bond= 键突出（红粗线）+ charge= 部分电荷（δ±）。
 
-    复用顶层 BOND/CHARGE 渲染器同款原语（bond_segments_for / partial_charge_pos
-    / format_partial_charge），保证同一分子两种写法渲染一致。
+    复用共享原语（bond_segments_for / partial_charge_pos /
+    format_partial_charge），保证与容器内标注渲染一致。
     """
     from .mol_primitives import (
         bond_segments_for, format_partial_charge, label_bond_margin,
@@ -109,7 +108,7 @@ def _struct_annotation_lines(mol, bond_spec: str = "", charge_spec: str = "") ->
     )
     lines = []
     labeler = mol_default_labeler(mol)
-    # bond= 键突出：与骨架修剪段完全对齐（同 xh_bond.render_bond）
+    # bond= 键突出：与骨架修剪段完全对齐
     for spec in (bond_spec or "").split(","):
         spec = spec.strip()
         if "-" not in spec:
@@ -128,7 +127,7 @@ def _struct_annotation_lines(mol, bond_spec: str = "", charge_spec: str = "") ->
         for x1, y1, x2, y2 in segs:
             lines.append(
                 f"  \\draw[very thick, red] ({x1:.2f},{y1:.2f}) -- ({x2:.2f},{y2:.2f});")
-    # charge= 部分电荷：以元素符号中心为基准，方向避让（同 render_charge）
+    # charge= 部分电荷：以元素符号中心为基准，方向避让
     for idx, raw_label in parse_charge_pairs(charge_spec).items():
         if idx >= mol.GetNumAtoms():
             continue

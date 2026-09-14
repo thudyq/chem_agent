@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """tests/test_diaglog.py — 完整诊断落盘（core/diaglog.py）测试。
 
-背景（20260828）：journald 打印是截断摘要（raw[:60]），长 COMPOSITE 出错
+背景：journald 打印是截断摘要（raw[:60]），长 COMPOSITE 出错
 看不到 LLM 具体写了什么；完整记录落盘 JSONL 供离线 replay 重放。
 
 运行: python -m pytest tests/test_diaglog.py -v
@@ -112,7 +112,7 @@ def test_api_non_stream_writes_full_diag(monkeypatch, tmp_path):
                and r["raw"] == "最终原始标记文本" for r in lines)
 
 
-# ------------------------------------------- 隐私与隔离（安全审查 R12，20260911）
+# ---------------------------------------------------------------- 隐私与隔离（安全审查 R12）
 
 def test_log_file_is_owner_only(monkeypatch, tmp_path):
     """★ 日志里有真人提问原文 → 必须 **0600**（只属主可读写）。

@@ -24,10 +24,10 @@ r"""streamlit_app.py — 本地 Web 界面（本地测试用；清小搭接入�
 st.code(language="latex")。
 
 已同步管线能力：
-- 多轮对话（A3）：提问携带当前会话历史（assistant 历史剥离渲染代码）；
-- 生成进度（B2）：st.status 实时显示 LLM 生成草稿（progress_callback）；
+- 多轮对话：提问携带当前会话历史（assistant 历史剥离渲染代码）；
+- 生成进度：st.status 实时显示 LLM 生成草稿（progress_callback）；
 - AI 命名（省 token）：首条提问用极简 prompt 生成对话标题；
-- P0~P3、A1、B3 均在 process_question 内部生效，界面无需额外处理。
+- 校验/修正闭环等管线能力均在 process_question 内部生效，界面无需额外处理。
 """
 
 import inspect
@@ -80,7 +80,7 @@ _DIAG_FLUSHED = False
 def _flush_diagnostics_file() -> None:
     """清空本调试日志（进程内只执行一次，之后 append）。
 
-    ★ 用**独立文件**、不碰 `data/diagnostics.jsonl`（安全审查 R12，20260911）：
+    ★ 用**独立文件**、不碰 `data/diagnostics.jsonl`（安全审查 R12）：
     那个文件是**线上**的 /v1（清小搭）与网页共用的诊断流水，而本函数会把它
     **清空**——两者共用一个文件时，跑一次 Streamlit 就会把线上诊断记录抹掉。
     格式也不同（本文件带 responses/diagnostics 列表，diaglog 是逐行
@@ -103,7 +103,7 @@ def _flush_diagnostics_file() -> None:
 
 def _append_diagnostic(session_id: str, question: str,
                        responses: list, diagnostics: list) -> None:
-    """把一次提问的诊断记录追加到 diagnostics.jsonl（一行一条 JSON）。
+    """把一次提问的诊断记录追加到 streamlit_diagnostics.jsonl（一行一条 JSON）。
 
     记录原始标记（responses，未渲染）与诊断失败项，**不记录渲染后含 TikZ
     的 answer**——避免大段 LaTeX 污染、且便于统计模型实际写出的标记。
@@ -182,7 +182,7 @@ def _rerun() -> None:
 
 
 def _progress_updater(draft_box, throttle: float = 0.3):
-    """构造进度回调：累积 LLM 草稿，节流更新 draft_box 占位（B2）。"""
+    """构造进度回调：累积 LLM 草稿，节流更新 draft_box 占位。"""
     state = {"last": 0.0, "buf": []}
 
     def _cb(piece: str) -> None:
@@ -295,13 +295,13 @@ def _build_history(cur: dict) -> list:
 
 
 def _render_user_bubble(msg: dict, image_bytes: bytes | None = None) -> None:
-    """渲染用户气泡：图片（全宽 + 下载按钮）+ 展示文本（display 优先，解 9c/10c）。"""
+    """渲染用户气泡：图片（全宽 + 下载按钮）+ 展示文本（display 优先）。"""
     with _chat_ctx("user"):
         b64 = msg.get("image")
         data = image_bytes if image_bytes is not None else (
             base64.b64decode(b64) if b64 else None)
         if data:
-            st.image(data, width="stretch")   # 与文字气泡同宽（解 9b）
+            st.image(data, width="stretch")   # 与文字气泡同宽
             st.download_button("下载图片", data=data,
                                file_name=msg.get("image_name") or "image.png",
                                key=f"dl_{uuid.uuid4().hex[:10]}")
@@ -335,7 +335,7 @@ def _generate_answer(sessions: list, cur: dict, question: str,
     status 已存在时复用（图片流：视觉理解阶段已创建）。
 
     诊断：process_question 的 responses（原始标记文本，不含渲染后 TikZ）与
-    diagnostics（每轮校验/渲染失败）在生成后写入 data/diagnostics.jsonl。"""
+    diagnostics（每轮校验/渲染失败）在生成后写入 data/streamlit_diagnostics.jsonl。"""
     diag = []          # diagnostics 收集（每轮失败）
     resp = []          # responses 收集（各阶段原始标记文本）
     if hasattr(st, "status"):
@@ -511,7 +511,7 @@ def _copy_md_button(text: str) -> None:
     )
 
 
-# ---------------- 会话操作（侧边栏） ----------------
+# ---------------------------------------------------------------- 会话操作（侧边栏）
 
 def _apply_rename(sid: str) -> None:
     """原位重命名：读取 text_input 值并保存（回车/✓ 触发）。"""
@@ -572,7 +572,7 @@ def _session_menu(s: dict) -> None:
             body()
 
 
-# ---------------- 输入区（底部固定窗格） ----------------
+# ---------------------------------------------------------------- 输入区（底部固定窗格）
 
 def _chat_input_supports_file() -> bool:
     """st.chat_input 是否支持 accept_file 附件（streamlit ≥ 1.46）。"""
@@ -624,7 +624,7 @@ def _describe_image_bytes(data: bytes, name: str) -> dict | None:
 
 def _merge_image_question(question_text: str, desc: dict | None) -> str:
     """用户文字 + 图片描述合并为发给 LLM 的完整问题（仅提示词层使用，
-    不进展示气泡——气泡由 display 字段承载，解 9c/10c）。
+    不进展示气泡——气泡由 display 字段承载）。
 
     desc 为空（图片识别失败）：空内容 + 用户文字照常传给主 LLM，并明确
     告知"图片识别失败"（视觉重试已耗尽，仍继续问答流程）。
@@ -693,7 +693,7 @@ def _handle_uploaded(uploaded) -> None:
                         name=uploaded.name, data=uploaded.getvalue())
 
 
-# ---------------- 页面 ----------------
+# ---------------------------------------------------------------- 页面
 
 st.set_page_config(page_title="有机化学知识智能体", page_icon="🧪", layout="wide")
 # ★ 只隐藏页脚，**不隐藏右上角的 ⋮ 主菜单**：Streamlit 的「Settings → Theme
@@ -718,7 +718,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ---- 输入框：整页最先渲染的可见组分（固定窗格） ----
+# ---------------------------------------------------------------- 输入框：整页最先渲染的可见组分（固定窗格）
 # st.chat_input 由前端钉在视口底部（[data-testid="stBottom"]：sticky，自带主题
 # 层级与不透明背景，不被其他组分遮盖），与脚本位置无关；提到最前调用使其
 # delta 最先到达前端——长历史重渲染 / 图片编译回填期间输入框也立即可见可用。
@@ -754,10 +754,10 @@ if "current_id" not in st.session_state or \
 sessions = st.session_state.sessions
 current_id = st.session_state.current_id
 
-# 每次启动清空一次 diagnostics.jsonl（幂等），之后提问逐条 append
+# 每次启动清空一次 streamlit_diagnostics.jsonl（幂等），之后提问逐条 append
 _flush_diagnostics_file()
 
-# ---- 侧边栏：会话管理 ----
+# ---------------------------------------------------------------- 侧边栏：会话管理
 with st.sidebar:
     st.markdown("### 💬 对话")
     if st.button("＋ 新对话", width="stretch"):
@@ -795,7 +795,7 @@ with st.sidebar:
     st.divider()
     st.caption(f"共 {len(sessions)} 个对话")
 
-# ---- 主区：当前会话消息流 ----
+# ---------------------------------------------------------------- 主区：当前会话消息流
 cur = next((s for s in sessions if s["id"] == current_id), None)
 if cur is not None:
     for msg in cur["messages"]:

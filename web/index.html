@@ -754,6 +754,7 @@ let sessions = [];           // 索引（不含 messages），同步可用，供
 let currentId = "";
 let chat = [];               // 当前会话的消息（内存中的副本）
 
+/** 生成 32 位十六进制随机 id（会话/消息主键）。 */
 function newId(){
   const a = new Uint8Array(16);
   if (crypto.getRandomValues) crypto.getRandomValues(a);
@@ -766,6 +767,7 @@ function newId(){
    用户"本次对话不会被保存"——不再像旧实现那样静默失败。 */
 let dbPromise = null, memoryStore = null, storageWarned = false;
 
+/** 打开（并缓存）IndexedDB 连接；不可用（无痕/被禁用）时 resolve(null)。 */
 function openDB(){
   if (dbPromise) return dbPromise;
   dbPromise = new Promise((resolve) => {
@@ -783,6 +785,7 @@ function openDB(){
   return dbPromise;
 }
 
+/** 本地存储不可用时在侧栏底部提示一次（幂等）。 */
 function noteNoStorage(){
   if (storageWarned) return;
   storageWarned = true;
@@ -790,6 +793,7 @@ function noteNoStorage(){
   if (f) f.innerHTML = "⚠ 浏览器不允许本地存储，<b>本次对话不会被保存</b>";
 }
 
+/** 写入一条会话记录；失败回退内存存储并提示。返回是否落盘成功。 */
 async function idbPut(id, value){
   const db = await openDB();
   if (!db){ memoryStore.set(id, value); noteNoStorage(); return false; }
@@ -804,6 +808,7 @@ async function idbPut(id, value){
   });
 }
 
+/** 按 id 读一条会话记录；失败回退内存存储，未命中返回 null。 */
 async function idbGet(id){
   const db = await openDB();
   if (!db) return memoryStore.get(id) || null;

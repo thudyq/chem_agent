@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""core/tag_validator.py 标记契约校验层单元测试（P1）。
+"""tests/test_validator.py — core/tag_validator.py 标记契约校验层单元测试。
 
 用假 rdkit（conftest.py 的 fake_rdkit fixture）解耦真实 RDKit，
 保证测试在任何环境行为一致。
@@ -29,7 +29,7 @@ def test_invalid_smiles_rejected(fake_rdkit):
 
 
 def test_h_prefix_smiles_normalized():
-    """[H3O+] 化学式习惯写法：规范化后通过校验（20260815）。
+    """[H3O+] 化学式习惯写法：规范化后通过校验。
 
     [H3O+] 的 H3 前缀在 SMILES 语法中非法（RDKit 解析失败），经
     normalize_h_prefix_smiles 重写为 [OH3+] 后放行；[H+]/[2H]/
@@ -50,7 +50,7 @@ def test_h_prefix_smiles_normalized():
 
 
 def test_group_abbrev_smiles_allowed():
-    """通用基团缩写（R/X/Ph/Ac 等）作为 SMILES 原子放行（20260815）。
+    """通用基团缩写（R/X/Ph/Ac 等）作为 SMILES 原子放行。
 
     R/X/Ph/Ac 不是合法 SMILES 元素，经 expand_group_abbrevs 替换为
     dummy 原子（[*:n]）后校验通过；化学式后缀（-OH/COOH 等）一并
@@ -169,7 +169,7 @@ def test_energy_even_points_rejected():
 
 
 def test_composite_energy_payload_odd_points_rejected():
-    """COMPOSITE energy 内嵌 [ENERGY] 同样走奇数校验（20260828 补：
+    """COMPOSITE energy 内嵌 [ENERGY] 同样走奇数校验（
     原先 _validate_composite 不递归校验子 ENERGY，奇数个点校验漏掉，
     与顶层 [ENERGY] 不一致）。"""
     # 4 点（偶数）→ 拦截
@@ -238,7 +238,7 @@ def test_struct_mode_chair_passes():
 
 
 def test_struct_bond_charge_params():
-    """20260821：STRUCT bond=/charge= 参数化标注校验（单分子标注新写法）。"""
+    """STRUCT bond=/charge= 参数化标注校验（单分子标注写法）。"""
     # 合法：bond=a-b 真实成键（CCC=O 的 1-2 是 C=O 键）+ charge=idx:+/- 列表
     _, invalid = _validate("[STRUCT:CCC=O, bond=1-2, charge=0:+,3:-]")
     assert len(invalid) == 0
@@ -264,7 +264,7 @@ def test_struct_bond_charge_params():
 
 
 def test_composite_mode_restriction():
-    """容器内 mode 按布局放开（20260821）：reaction 禁 newman，row/energy 不限。"""
+    """容器内 mode 按布局放开：reaction 禁 newman，row/energy 不限。"""
     _, invalid = _validate(
         "[COMPOSITE:row][STRUCT:O, mode=lewis, id=w][/COMPOSITE]")
     assert len(invalid) == 0
@@ -331,7 +331,7 @@ def test_composite_coefficient_prefix():
     assert "系数" in invalid2[0].reason
 
 
-# ---------- 大一统架构：reaction 布局（20260819） ----------
+# ---------------------------------------------------------------- 大一统架构：reaction 布局
 
 
 def test_reaction_single_to_single_equivalent():
@@ -381,7 +381,7 @@ def test_reaction_sup_attachment_balance():
 
 
 def test_reaction_complex_ion_balance():
-    """20260821：配离子分子式（[Ag(NH3)2]+ 等）参与守恒校验。
+    """配离子分子式（[Ag(NH3)2]+ 等）参与守恒校验。
 
     银镜反应：CH3CHO + 2[Ag(NH3)2]+ + 3OH- → CH3COO- + 2Ag + 4NH3 + 2H2O
     （配离子按中心原子 + 配体元素乘括号系数计数）。
@@ -495,11 +495,11 @@ def test_block_id_global_unique():
 
 
 def test_block_resonance_balance():
-    """BLOCK 内共振式守恒（20260906，G3：难题集 Q6/Q14 病例）——resonance
+    """BLOCK 内共振式守恒——resonance
     箭头两侧极限式必须同分子式（含 H）+ 同净电荷 + 同自由基单电子总数，
-    且不限布局（row 布局下此前完全跳过守恒，是 Q6 放行的根因）。"""
+    且不限布局（row 布局下此前完全跳过守恒，是误放行的根因）。"""
     pytest.importorskip("rdkit")
-    # A：Q6 病例（row 布局）——苄基自由基式 I（C8H9·）vs 式 II（C7H10，
+    # A：row 布局病例——苄基自由基式 I（C8H9·）vs 式 II（C7H10，
     # 环上直接连甲基、无单电子）→ 原子不守恒拦截
     _, bad = _validate(
         "[COMPOSITE:row][BLOCK]"
@@ -508,7 +508,7 @@ def test_block_resonance_balance():
         "[STRUCT:CC1C=CC=CC=1,id=q2,label=极限式 II]"
         "[/BLOCK][/COMPOSITE]")
     assert len(bad) == 1 and "不守恒" in bad[0].reason
-    # B：Q14-m2 病例——环闭合错位成五元环（硝基 Meisenheimer 变体，
+    # B：病例——环闭合错位成五元环（硝基 Meisenheimer 变体，
     # 原子数不等）→ 拦截
     _, bad2 = _validate(
         "[COMPOSITE:reaction][BLOCK]"
@@ -529,7 +529,7 @@ def test_block_resonance_balance():
         "[STRUCT:C#C,id=d1][ARROW:type=resonance]"
         "[STRUCT:[CH]=[CH],id=d2][/BLOCK][/COMPOSITE]")
     assert len(bad4) == 1 and "单电子" in bad4[0].reason
-    # E：合法共振放行——row 布局下苄基自由基正确三式（含单电子，Q6 修正版）
+    # E：合法共振放行——row 布局下苄基自由基正确三式（含单电子，修正版）
     _, bad5 = _validate(
         "[COMPOSITE:row][BLOCK]"
         "[STRUCT:[CH](C)c1ccccc1,id=f1,label=极限式 I]"
@@ -596,7 +596,7 @@ def test_composite_mecharrow_nonexistent_bond_rejected():
 
 def test_bond_ref_gives_neighbor_hint():
     """键端点引用无键时，原因含带元素符号的连接表 + 原子地图——
-    可照抄化（20260821 P0：模型直接照抄，不必推理索引）。"""
+    可照抄化（模型直接照抄，不必推理索引）。"""
     pytest.importorskip("rdkit")
     text = ("[COMPOSITE:reaction]"
             "[STRUCT:O=S([O-])(=O)C1C=CC=C[CH+]1,id=sigma]"
@@ -609,7 +609,7 @@ def test_bond_ref_gives_neighbor_hint():
 
 
 def test_composite_mecharrow_existing_bond_passes():
-    """a-b 端点引用真实存在的键放行。（20260828：夹具换成化学完整的
+    """a-b 端点引用真实存在的键放行。（夹具换成化学完整的
     羟醛去质子——原 `ald:0>ald:0-1`（原子→键、无配套）在电子流模拟器
     下不成立；新夹具的 ald:0-1（C—H 键中点）同样覆盖"键真实存在"路径）"""
     pytest.importorskip("rdkit")
@@ -622,10 +622,10 @@ def test_composite_mecharrow_existing_bond_passes():
 
 
 class TestChemicalChecks:
-    """化学校验（T2-3 原子守恒）：需要真实 RDKit，不使用 fake_rdkit
+    """化学校验（原子守恒）：需要真实 RDKit，不使用 fake_rdkit
     （元素计数依赖真实 Mol）。
 
-    注：T2-2 label 与 SMILES 化学式一致性校验已于 2026-08-14 按用户裁定
+    注：label 与 SMILES 化学式一致性校验已按用户裁定
     删除（误报多于收益，如 H3O+ 配 [OH2+] 属可容忍表述差异）。
     """
 
@@ -635,7 +635,7 @@ class TestChemicalChecks:
         assert len(invalid) == 0
 
     def test_label_formula_mismatch_allowed(self):
-        """label 与 SMILES 化学式不一致 → 放行（T2-2 已删除）。"""
+        """label 与 SMILES 化学式不一致 → 放行（一致性校验已删除）。"""
         pytest.importorskip("rdkit")
         _, invalid = _validate("[STRUCT:CCl,label=CH4Cl]")
         assert len(invalid) == 0
@@ -687,7 +687,7 @@ class TestChemicalChecks:
         """用户可见友好降级：不含校验技术细节（无效 SMILES/守恒等）。
 
         前后端分开：注入回答的降级文本只告知"图示未生成"，技术原因仍在
-        reason（P2 修正 / diagnostics / metrics）里。"""
+        reason（修正 / diagnostics / metrics）里。"""
         pytest.importorskip("rdkit")
         _, invalid = _validate("[STRUCT:XYZABC]")
         shown = tv.degrade_text_friendly(invalid[0].tag)
@@ -769,7 +769,7 @@ class TestChemicalChecks:
 
 
 class TestCoeffAndBalanceRules:
-    """20260811：系数解析 / ARROW 当量检验 / REACTION 2b 箭头补足 / 电荷守恒。
+    """系数解析 / ARROW 当量检验 / REACTION 2b 箭头补足 / 电荷守恒。
 
     规则要点：
     - 系数：整数或 n/2（n 奇数），如 2CCO、1/2O2；其他分数拒绝；
@@ -872,8 +872,8 @@ class TestCoeffAndBalanceRules:
 
 
 def test_composite_mecharrow_bond_form_midpoint_passes(fake_rdkit):
-    # 单根鱼钩指向空白位：单电子不能单独成键 → R4 拦截（20260821 收紧，
-    # que_test6 图 20：两个空白位各 1 根鱼钩是真实漏网错误）
+    # 单根鱼钩指向空白位：单电子不能单独成键 → R4 拦截（收紧，
+    # 两个空白位各 1 根鱼钩是真实漏网错误）
     text = ("[COMPOSITE:reaction][STRUCT:CCl,id=r0][PLUS]"
             "[STRUCT:CO,id=p0][MECHARROW:r0:0>>r0:0+p0:0][/COMPOSITE]")
     _, invalid = _validate(text)
@@ -917,7 +917,7 @@ def test_composite_mecharrow_midpoint_bond_mixed_rejected(fake_rdkit):
 
 
 class TestMechArrowExplicitH:
-    """20260821：显式 H 是真实原子参与编号，MECHARROW 直接写 H 原子序号
+    """显式 H 是真实原子参与编号，MECHARROW 直接写 H 原子序号
     （a#k 语法废弃）。自由基夺氢机理：单碳组分 C([H])([H])([H])[H]
     （0 号 C、1~4 号 H），夺 H 用 ch4:1 引用。
     真实 RDKit（fake_rdkit 白名单不含 C/[Cl]/[CH3]）。
@@ -925,7 +925,7 @@ class TestMechArrowExplicitH:
 
     def test_explicit_h_endpoint_passes(self):
         """ch4:1（显式 H 原子序号）在成键空白位被引用 → 放行。
-        （20260828：箭头更新为 prompt 示例 8 的规范完整写法——原夹具的
+        （箭头更新为 prompt 示例 8 的规范完整写法——原夹具的
         H 原子作鱼钩源（ch4:1>>）在电子流模拟器下不成立，H 上没有
         可给的单电子；C—H 键的一个电子应以键中点（ch4:0-1）为源）"""
         pytest.importorskip("rdkit")
@@ -943,7 +943,7 @@ class TestMechArrowExplicitH:
 
     def test_explicit_h_bond_break_passes(self):
         """C–H 键断键（ch4:0-1 键中点）→ 放行（键真实存在）。
-        （20260828：补全夺氢的完整三鱼钩——单个均裂鱼钩在电子流模拟器
+        （补全夺氢的完整三鱼钩——单个均裂鱼钩在电子流模拟器
         下推不出声明产物；写法与 prompt 示例 8 一致）"""
         pytest.importorskip("rdkit")
         text = ("[COMPOSITE:reaction]"
@@ -973,7 +973,7 @@ class TestMechArrowExplicitH:
         assert "超出范围" in invalid[0].reason
 
     def test_legacy_a_k_syntax_rejected(self):
-        """旧写法 ch4:0#1（a#k 语法，20260821 废弃）→ 格式错误拦截。"""
+        """旧写法 ch4:0#1（a#k 语法，已废弃）→ 格式错误拦截。"""
         pytest.importorskip("rdkit")
         text = ("[COMPOSITE:reaction]"
                 "[STRUCT:[Cl],id=cl,label=Cl·][PLUS]"
@@ -1067,10 +1067,7 @@ def test_pipeline_degrades_invalid_tags(fake_rdkit, fake_renderers, monkeypatch)
     assert all(d["resolved"] is True for d in diag)
 
 
-# ---------------------------------------------------------------------------
-# 双轨制（20260814）：REACTION 物种 = 合法 SMILES 或教科书化学式（KMnO4 等）。
-# 这些测试用真实 RDKit（不用 fake_rdkit fixture），保证守恒校验真实生效。
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------- 双轨制：REACTION 物种 = 合法 SMILES 或教科书化学式（KMnO4 等）。 这些测试用真实 RDKit（不用 fake_rdkit fixture），保证守恒校验真实生效。
 
 
 def test_reaction_kmno4_oxidation_balances():
@@ -1111,7 +1108,7 @@ def test_reaction_formula_inorganic_salt():
 
 
 def test_formula_tail_digit_disambiguation():
-    """化学式尾数字歧义消解（2026-08-14 修复）：
+    """化学式尾数字歧义消解：
 
     - 多位尾数字：最后一位归电荷（SO42- → SO4 带 -2、Cr2O72- → Cr2O7 带 -2）；
     - 单数字 + 多元素：归元素（FeBr4- → FeBr4 带 -1、NO2+ → NO2 带 +1）；
@@ -1135,7 +1132,7 @@ def test_formula_tail_digit_disambiguation():
 
 
 def test_composite_formula_comp_validation():
-    """COMPOSITE 双轨制（20260821）：化学式组件放行；原子级引用/标注拦截。"""
+    """COMPOSITE 双轨制：化学式组件放行；原子级引用/标注拦截。"""
     # 化学式组件放行（守恒通过）
     _, invalid = _validate(
         "[COMPOSITE:reaction][STRUCT:CaO,id=a][PLUS][STRUCT:CO2,id=b]"
@@ -1163,7 +1160,7 @@ def test_composite_formula_comp_validation():
 
 
 def test_arrow_token_unique_reference():
-    """arrow 令牌组件必须被唯一一个 ARROW 的 sup 引用（20260821）。"""
+    """arrow 令牌组件必须被唯一一个 ARROW 的 sup 引用。"""
     # 未被引用 → 拦截
     _, invalid = _validate(
         "[COMPOSITE:reaction][STRUCT:CCO,id=a]"
@@ -1187,7 +1184,7 @@ def test_arrow_token_unique_reference():
 
 
 def test_radical_charge_conflict_rejected():
-    """同一原子电荷+自由基拦截（20260820 基线图 32：Br⊖ 还带单电子点）；
+    """同一原子电荷+自由基拦截（基线病例：Br⊖ 还带单电子点）；
     合法情形放行——自由基（[CH3]）、离子（[OH-]）、自由基离子分写
     不同原子（超氧根 [O-][O]）、配合物电荷（FeBr4- 的 [Fe-] 无单电子）。"""
     pytest.importorskip("rdkit")
@@ -1210,7 +1207,7 @@ def test_radical_charge_conflict_rejected():
 
 
 def test_radical_label_requires_single_electron():
-    """（20260826）label 含「自由基」→ SMILES 必须有且仅有一个原子带恰好
+    """label 含「自由基」→ SMILES 必须有且仅有一个原子带恰好
     1 个自由基单电子。合法：[CH3]/[Cl]（1 原子 1 单电子）、[O-][O]（电荷/
     单电子分写异原子）；拦截：C/CC/O（无单电子）、[CH2]（单原子带 2 单电子）；
     非「自由基」label 不触发。"""
@@ -1235,7 +1232,7 @@ def test_radical_label_requires_single_electron():
 
 
 def test_proton_transfer_pairing():
-    """质子转移配对校验（4b，20260820）：
+    """质子转移配对校验（4b）：
     A. 碱孤对→显式 H 但缺 X—H 键电子回落 → 拦截；
     B. 脱质子（X—H 键电子落回同组件 X）但缺碱夺 H 箭头 → 拦截；
     C. 自由脱质子（容器内有 [H+]）豁免；
@@ -1277,8 +1274,8 @@ def test_proton_transfer_pairing():
 
 
 def test_sn2_attack_site():
-    """SN2 进攻位点校验（4c，20260820）：进攻终点须为连离去基团的 α-C。
-    A. 攻 β-C（基线 Q1/Q4 病例：CC[OH2+] 被攻 0 号甲基碳）→ 拦截并建议 α-C；
+    """SN2 进攻位点校验（4c）：进攻终点须为连离去基团的 α-C。
+    A. 攻 β-C（基线病例：CC[OH2+] 被攻 0 号甲基碳）→ 拦截并建议 α-C；
     B. 攻 α-C → 放行；C. 含多重键组件不查（豁免）；D. 无离去基团不查。"""
     pytest.importorskip("rdkit")
     # A：攻到未连 OH2+ 的 0 号碳 → 拦截，建议 1 号
@@ -1288,7 +1285,7 @@ def test_sn2_attack_site():
         "[MECHARROW:nu:0>sub:0][/COMPOSITE]")
     assert any("进攻位点" in r.reason and "sub:1" in r.reason for r in bad)
     # B：攻 α-C（1 号，连 OH2+）→ 放行（质子化乙醇 + 氢氧根 → 乙醇 + 水）
-    # （20260828：电子流模拟器上线后，进攻箭头必须配套断键箭头——只画进攻
+    # （电子流模拟器上线后，进攻箭头必须配套断键箭头——只画进攻
     # 不画离去会得到超价碳，属不完整机理；补全 sub:1-2>sub:2）
     _, ok = _validate(
         "[COMPOSITE:reaction][STRUCT:CC[OH2+],id=sub][PLUS][STRUCT:[OH-],id=nu]"
@@ -1318,7 +1315,7 @@ def test_sn2_attack_site():
 
 def test_halogen_cation_eas_electrophile_allowed():
     """卤素阳离子是 EAS 亲电试剂的形式写法（[Br+]/[Cl+]，RDKit 簿记为
-    电荷+2 单电子）——不拦截、渲染不画单电子点（20260821 修复 4a 误伤）。"""
+    电荷+2 单电子）——不拦截、渲染不画单电子点（修复 4a 误伤）。"""
     pytest.importorskip("rdkit")
     _, ok = _validate(
         "[COMPOSITE:reaction][STRUCT:BrBr,id=br2][PLUS]"
@@ -1330,7 +1327,7 @@ def test_halogen_cation_eas_electrophile_allowed():
     assert "\\fill" not in render_structure("[Br+]")   # Br+ 不画单电子点
     assert "\\fill" not in render_structure("[CH3+]")  # 碳正离子本就没有
     # 带形式电荷原子的 2 个簿记"自由基电子"并入孤对电子：
-    # [Br+]/[Cl+] 画 3 对孤对电子、0 个单电子（教学画法，20260821）
+    # [Br+]/[Cl+] 画 3 对孤对电子、0 个单电子（教学画法）
     from renderers.mol_primitives import prepare_mol, lone_pair_count
     for smi in ("[Br+]", "[Cl+]"):
         a = prepare_mol(smi).GetAtomWithIdx(0)
@@ -1341,9 +1338,9 @@ def test_halogen_cation_eas_electrophile_allowed():
 
 
 def test_autofix_mech_bond_endpoint_unique_h():
-    """P1：a-b 不成键 + 一端唯一显式 H 邻居 → 改写为该 X—H 键，
+    """a-b 不成键 + 一端唯一显式 H 邻居 → 改写为该 X—H 键，
     修复后整标记通过全部校验（含 4b 质子转移配对与 EAS 方向校验）。
-    （20260827：终点从 sg:3 更正为闭环键 sg:3-9——σ 络合物脱质子的
+    （终点从 sg:3 更正为闭环键 sg:3-9——σ 络合物脱质子的
     C—H 电子落点是 sp3C—C+ 键，落回单原子已被 EAS 校验拦截）"""
     pytest.importorskip("rdkit")
     from core.tag_validator import autofix_mech_bond_endpoint
@@ -1365,7 +1362,7 @@ def test_autofix_mech_bond_endpoint_unique_h():
 
 
 def test_autofix_mech_bond_endpoint_no_candidate():
-    """P1 边界：无显式 H（需改 SMILES）、合法端点、双候选歧义均不修。"""
+    """边界：无显式 H（需改 SMILES）、合法端点、双候选歧义均不修。"""
     pytest.importorskip("rdkit")
     from core.tag_validator import autofix_mech_bond_endpoint
     # 中性杂原子（fc=0，如醇 O）不视为离去基团 → 无候选不修
@@ -1383,7 +1380,7 @@ def test_autofix_mech_bond_endpoint_no_candidate():
 
 
 def test_polar_arrow_target_full_octet_cation():
-    """R1（que_test6 图 26）：双电子箭头指向带正电+八隅体满的氧鎓 O
+    """R1：双电子箭头指向带正电+八隅体满的氧鎓 O
     → 拦截；异裂离去（源为与目标相连的键）豁免；缺电子靶
     （碳正离子/NO2+/[Br+]）不误伤。"""
     pytest.importorskip("rdkit")
@@ -1400,7 +1397,7 @@ def test_polar_arrow_target_full_octet_cation():
         "[MECHARROW:nu:2>pe:1][MECHARROW:pe:1-2>pe:2][/COMPOSITE]")
     assert not bad2, [r.reason for r in bad2]
     # 不误伤：水进攻碳正离子 / 苯 π 进攻 NO2+ / 苯 π 进攻 [Br+]
-    # （20260828：π 进攻补 N=O 补偿箭头——缺补偿则 N 超价，电子流模拟器
+    # （π 进攻补 N=O 补偿箭头——缺补偿则 N 超价，电子流模拟器
     # 判不可能；Br+ 是三周期亲电体，可成键扩八隅，无需补偿）
     for t in ("[COMPOSITE:reaction][STRUCT:C[C+](C)C,id=c][PLUS][STRUCT:O,id=w]"
               "[ARROW:type=single][STRUCT:CC(C)(C)[OH2+],id=o]"
@@ -1418,11 +1415,11 @@ def test_polar_arrow_target_full_octet_cation():
 
 
 def test_pi_attack_target_not_neutral_oxygen():
-    """R4（A1，20260826）：π 进攻靶不能是"中性氧"（仅跨分子亲核进攻）。
-    16.png 苯磺化 ar:0-1>so3:0（π 攻中性 O，应攻 S so3:1）→ 拦截；
+    """R4：π 进攻靶不能是"中性氧"（仅跨分子亲核进攻）。
+    苯磺化 ar:0-1>so3:0（π 攻中性 O，应攻 S so3:1）→ 拦截；
     正确磺化 π→S + S=O→O 补偿、正确硝化 π→N、SN2 孤对→碳 均放行。"""
     pytest.importorskip("rdkit")
-    # 16.png：π → 中性 O，拦截且建议 so3:1 为亲电位
+    # π → 中性 O，拦截且建议 so3:1 为亲电位
     _, bad = _validate(
         "[COMPOSITE:reaction][STRUCT:C1=CC=CC=C1,id=ar][PLUS]"
         "[STRUCT:O=S(=O)=O,id=so3][ARROW:type=single]"
@@ -1431,7 +1428,7 @@ def test_pi_attack_target_not_neutral_oxygen():
     assert len(bad) == 1, [r.reason for r in bad]
     assert "中性氧" in bad[0].reason and "so3:1" in bad[0].reason, bad[0].reason
     # 正确磺化（π→S，S=O→O 补偿，同分子重排）放行
-    # （20260828：补偿箭头更正为 so3:1-2>so3:2——π 对必须流向**该键自身**
+    # （补偿箭头更正为 so3:1-2>so3:2——π 对必须流向**该键自身**
     # 的氧（1-2 键的 2 号 O）；原夹具 so3:0-1>so3:2 把 0-1 键的电子写给
     # 2 号 O（张冠李戴），电子流模拟器会因此成出 O—O/S—O 怪键）
     _, ok = _validate(
@@ -1456,7 +1453,7 @@ def test_pi_attack_target_not_neutral_oxygen():
 
 
 def test_polar_pi_electrons_flow_rules():
-    """R2/R3（que_test6 图 23）：羧酸根共振——O- 孤对不能指向 C=O 双键、
+    """R2/R3：羧酸根共振——O- 孤对不能指向 C=O 双键、
     C=O π 电子不能流向碳端；正确写法通过。"""
     pytest.importorskip("rdkit")
     # R3：孤对 → 双键
@@ -1478,7 +1475,7 @@ def test_polar_pi_electrons_flow_rules():
 
 
 def test_protonated_label_requires_cation():
-    """氧鎓一致性（Q4 连续基线失败）：label 标「质子化」但 SMILES 无带
+    """氧鎓一致性（连续基线失败病例）：label 标「质子化」但 SMILES 无带
     正电杂原子 → 拦截并给出 CC[OH+]CC 等正确写法；正确写法与
     「去质子化」label 不误伤。"""
     pytest.importorskip("rdkit")
@@ -1495,7 +1492,7 @@ def test_protonated_label_requires_cation():
 
 
 def test_autofix_mech_bond_endpoint_leaving_group():
-    """P1 扩展（LG 规则）：离去基团端点——卤素/鎓离子端点有唯一重原子
+    """扩展（LG 规则）：离去基团端点——卤素/鎓离子端点有唯一重原子
     邻居 → 改写为 C—LG 键（CC(C)(C)Br 的 C—Br 实为 1-4）。
     双卤素歧义不修；带 H 的 N/S 鎓（断裂/脱质子两可）不修，但带 H 的
     O 鎓（[OH2+]/[OH3+]）按 LG 修复（SN1 质子化醇离去基团）. """
@@ -1527,7 +1524,7 @@ def test_autofix_mech_bond_endpoint_leaving_group():
 
 
 def test_mecharrow_same_src_dst_rejected():
-    """箭头始末相同（无电子流向）必拦截（que_test7：sigma:1-2>sigma:1-2
+    """箭头始末相同（无电子流向）必拦截（sigma:1-2>sigma:1-2
     脱质子步写错，应为 1-2>1-7）；成键空白位（dst2 非空）合法豁免。"""
     pytest.importorskip("rdkit")
     _, bad = _validate(
@@ -1549,7 +1546,7 @@ def test_mecharrow_same_src_dst_rejected():
 
 
 def test_mecharrow_cross_step_rejected():
-    """跨步拦截（que_test8 图 4）：机理箭头不能跨越主反应箭头
+    """跨步拦截：机理箭头不能跨越主反应箭头
     （etoh:2>pro:2 从反应物侧指向产物侧）；同步内/附件 sup=+id 引用放行。"""
     pytest.importorskip("rdkit")
     _, bad = _validate(
@@ -1566,7 +1563,7 @@ def test_mecharrow_cross_step_rejected():
 
 
 def test_eas_rearomatization_target():
-    """EAS σ 络合物脱质子方向校验（20260827，que_test_retry Q17 病例）。
+    """EAS σ 络合物脱质子方向校验。
 
     σ 络合物脱质子恢复芳香性：C—H 键电子必须落向 sp3 碳与环上 C+ 之间
     的键（形成 π 键）。病例：文字正确（"C—H 键回落苯环生成 π 键"）但
@@ -1574,7 +1571,7 @@ def test_eas_rearomatization_target():
     断键）两根错误箭头，此前全部校验放行。
     """
     pytest.importorskip("rdkit")
-    # A：C—H 电子落回单个碳（que_test_retry Q17 病例）→ 拦截并建议闭环键
+    # A：C—H 电子落回单个碳 → 拦截并建议闭环键
     _, bad = _validate(
         "[COMPOSITE:reaction]"
         "[STRUCT:BrC([H])1C=CC=C[CH+]1,label=σ 络合物,id=sigma]"
@@ -1605,7 +1602,7 @@ def test_eas_rearomatization_target():
     assert not ok, [r.reason for r in ok]
     # D：饱和环碳正离子的氢迁移不拦（无环内双键，非 σ 络合物——
     # C—H → C+ 原子是氢负迁移的合法画法，防误报）
-    # （20260828 更正夹具：r0 为 [H]C1CCCC[CH+]1（H 在 1 号、C+ 在 6 号、
+    # （更正夹具：r0 为 [H]C1CCCC[CH+]1（H 在 1 号、C+ 在 6 号、
     # 相邻），氢迁移箭头 r0:1-0>r0:6、产物正离子搬到 1 号——原夹具指向
     # 5 号普通环碳且产物正离子未搬家，化学上不成立）
     _, ok2 = _validate(
@@ -1628,7 +1625,7 @@ def test_eas_rearomatization_target():
 
 
 def test_chinese_label_consistency():
-    """中文系统命名 label ↔ SMILES 一致性（20260827，用户实测反馈：
+    """中文系统命名 label ↔ SMILES 一致性（用户实测反馈：
     "标注 2-丁醇画 2-丙醇"、"2-丁醇 SN1 中间体画成 5 碳碳正离子"）。
     碳数精确比对；杂原子下限语义（羧酸 ≥2 O，其余同理）；取代基前缀
     （羟基/氨基/巯基/硝基/卤素，含二/三/四倍数）计入；命名复杂者跳过。"""
@@ -1642,7 +1639,7 @@ def test_chinese_label_consistency():
     # A3：label 与 SMILES 一致 → 放行
     _, ok = _validate("[STRUCT:CC(O)CC,label=2-丁醇]")
     assert not ok, [r.reason for r in ok]
-    # A4（20260830）：多取代基倍数——2,3-二甲基-2-丁烯 = 4+2=6C（此前漏算"二"倍数误判为 5C）
+    # 多取代基倍数——2,3-二甲基-2-丁烯 = 4+2=6C（此前漏算"二"倍数误判为 5C）
     _, ok = _validate("[STRUCT:CC(C)=C(C)C,label=2,3-二甲基-2-丁烯]")
     assert not ok, [r.reason for r in ok]          # 6C 放行（回归：不误判）
     _, bad = _validate("[STRUCT:CC(C)=CC,label=2,3-二甲基-2-丁烯]")
@@ -1696,7 +1693,7 @@ def test_chinese_label_consistency():
 
 
 def test_chinese_label_epoxide():
-    """环氧/氧化物命名豁免（20260906，难题集 Q9 误报病例）：「1,2-环氧丁烷」
+    """环氧/氧化物命名豁免（误报病例）：「1,2-环氧丁烷」
     等名称自带 1 个 O，此前「环氧」不在杂原子前缀表 → 被判"烃类不应含杂原子"
     把好图拦死（好图被拦=立即修）。豁免后：环氧化物放行，碳数仍精确、
     烃类判定不松。"""
@@ -1720,8 +1717,8 @@ def test_chinese_label_epoxide():
 
 
 def test_elimination_pi_target():
-    """消除成 π 键方向校验（20260827，EAS σ 规则向普通双键推广——用户
-    E1 实测病例：叔丁基碳正离子脱 β-H 生成异丁烯，C—H 键电子终点写成
+    """消除成 π 键方向校验（EAS σ 规则向普通双键推广——用户
+    实测病例：叔丁基碳正离子脱 β-H 生成异丁烯，C—H 键电子终点写成
     C 原子，应为 C—C 键）。签名：C（显式H)—C+ 相邻（开链碳正离子）。"""
     pytest.importorskip("rdkit")
     # A：用户病例——E1 脱质子的 C—H 电子落回 β-C 原子 → 拦截并建议
@@ -1749,7 +1746,7 @@ def test_elimination_pi_target():
     assert not ok, [r.reason for r in ok]
     # C：1,2-氢迁移不拦（C—H 电子 → C+ 原子是氢负迁移的合法画法——
     # 正丙基正离子 → 异丙基正离子；H 带着电子对搬到相邻 C+ 上）。
-    # （20260828 更正夹具：原"叔丁基简并重排"写法化学错误——叔丁基的氢
+    # （更正夹具：原"叔丁基简并重排"写法化学错误——叔丁基的氢
     # 迁移产物是异丁基正离子（伯碳），并非同物；且原箭头指向 C1 未形成
     # H 迁移。新夹具为正丙基→异丙基的标准 1,2-氢迁移）
     _, ok = _validate(
@@ -1772,7 +1769,7 @@ def test_elimination_pi_target():
 
 
 def test_chinese_label_topology():
-    """中文命名拓扑一致性（20260828，仲丁基 vs 叔丁基实测病例）：
+    """中文命名拓扑一致性（仲丁基 vs 叔丁基实测病例）：
     前缀 正/仲/叔/异/新 与位次号编码"官能团中心碳的碳邻居数 + 骨架
     分支特征"；并区分 自由基/碳正离子/碳负离子 三类中心。"""
     pytest.importorskip("rdkit")
@@ -1848,11 +1845,11 @@ def test_chinese_label_topology():
 
 
 def test_stereo_label_crosscheck():
-    """CIP 构型与顺反标签交叉核对（20260906，G4：难题集 Q1「(2S,3S) 冒充
-    (2R,3S)」/ Q3 顺反写反病例）。集合级 R/S 比对（避开位次映射）+
+    """CIP 构型与顺反标签交叉核对（难题集「(2S,3S) 冒充
+    (2R,3S)」/ 顺反写反病例）。集合级 R/S 比对（避开位次映射）+
     双键 E/Z 与顺/反声称核对。"""
     pytest.importorskip("rdkit")
-    # A1：Q1 病例——(2S,3S) 的 SMILES 声称 (2R,3S) → 拦截
+    # A：(2S,3S) 的 SMILES 声称 (2R,3S) → 拦截
     _, bad = _validate(
         "[STRUCT:C[C@H](Cl)[C@@H](Cl)CC,label=(2R,3S)-2,3-二氯戊烷]")
     assert len(bad) == 1 and "构型" in bad[0].reason
@@ -1886,10 +1883,10 @@ def test_stereo_label_crosscheck():
 
 
 def test_balance_guidance_scenarios():
-    """G6（20260906，难题集 Q5 病例）：守恒失败消息分场景给可操作指引——
+    """守恒失败消息分场景给可操作指引——
     缺金属反离子给离子对写法、差一分子水给补水指引、通用场景保留原指引。"""
     pytest.importorskip("rdkit")
-    # A：Q5 病例——NaNH2 脱质子右侧漏写 [Na+] 反离子 → 指引补反离子
+    # A：病例——NaNH2 脱质子右侧漏写 [Na+] 反离子 → 指引补反离子
     _, bad = _validate(
         "[COMPOSITE:reaction][STRUCT:C#C,label=乙炔,id=b1][PLUS]"
         "[STRUCT:[Na+].[NH2-],label=氨基钠,id=r1][ARROW:type=single]"
@@ -1907,7 +1904,7 @@ def test_balance_guidance_scenarios():
         "[COMPOSITE:reaction][STRUCT:CCO,id=a][PLUS][STRUCT:CCO,id=b]"
         "[ARROW:type=single,140℃][STRUCT:CCCCCO,id=c][/COMPOSITE]")
     assert len(bad3) == 1 and "辅助试剂请写入箭头条件" in bad3[0].reason
-    # D：反离子写全的正确版本放行（Q5 修正版）
+    # D：反离子写全的正确版本放行（修正版）
     _, bad4 = _validate(
         "[COMPOSITE:reaction][STRUCT:C#C,label=乙炔,id=b1][PLUS]"
         "[STRUCT:[Na+].[NH2-],label=氨基钠,id=r1][ARROW:type=single]"
@@ -1917,7 +1914,7 @@ def test_balance_guidance_scenarios():
 
 
 def test_chinese_label_composite_suffix():
-    """烯/炔+杂原子后缀复合命名修正（20260906，难题集 Q13 误报病例）：
+    """烯/炔+杂原子后缀复合命名修正（误报病例）：
     「2-丁烯醛」曾被主正则解析为后缀=烯 → 误判"烃类不应含杂原子"。
     修复后改判杂原子后缀（醛 O≥1、酸 O≥2、二酸 O≥4），烃类判定不松。"""
     pytest.importorskip("rdkit")
@@ -1940,11 +1937,11 @@ def test_chinese_label_composite_suffix():
 
 
 def test_autofix_stereo_label():
-    """立体指定确定性自动修正（20260906，难题集 Q1/Q3 病例——校验拦下后
+    """立体指定确定性自动修正（难题集病例——校验拦下后
     模型三轮修不对）：枚举 @/@@ 组合或翻转方向键，不经 LLM，构造即正确。"""
     from core.tag_validator import autofix_stereo_label
     pytest.importorskip("rdkit")
-    # Q1 病例：(2S,3S) 写法声称 (2R,3S) → 枚举到正确写法
+    # 病例：(2S,3S) 写法声称 (2R,3S) → 枚举到正确写法
     tag = parse_tags(
         "[STRUCT:C[C@H](Cl)[C@@H](Cl)CC,mode=stereo,"
         "label=(2R,3S)-2,3-二氯戊烷]")[0]
@@ -1977,11 +1974,11 @@ def test_autofix_stereo_label():
 
 
 def test_autofix_balance_gap():
-    """守恒缺口确定性补足（20260906，难题集 Q5/Q13 类）——旁观离子/水漏写
+    """守恒缺口确定性补足——旁观离子/水漏写
     由代码补齐（不经 LLM），采纳前重校验把关。"""
     from core.tag_validator import autofix_balance_gap
     pytest.importorskip("rdkit")
-    # A：Q5 病例——缺 Na+ 反离子（右侧乙炔钠带负电）→ 补进组分，重校验通过
+    # A：病例——缺 Na+ 反离子（右侧乙炔钠带负电）→ 补进组分，重校验通过
     tag = parse_tags(
         "[COMPOSITE:reaction][STRUCT:C#C,label=乙炔,id=b1][PLUS]"
         "[STRUCT:[Na+].[NH2-],label=氨基钠,id=r1][ARROW:type=single]"

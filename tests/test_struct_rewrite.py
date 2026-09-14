@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""tests/test_struct_rewrite.py — 手术式结构重写（20260828）测试。
+"""tests/test_struct_rewrite.py — 手术式结构重写测试。
 
 背景：修正循环对 SMILES/label 级错误成功率不稳（锚定效应——修正 prompt
 含错误答案原文）。结构重写把箭头重写的成功模式推广到结构错误：给 LLM

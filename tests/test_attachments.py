@@ -68,7 +68,7 @@ _MULTI_BLOCK = (
 
 def test_partial_failure_keeps_position(monkeypatch, tmp_path):
     """多块部分编译失败：返回与块一一对应（失败块 None 占位），
-    不写该失败块文件；success 块 url 按原始位置对齐（修复 20260827：
+    不写该失败块文件；success 块 url 按原始位置对齐（修复：
     曾因只按成功块序号填 url，导致中间失败块被赋予下一张图的 url、
     后面的真实成功图被挤掉）。"""
     monkeypatch.setattr(att, "compile_tikz_to_png", lambda code: (

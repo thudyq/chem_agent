@@ -146,7 +146,7 @@ def test_global_slot_not_leaked_when_per_ip_rejects(monkeypatch):
         st.enter_context(credentials.inflight_guard())
 
 
-# ------------------------------------------------------ 3. llm_slot 的组合
+# ---------------------------------------------------------------- 3. llm_slot 的组合
 
 def test_llm_slot_includes_both_gates(monkeypatch):
     entered = []
@@ -222,7 +222,7 @@ def test_vision_uses_split_timeout(monkeypatch):
     assert seen["timeout"] == (ocr.VISION_CONNECT_TIMEOUT, ocr.VISION_READ_TIMEOUT)
 
 
-# ------------------------------------------------------------ 5. 用户可见提示
+# ---------------------------------------------------------------- 5. 用户可见提示
 
 def test_friendly_error_explains_busy():
     msg = web_api._friendly_error("服务器繁忙：同时在处理的请求过多，请稍后重试")

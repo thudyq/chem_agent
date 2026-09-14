@@ -19,7 +19,7 @@ import pytest
 import core.tag_validator as tv
 from renderers import registry
 
-# ------------------------------------------------------------------ 临时目录
+# ---------------------------------------------------------------- 临时目录
 # 背景：pytest 内置 tmp_path 走系统 temp。受限环境（容器 / CI / DSH 沙箱）
 # 禁止写系统 temp，用例会以 WinError 5 / PermissionError 失败，看起来像
 # "代码坏了"。下面的 fixture 同名覆盖内置 tmp_path：**先探测系统 temp 是否
@@ -102,19 +102,19 @@ KNOWN_SMILES = {
     "OCCO": _FakeMol(4), "C=C": _FakeMol(2), "CC=O": _FakeMol(3),
     "[H]O[H]": _FakeMol(3), "[H]": _FakeMol(1), "[H+]": _FakeMol(1),
     "C[C@@H](O)C(=O)O": _FakeMol(6),
-    # B1（20260812）自由基机理：单原子/小分子组分
+    # 自由基机理：单原子/小分子组分
     "C": _FakeMol(1), "Cl": _FakeMol(1), "ClCl": _FakeMol(2),
     "[Cl]": _FakeMol(1), "[CH3]": _FakeMol(1),
-    # 20260821：显式 H 是真实原子参与编号（a#k 废弃）——甲烷显式 H 写法
+    # 显式 H 是真实原子参与编号（a#k 废弃）——甲烷显式 H 写法
     "C([H])([H])([H])[H]": _FakeMol(5), "O([H])[H]": _FakeMol(3),
     "N([H])([H])[H]": _FakeMol(4), "[H]OCCO": _FakeMol(5),
     "CC(=O)O[H]": _FakeMol(5),
     # CHAIR：取代环己烷
     "BrC1CCCCC1": _FakeMol(7), "CC1CCCCC1": _FakeMol(7),
-    # 20260822 corpus：苯磺化（EAS 机理），真实 RDKit 可解析的凯库勒苯/SO3/σ 络合物
+    # corpus：苯磺化（EAS 机理），真实 RDKit 可解析的凯库勒苯/SO3/σ 络合物
     "C1=CC=CC=C1": _FakeMol(6), "O=S(=O)=O": _FakeMol(4),
     "O=S([O-])(=O)C([H])1C=CC=C[CH+]1": _FakeMol(10),
-    # 20260906 corpus：Q9 环氧误报病例（1,2-环氧丁烷/甲醇/2-甲氧基-1-丁醇）
+    # corpus：环氧误报病例（1,2-环氧丁烷/甲醇/2-甲氧基-1-丁醇）
     "CCC1CO1": _FakeMol(5), "OCC(OC)CC": _FakeMol(7),
 }
 

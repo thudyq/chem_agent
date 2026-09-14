@@ -23,8 +23,9 @@ system_prompt 未传时自动加载 prompts/system_prompt.txt。
 
 降级链（§4.5）
 -------------
-`首选档位 → low → high → 关思考`（只降不升，同一模型内；**不再换模型**）。
-`finish_reason=length` **一律降档**（同预算重试结果必然相同，纯浪费——缺陷 F）。
+`首选档位 → 逐级往低（max→high→medium→low）→ 关思考`（只降不升，同一模型内；
+**不再换模型**）。详见 `_effort_stages`。
+`finish_reason=length` **一律降档**（同预算重试结果必然相同，纯浪费）。
 """
 
 import json
@@ -340,7 +341,7 @@ def ask_llm(
         user_scoped: True 表示这是**用户请求作用域内**的调用（BYOK 下由用户
             自己的 key 付费）。此时若在**有请求凭证**但没有模型名，**不再回退
             服务器 `.env` 的模型**，而是直接判失败——杜绝"漏传 model 导致
-            静默用服务器模型"这一整类缺陷（20260830 实测：网页填 deepseek-flash，
+            静默用服务器模型"这一整类缺陷（实测：网页填 deepseek-flash，
             翻译却打了 `.env` 的 gemini-3.7-flash）。
             无请求凭证（清小搭 / Streamlit / CLI）时该参数无影响。
 
@@ -367,7 +368,7 @@ def ask_llm(
         print("[ask_llm] 用户作用域内无可用模型名，拒绝回退服务器模型")
         res = LLMResult(error="用户未指定模型名")
         return res if return_result else None
-    # 模型来源标注（20260830 诊断）：用于一眼看出"这次调用是谁指定的模型"，
+    # 模型来源标注：用于一眼看出"这次调用是谁指定的模型"，
     # 避免再出现"网页填了 A、日志却是 B"时无法定位。
     if model == (user_model or ""):
         _src = "用户请求头"
@@ -499,7 +500,7 @@ def ask_llm(
                         advanced = True
                         break
                 elif finish_reason == "length":
-                    # ★ 缺陷 F：一律降档。同一预算下重试结果必然相同，纯浪费一次调用。
+                    # ★ 一律降档：同一预算下重试结果必然相同，纯浪费一次调用。
                     print(f"[ask_llm] 输出被 max_tokens={resolved_max_tokens} 截断"
                           f"（finish_reason=length，思考 {reasoning_chars} 字符），降档重试")
                     if stage_i < len(stages) - 1:

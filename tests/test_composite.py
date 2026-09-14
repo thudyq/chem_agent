@@ -298,7 +298,7 @@ def test_row_layout_multi_step():
 
 
 def test_row_layout_four_step_sequence():
-    """R-5：A→B→C→D 四步序列（3 个带内联条件的主箭头，分子按序排列）。"""
+    """A→B→C→D 四步序列（3 个带内联条件的主箭头，分子按序排列）。"""
     out = _render(
         "[COMPOSITE:row]"
         "[STRUCT:C=C,label=乙烯]"
@@ -524,7 +524,7 @@ def test_unknown_mech_ref_skipped():
 
 
 def test_charge_circle_avoids_bonds():
-    """R-8 候选位放置：硝基 N⁺ 的圆圈电荷不压 N=O 双键（Drawbacks 一-8 案例）。
+    """候选位放置：硝基 N⁺ 的圆圈电荷不压 N=O 双键（Drawbacks 一-8 案例）。
 
     旧行为：固定 45°/0.34，圈与 60° 方向的双键重合（圈心距键线 ≈0.09 < 半径）；
     新行为：候选位逐个查占据表，落到零冲突角度。
@@ -552,7 +552,7 @@ def test_charge_circle_avoids_bonds():
 
 
 def test_charge_annotation_child():
-    """R-2：CHARGE 子标记在对应组件上标注部分电荷（红色 δ，绕元素符号中心，
+    """CHARGE 子标记在对应组件上标注部分电荷（红色 δ，绕元素符号中心，
     方向避让键与标签氢——Drawbacks 手动测试第 7 条）。"""
     out = _render(
         "[COMPOSITE:row]"
@@ -593,7 +593,7 @@ def test_charge_annotation_child():
 
 
 def _hbond_render(extra=""):
-    """乙二醇分子内氢键（20260821 起）：显式 H 原子直接参与编号——
+    """乙二醇分子内氢键：显式 H 原子直接参与编号——
     [H]OCCO 的 0 号是给体 H（O1 的 H），受体为 O4；HBOND 只画点。"""
     return _render(
         "[COMPOSITE:row]"
@@ -652,7 +652,7 @@ def test_hbond_first_dot_inset_from_h():
 
 
 def test_hbond_requires_xh():
-    """20260821 起：给体端点必须是 SMILES 显式 H 原子（真实原子参与编号）；
+    """给体端点必须是 SMILES 显式 H 原子（真实原子参与编号）；
     引用非 H 原子（如 O 原子序号）→ 校验拦截。"""
     from core.tag_validator import validate_tags
     text = ("[COMPOSITE:row][STRUCT:OCCO,id=diol]"
@@ -811,7 +811,7 @@ def test_donor_h_explicit_placement():
 
 
 def test_annotation_unknown_ref_ignored():
-    """R-2 容错：CHARGE/HBOND 引用未知组件 id，忽略不崩溃。"""
+    """容错：CHARGE/HBOND 引用未知组件 id，忽略不崩溃。"""
     out = _render(
         "[COMPOSITE:row]"
         "[STRUCT:CCl]"
@@ -844,7 +844,7 @@ def test_annotation_bad_bond_ref_ignored():
 
 
 def test_place_explicit_hs_gap_shortage_warns(capsys):
-    """空档不足截断告警（E6）：请求数超过可分配空档时打印告警并少画。"""
+    """空档不足截断告警：请求数超过可分配空档时打印告警并少画。"""
     import renderers.mol_primitives as mp
     mol = mp.prepare_mol("CCC=O")
     positions = mp.place_explicit_hs(mol, 1, 10)
@@ -863,9 +863,9 @@ ENERGY_DEMO = (
 
 
 def test_energy_layout_annotations_rendered():
-    """B3：energy 布局驻点结构支持 XH/BOND/CHARGE 注解（不再静默丢弃）。
+    """energy 布局驻点结构支持 XH/BOND/CHARGE 注解（不再静默丢弃）。
 
-    20260821：多组分驻点（CCl.[OH-]）拆片段后注解原子序号语义不明确，
+    多组分驻点（CCl.[OH-]）拆片段后注解原子序号语义不明确，
     注解仅对单组分驻点生效——本测试用单组分验证注解渲染。
     """
     out = _render(
@@ -883,20 +883,20 @@ def test_energy_layout_annotations_rendered():
 
 
 def test_energy_layout_full():
-    """R-3 正例：势能面曲线 + 3 个驻点结构 + 驻点标签用 STRUCT label。"""
+    """正例：势能面曲线 + 3 个驻点结构 + 驻点标签用 STRUCT label。"""
     out = _render(ENERGY_DEMO)
     assert out.startswith("\\begin{tikzpicture}")
     assert "smooth] plot coordinates" in out              # 势能面曲线
     assert "\\draw[gray, dashed]" in out                 # 反应物基线
     assert "Ea $\\approx$ 108" in out                    # Ea 标注框
     assert "anchor=north" in out                         # 标注框 anchor 定位
-    # 3 个驻点 scope + 3×2 片段 scope（多组分驻点拆 2 片段，20260821）
+    # 3 个驻点 scope + 3×2 片段 scope（多组分驻点拆 2 片段）
     assert out.count("\\begin{scope}[shift=") == 12
     assert "反应物 (+0)" in out and "过渡态 (+108)" in out and "产物 (-20)" in out
 
 
 def test_energy_layout_multifrag_vertical():
-    """20260821：energy 驻点多组分（CCl.[OH-] = CH3Cl + OH-）竖直排列拆分。
+    """energy 驻点多组分（CCl.[OH-] = CH3Cl + OH-）竖直排列拆分。
 
     row 布局不拆分（保持单分子）；energy 布局按 GetMolFrags 拆片段、
     竖直堆叠渲染——CH3Cl 与 OH- 各自独立、电荷圈保留。
@@ -922,16 +922,16 @@ def test_energy_layout_multifrag_vertical():
 
 
 def test_row_layout_multifrag_not_split():
-    """row 布局多组分不拆分（保持单分子渲染，20260821 仅 energy 支持）。"""
+    """row 布局多组分不拆分（保持单分子渲染，仅 energy 支持拆分）。"""
     out = _render("[COMPOSITE:row][STRUCT:CCl.[OH-],label=反应物][/COMPOSITE]")
     # 无片段竖直堆叠的内层 scope（shift 含 0.16 竖排特征）
     assert "shift={(0.00,0.16)}" not in out
 
 
 def test_energy_layout_struct_positions():
-    """R-3 布局：分子在驻点正上方（above）或下方（below），水平居中。
+    """布局：分子在驻点正上方（above）或下方（below），水平居中。
 
-    多组分驻点（20260821）：每个驻点外层 scope + 内层 2 片段 scope；
+    多组分驻点：每个驻点外层 scope + 内层 2 片段 scope；
     外层 scope 的 shift 即分子组整体位置（驻点上方）。
     """
     out = _render(ENERGY_DEMO)
@@ -965,7 +965,7 @@ def test_energy_layout_box_above_everything():
 
 
 def test_energy_layout_pos_below():
-    """R-3 pos=below：分子放在驻点下方。"""
+    """pos=below：分子放在驻点下方。"""
     out = _render(
         "[COMPOSITE:energy]"
         "[ENERGY:0,108,-20]"
@@ -980,7 +980,7 @@ def test_energy_layout_pos_below():
 
 
 def test_energy_layout_errors():
-    """R-3 错误路径：缺 ENERGY / STRUCT 缺 at / at 越界。"""
+    """错误路径：缺 ENERGY / STRUCT 缺 at / at 越界。"""
     assert "需要 [ENERGY" in _render(
         "[COMPOSITE:energy][STRUCT:CCl,at=0][/COMPOSITE]")
     assert "需要 at=" in _render(
@@ -1032,7 +1032,7 @@ def test_resonance_layout_deprecated_rejected():
 
 
 def test_newline_vertical_stacking():
-    """R-6：NEWLINE 换行，主结构在上、共振式在下（上下排列）。"""
+    """NEWLINE 换行，主结构在上、共振式在下（上下排列）。"""
     out = _render(
         "[COMPOSITE:row]"
         "[STRUCT:CC(=O)[O-],label=羧酸根]"
@@ -1067,7 +1067,7 @@ def test_registry_dispatch_and_injection():
     assert out.endswith("以上。")
 
 
-# ---------- 氢键（分子内/分子间统一：SMILES 显式 H 参与编号、HBOND 只画点） ----------
+# ---------------------------------------------------------------- 氢键（分子内/分子间统一：SMILES 显式 H 参与编号、HBOND 只画点）
 
 _INTER_HB_BASE = (
     "[COMPOSITE:row]"
@@ -1085,7 +1085,7 @@ def test_hbond_inter_parser():
 
 
 def test_hbond_inter_validation():
-    """跨组件 HBOND 校验（20260821 起给体为显式 H 原子序号，a#k 废弃）：
+    """跨组件 HBOND 校验（给体为显式 H 原子序号，a#k 废弃）：
     非 H 原子/越界/未知组件/格式错拦截。"""
     from core.tag_validator import validate_tags
 
@@ -1138,7 +1138,7 @@ def test_hbond_intra_unified():
 
 
 def test_hbond_donor_h_toward_acceptor():
-    """水分子间氢键（20260821 起显式 H SMILES）：O([H])[H] 的 1 号 H 为给体，
+    """水分子间氢键（显式 H SMILES）：O([H])[H] 的 1 号 H 为给体，
     teal 点从 H 指向受体 O 不穿分子。"""
     from core.tag_validator import validate_tags
 
@@ -1229,7 +1229,7 @@ def test_hbond_pseudo_requires_xh_for_bonded_donor():
     assert "不是 H 原子" in invalid[0].reason
 
 
-# ---------- 容器内立体画法组件（stereo/chair/newman，20260821 扩充） ----------
+# ---------------------------------------------------------------- 容器内立体画法组件（stereo/chair/newman）
 
 
 def test_mode_comp_stereo_in_reaction():
@@ -1299,7 +1299,7 @@ def test_mode_comp_mixed_with_skeleton():
 
 
 def test_h_transfer_orientation():
-    """夺氢朝向对齐（20260821）：H—CH3 的 H 朝左对准 Cl·（RDKit 坐标与
+    """夺氢朝向对齐：H—CH3 的 H 朝左对准 Cl·（RDKit 坐标与
     SMILES 书写顺序无关，[H]C 依然 H 在右，只能渲染端旋转）。"""
     from core.tag_validator import validate_tags
     text = ("[COMPOSITE:reaction]"
@@ -1342,7 +1342,7 @@ def test_h_transfer_orientation_reverse_order():
     assert float(h_m.group(1)) > float(c_m.group(1))
 
 
-# ---------- COMPOSITE 双轨制（化学式文本组件，20260821） ----------
+# ---------------------------------------------------------------- COMPOSITE 双轨制（化学式文本组件）
 
 
 def test_formula_comp_full_formula_reaction():
@@ -1489,7 +1489,7 @@ def test_sup_mech_arrow_position():
 
 
 def test_radical_single_electron_always_shown():
-    """自由基单电子点不随孤对电子开关隐藏（20260819 基线反馈修复）：
+    """自由基单电子点不随孤对电子开关隐藏（基线反馈修复）：
     无 MECHARROW 的反应式中 ·CH3 也必须画单电子点，否则被误读为离子。"""
     text = ("[COMPOSITE:reaction]"
             "[STRUCT:[CH3],id=a,label=·CH3][PLUS][STRUCT:[CH3],id=b,label=·CH3]"
@@ -1501,9 +1501,9 @@ def test_radical_single_electron_always_shown():
 
 def test_energy_layout_wide_structs_stay_on_points():
     """energy 布局：宽驻点结构（叔丁基系列）横向间距不足时上下错开，
-    挂在各自驻点附近（x 对准驻点），不得整体右移脱点（20260819 基线反馈）。
+    挂在各自驻点附近（x 对准驻点），不得整体右移脱点（基线反馈）。
 
-    多组分驻点（CC(C)(C)Br.[OH2]，20260821）：外层 scope 即分子组整体
+    多组分驻点（CC(C)(C)Br.[OH2]）：外层 scope 即分子组整体
     位置，取各驻点外层 scope 的 x 核对。
     """
     text = ("[COMPOSITE:energy]"

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""core/metrics.py — 标记遵循率指标工具（P4）。
+"""core/metrics.py — 标记遵循率指标工具。
 
 对一组问题跑真实 LLM 调用，统计标记遵循率与渲染健康度：
 - 标记总数 / 合法数 / 非法数（契约校验层判定）
@@ -20,7 +20,7 @@ import sys
 def evaluate_compliance(questions: list, *, max_corrections: int = 1) -> dict:
     """对问题列表跑一次 LLM 输出，统计标记遵循指标。
 
-    注意：只评估"首次 LLM 输出"的标记质量（不做 P2 修正重试），
+    注意：只评估"首次 LLM 输出"的标记质量（不做修正闭环重试），
     因此指标反映的是 prompt 引导质量本身。
     """
     from .llm_client import _is_truncated, ask_llm
@@ -58,7 +58,7 @@ def evaluate_compliance(questions: list, *, max_corrections: int = 1) -> dict:
         stats["tags"] += len(tags)
         stats["valid"] += len(valid)
         stats["invalid"] += len(invalid)
-        # 化学正确率维度（T2-5）：原因带「化学校验：」前缀的非法标记子集
+        # 化学正确率维度：原因带「化学校验：」前缀的非法标记子集
         stats["chem_invalid"] += sum(
             1 for r in invalid if r.reason.startswith("化学校验："))
 
@@ -125,7 +125,7 @@ def evaluate_route(questions: list, max_corrections: int = 2) -> dict:
     （prompt 基线，不含修正闭环）；本函数测真实管线的最终结果，回答的是
     "修正闭环把哪些题救回来了、还剩多少降级"。
 
-    > 20260830 重构：**模型路由已删除**（整个服务只用一个模型），因此不再有
+    > 模型路由已删除（整个服务只用一个模型），因此不再有
     > `upgrade_triggered` / `keyword_direct` 维度；降级发生在同一模型内部
     > （思考档位逐级下降），评估口径相应简化为"是否仍降级 / 是否仍失败"。
 
@@ -232,8 +232,7 @@ def format_route_detail(stats: dict, output_limit: int = 300) -> str:
         for j, raw in enumerate(raw_list):
             shown = raw if len(raw) <= output_limit \
                 else raw[:output_limit] + "…"
-            tag = "主模型" if j == 0 else f"阶段 {j}"
-            lines.append(f"    原始输出（{tag}，渲染前）：\n{_indent(shown)}")
+            lines.append(f"    原始输出（主模型，渲染前）：\n{_indent(shown)}")
     return "\n".join(lines)
 
 

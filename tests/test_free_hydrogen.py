@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""游离氢组分（[H+] 质子 / [H] 氢自由基 / [H-] 氢负离子）渲染测试。
+"""tests/test_free_hydrogen.py — 游离氢组分（[H+] 质子 / [H] 氢自由基 / [H-] 氢负离子）渲染测试。
 
-策略（20260808 起）：孤立 H 是合法组分，prepare_mol 保留并正常绘制
+策略：孤立 H 是合法组分，prepare_mol 保留并正常绘制
 （[H+] 电荷圈、[H] 单电子点、[H-] 电荷圈 + 孤对电子），水仍写 O。
 
 运行: python -m pytest tests/test_free_hydrogen.py -v

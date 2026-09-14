@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""P2 渲染反馈闭环测试：渲染/校验失败时回传 LLM 自动修正。
+"""tests/test_correction.py — 渲染反馈闭环测试：渲染/校验失败时回传 LLM 自动修正。
 
 验证四个行为：
 1. 无失败不触发重试（ask_llm 仅调用 1 次）；
@@ -195,7 +195,7 @@ def test_diagnostics_resolved_after_correction(fake_rdkit, fake_renderers,
 
 
 def test_translate_name_uses_user_model(monkeypatch):
-    """★ 20260830 实测病例回归：辅助调用（中文化学名→英文翻译）**必须用用户的模型**。
+    """★ 实测病例回归：辅助调用（中文化学名→英文翻译）**必须用用户的模型**。
 
     病例：网页填 `deepseek-flash`，但日志里出现 `.env` 的 `gemini-3.7-flash`
     ——根因是 `_build_correction_prompt → _fetch_pubchem_references →
@@ -322,7 +322,7 @@ def test_correction_prompt_chem_guidance():
 
 
 def test_correction_prompt_invalid_smiles_guidance():
-    """无效 SMILES 时修正 prompt 给出具体改法（20260821 更新：配离子
+    """无效 SMILES 时修正 prompt 给出具体改法（配离子
     走分子式轨道——[Ag(NH3)2]+ 直写合法，不再建议拆分组分）。"""
     from core.tag_parser import parse_tags
     from core.tag_validator import validate_tag
@@ -381,7 +381,7 @@ def test_retry_succeeds_after_smiles_fix(fake_rdkit, fake_renderers,
     assert "无法渲染" not in result                # 无降级提示
 
 
-# ---------- 单模型：不再有"升级/回退模型"路由（20260830 重构） ----------
+# ---------------------------------------------------------------- 单模型：不再有"升级/回退模型"路由
 
 def test_single_model_used_for_all_calls(fake_rdkit, fake_renderers, base_env,
                                          no_aux_calls, monkeypatch):
@@ -404,7 +404,7 @@ def test_single_model_used_for_all_calls(fake_rdkit, fake_renderers, base_env,
 
 def test_mechanism_question_does_not_switch_model(fake_rdkit, fake_renderers,
                                                   base_env, monkeypatch):
-    """★ 20260830 用户病例回归：机理题**不得**被换成另一个模型。
+    """★ 用户病例回归：机理题**不得**被换成另一个模型。
 
     旧实现里"机理"命中关键词路由 → 把 .env 的升级模型发到上游
     （用户既未授权、也可能无权访问该模型名）。单模型后必须彻底消失。
@@ -461,7 +461,7 @@ def test_main_generation_uses_call_site_max_tokens(fake_rdkit, fake_renderers,
 
 def test_p3_escape_still_works_single_model(fake_rdkit, fake_renderers,
                                             monkeypatch):
-    """单模型下 P3 逃生仍生效：同错误重犯 → 不再烧满修正轮次。"""
+    """单模型下逃生仍生效：同错误重犯 → 不再烧满修正轮次。"""
     calls = []
     answers = [
         "苯是 [STRUCT:XYZABC]。",       # 首跑失败
@@ -479,7 +479,7 @@ def test_p3_escape_still_works_single_model(fake_rdkit, fake_renderers,
 
 def test_correction_continues_on_new_error(fake_rdkit, fake_renderers,
                                            monkeypatch):
-    """修正后失败原因**变化**（fingerprint 不同）→ 不触发 P3，继续修正救回。"""
+    """修正后失败原因**变化**（fingerprint 不同）→ 不触发逃生，继续修正救回。"""
     calls = []
     answers = [
         "苯是 [STRUCT:XYZABC]。",      # 首跑失败
@@ -512,7 +512,7 @@ def test_unresolved_failure_diagnostics_single_stage(fake_rdkit,
     assert all(d["resolved"] is False for d in diag if d.get("type") != "NOTICE")
 
 
-# ---------- 思考档位被静默改写时的诚实上报（§4.5.5） ----------
+# ---------------------------------------------------------------- 思考档位被静默改写时的诚实上报（§4.5.5）
 
 def test_effort_notice_appended_once(fake_rdkit, fake_renderers, monkeypatch):
     """端点强制思考时：回答末尾追加一次提示，且同会话不重复。"""
@@ -545,7 +545,7 @@ def test_no_notice_when_not_downgraded(fake_rdkit, fake_renderers, monkeypatch):
     assert "无法关闭" not in r
 
 
-# ---------- 部分降级：COMPOSITE 仅 MECHARROW 报错时剔除箭头保留分子 ----------
+# ---------------------------------------------------------------- 部分降级：COMPOSITE 仅 MECHARROW 报错时剔除箭头保留分子
 
 _BAD_MECH_COMPOSITE = (
     "[COMPOSITE:reaction]"
@@ -614,7 +614,7 @@ def test_non_mecharrow_still_whole_degrade(monkeypatch):
 
 
 def test_autofix_endpoint_skips_llm_correction(monkeypatch):
-    """P1 端到端：唯一候选端点自动修复——主生成后直接渲染，零修正调用。"""
+    """端到端：唯一候选端点自动修复——主生成后直接渲染，零修正调用。"""
     pytest.importorskip("rdkit")
     calls = []
     bad_tag = ("[COMPOSITE:reaction]"
@@ -632,7 +632,7 @@ def test_autofix_endpoint_skips_llm_correction(monkeypatch):
 
 
 def test_correction_prompt_dynamic_sections():
-    """P2：修正要求按失败类型裁剪——mech 失败只给端点指引，不掺守恒讲座。"""
+    """修正要求按失败类型裁剪——mech 失败只给端点指引，不掺守恒讲座。"""
     pytest.importorskip("rdkit")
     from core.tag_parser import parse_tags
     from core.tag_validator import validate_tag
@@ -648,7 +648,7 @@ def test_correction_prompt_dynamic_sections():
 
 
 def test_patch_rejects_unrelated_rewrite():
-    """G2 身份闸门（20260906，Q10 病例）：修正输出是"另一个图"（类型不同或
+    """身份闸门：修正输出是"另一个图"（类型不同或
     id/label 零交集）→ 拒绝该处替换——替换等于删除原图（删内容保合法）；
     同身份修正（保留 id/label）正常替换。"""
     from app import _apply_patch_corrections
@@ -673,7 +673,7 @@ def test_patch_rejects_unrelated_rewrite():
 
 def test_correction_content_loss_flagged(fake_rdkit, fake_renderers,
                                          monkeypatch):
-    """G2 内容完整性对账（20260906，Q10 病例）：修正/重写把标记改没了
+    """内容完整性对账：修正/重写把标记改没了
     （校验全过但内容缺失）→ 按未解决记账 + 回答末尾显式提示，不允许
     "删内容保合法"无声通过。"""
     monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
@@ -707,12 +707,12 @@ def test_correction_no_loss_no_note(fake_rdkit, fake_renderers, monkeypatch):
 
 
 def test_correction_prompt_special_species_guidance():
-    """G5（20260906，Q15/Q14 病例）：无效 SMILES 失败时修正 prompt 附特殊
+    """无效 SMILES 失败时修正 prompt 附特殊
     物种写法词典（酰基正离子 C[C+]=O / sp2 碳负离子 [CH-] / 氧鎓显式 H）；
     离子+自由基簿记冲突（other 类）单独注入 [CH-] 写法。"""
     from core.tag_parser import parse_tags
     from core.tag_validator import validate_tag
-    # 酰基正离子病例（Q15）：CC(=O)[Cl-] 无效 SMILES
+    # 酰基正离子病例：CC(=O)[Cl-] 无效 SMILES
     text = ("[COMPOSITE:reaction][STRUCT:CC(=O)Cl,id=ac]"
             "[ARROW:type=single][STRUCT:CC(=O)[Cl-],id=acy][/COMPOSITE]")
     tag = parse_tags(text)[0]
@@ -733,7 +733,7 @@ def test_correction_prompt_special_species_guidance():
 
 
 def test_autofix_stereo_skips_llm_correction(monkeypatch):
-    """立体枚举修正端到端（20260906，Q1 病例）：CIP 写反 → 自动修正后直接
+    """立体枚举修正端到端：CIP 写反 → 自动修正后直接
     渲染，零 LLM 修正调用。"""
     pytest.importorskip("rdkit")
     calls = []
@@ -748,7 +748,7 @@ def test_autofix_stereo_skips_llm_correction(monkeypatch):
 
 
 def test_autofix_balance_gap_skips_llm_correction(monkeypatch):
-    """守恒缺口自动补足端到端（20260906，Q5 病例）：漏写 Na+ 反离子 →
+    """守恒缺口自动补足端到端：漏写 Na+ 反离子 →
     自动补齐后直接渲染，零 LLM 修正调用。"""
     pytest.importorskip("rdkit")
     calls = []

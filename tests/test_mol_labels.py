@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""原子标签单元测试：水 H₂O 特例 + 标签方向翻转（Drawbacks 第 6 条）。
+"""tests/test_mol_labels.py — 原子标签单元测试：水 H₂O 特例 + 标签方向翻转（Drawbacks 第 6 条）。
 
 替代端到端视觉验证：直接测 atom_label/atom_main_label 的标签文本
 与 _label_flip_for 的方向判定，保证：
@@ -22,7 +22,7 @@ def _atom(mol, sym):
     return next(a for a in mol.GetAtoms() if a.GetSymbol() == sym)
 
 
-# ---------------- 水 H₂O 特例 ----------------
+# ---------------------------------------------------------------- 水 H₂O 特例
 
 def test_water_label_is_h2o():
     mol = prepare_mol("O")
@@ -56,7 +56,7 @@ def test_group_abbrev_label():
 
 
 def test_group_abbrev_numbered_and_prime():
-    """R/X 编号转下标（R1 → R$_1$）与 R 撇号（R'）标签（20260815）。"""
+    """R/X 编号转下标（R1 → R$_1$）与 R 撇号（R'）标签。"""
     from renderers.mol_primitives import prepare_mol as _pm
     mol = _pm("R1-Br")
     assert [atom_label(a) for a in mol.GetAtoms()] == ["R$_1$", "Br"]
@@ -84,7 +84,7 @@ def test_alcohol_oh_not_h2o():
     assert atom_main_label(o) == "OH"        # 醇羟基保持 OH
 
 
-# ---------------- 标签方向翻转 ----------------
+# ---------------------------------------------------------------- 标签方向翻转
 
 def test_flip_argument_oh_to_ho():
     mol = prepare_mol("CCO")
@@ -130,7 +130,7 @@ def test_flip_multi_heavy_neighbor():
     assert not _label_flip_for(mol, o.GetIdx())
 
 
-# ---------------- 综合：scope 输出含翻转标签 ----------------
+# ---------------------------------------------------------------- 综合：scope 输出含翻转标签
 
 def test_scope_flips_label():
     """键从右侧连 O 时，molecule_scope_lines 输出含 HO 标签。"""
@@ -186,7 +186,7 @@ def test_is_formula_label():
     assert is_formula_label("CH3Cl")
     assert is_formula_label("OH-")
     assert is_formula_label("ClH")
-    # 系数前缀（模型误写进 label，que_test7 图 17 的 "2 Cl·"）→ True
+    # 系数前缀（模型误写进 label，如 "2 Cl·"）→ True
     assert is_formula_label("2 Cl·")
     assert is_formula_label("1/2 O2")
     assert is_formula_label("3NH3")

@@ -2,7 +2,7 @@
 """app.py — 主入口：LLM → 标记解析 → 校验 → 渲染 → 注入 的端到端管线。
 
 process_question(user_question) 是核心编排函数，FastAPI 适配层
-（api.py）在此基础上包装 /chat/completions 端点。
+（api.py）在此基础上包装 /v1/chat/completions 端点。
 """
 
 import re
@@ -23,7 +23,7 @@ from renderers.registry import RENDERER_REGISTRY, render_tag
 # 渲染器失败串的统一前缀（各渲染器内部约定："（XX渲染失败：原因）"）
 _RENDER_ERROR_PREFIX = "（"
 
-# 失败 fingerprint 数字归一化（P3 逃生：同批错误跨轮比对）
+# 失败 fingerprint 数字归一化（逃生：同批错误跨轮比对）
 _FP_DIGITS_RE = re.compile(r"\d+")
 
 # 非化合物名的角色/流程 label（过滤：不作为 PubChem 查询依据）
@@ -151,7 +151,7 @@ def _translate_name_zh2en(name: str, model: str = None) -> str | None:
 
     ★ `user_scoped=True`：这是**用户请求作用域内**的调用，因此**绝不能**回退到
     服务器 `.env` 的模型——否则网页用户填了 A 模型，翻译却用服务器的 B 模型
-    （既未授权、也可能无权访问）。20260830 实测病例：网页填 deepseek-flash，
+    （既未授权、也可能无权访问）。实测病例：网页填 deepseek-flash，
     日志却出现 `.env` 的 gemini-3.7-flash，根因就是这条链漏传 model。
     """
     if not name or not isinstance(name, str):
@@ -254,7 +254,7 @@ _CLASS_LABELS = {"mech": "机理箭头", "balance": "守恒",
                  "smiles": "SMILES", "other": "其他"}
 
 
-# 手术式箭头重写（20260827 两阶段回放实验驱动）：纯机理箭头类失败
+# 手术式箭头重写（两阶段回放实验驱动）：纯机理箭头类失败
 # （编号/方向/配对）时，给 LLM"固定骨架 + 原子编号地图"单独补写箭头——
 # 查表代替数编号（实验 5 个箭头类案例 15/15 通过）；STRUCT 化学/守恒级
 # 错误骨架不可信，地图无意义（对照组实测），仍走原全量部分修正。
@@ -329,10 +329,10 @@ def _rewrite_composite_arrows(user_question: str, full_text: str, tag,
     COMPOSITE、未补箭头或重写块校验不过均返回 None（调用方回退常规
     修正路径）。专用系统提示见 prompts/mech_arrow_prompt.txt（每根
     箭头独立标记、碱夺 H 终点写 H 原子序号、无显式 H 先改写 STRUCT
-    ——均为 20260827 回放实验实测教训）。
+    ——均为回放实验实测教训）。
 
     err：本轮校验失败原因。电子流模拟类失败（含"电子流模拟"）时把模拟
-    结论注入 prompt（P2）——模拟消息不含错误箭头原文（不锚定），且
+    结论注入 prompt——模拟消息不含错误箭头原文（不锚定），且
     携带推得的实际结构/超价定位，是最强的重写引导。
     """
     maps = build_component_atom_maps(tag)
@@ -368,7 +368,7 @@ def _rewrite_composite_arrows(user_question: str, full_text: str, tag,
     return candidates[0].raw
 
 
-# 手术式结构重写（20260828，与箭头重写同一思想）：SMILES/label 级错误走
+# 手术式结构重写（与箭头重写同一思想）：SMILES/label 级错误走
 # "去锚定微任务"——只给名称/约束/上下文、不给错误答案（回放实验：带错误
 # 答案的修正反复振荡，fresh 生成 15/15）。守恒等多物种错误不在此列
 # （那不是单个 SMILES 写错，是物种取舍问题）。
@@ -461,12 +461,12 @@ def _rewrite_struct_smiles(user_question: str, full_text: str, tag, err: str,
 
 def _build_correction_prompt(user_question: str, original: str,
                              failures: list, model: str = None) -> str:
-    """构造 P2 修正 prompt：失败标记清单（含上下文）+ 修正要求。
+    """构造修正 prompt：失败标记清单（含上下文）+ 修正要求。
 
     部分修正模式：模型**只输出修正后的标记**（不重输出整个回答），
     process_question 用修正标记替换原文对应位置后重新校验/渲染——
     相比"全篇重生成"大幅节省 token 且修正更聚焦。
-    修正要求按失败类型动态裁剪（20260821 P2），风格对齐 system_prompt：
+    修正要求按失败类型动态裁剪，风格对齐 system_prompt：
     简洁、明确、无与本次失败无关的语句。
 
     failures: [(RenderTag, 失败原因字符串), ...]。
@@ -489,7 +489,7 @@ def _build_correction_prompt(user_question: str, original: str,
         if ctx:
             lines.append(f"  上下文：{ctx}")
         # COMPOSITE 失败附组件原子编号地图：修正端点引用时照表查，
-        # 不让模型自己数编号（20260827 回放实验：编号错误占失败大头）
+        # 不让模型自己数编号（回放实验：编号错误占失败大头）
         if tag.type == "COMPOSITE":
             maps = build_component_atom_maps(tag)
             if maps:
@@ -535,7 +535,7 @@ def _build_correction_prompt(user_question: str, original: str,
             "（[K+].[O-][Mn](=O)(=O)=O）；含氧酸根中心原子带足双键氧"
             "（H2SO4=OS(=O)(=O)O、HNO3=[O-][N+](=O)O、硝基=R[N+](=O)[O-]）；"
             "氨写 [NH3] 或 N；写不出的物种省略或文字描述。")
-        # G5（20260906，Q15/Q14 病例）：特殊物种写法规则——校验器只报
+        # 特殊物种写法规则——校验器只报
         # "无效 SMILES"不教写法，实测 LLM 三轮原地重犯；给通式+构造法则
         # （不给单一答案——照抄示例会抄错碳数）
         reqs.append(
@@ -567,7 +567,7 @@ def _tag_identity_tokens(raw: str) -> set:
 
 
 def _tag_inventory(text: str) -> dict:
-    """文本中标记的类型计数（G2 内容完整性对账用）。
+    """文本中标记的类型计数（内容完整性对账用）。
     REASONING 不计——注入时本就剥离，不属用户可见内容。"""
     counts = {}
     for t in parse_tags(text):
@@ -585,7 +585,7 @@ def _apply_patch_corrections(original: str, failures: list,
     返回替换后的完整文本；修正输出解析不出标记、或原文中找不到对应标记
     时返回 None（调用方保留原文，继续下一轮或降级）。
 
-    G2 身份闸门（20260906，Q10 病例）：修正标记与原标记**类型不同**、或
+    身份闸门：修正标记与原标记**类型不同**、或
     身份令牌（id/label）**零交集**时拒绝该处替换——LLM 答非所问（重写
     了别的图）会把题目要求的内容替换没（"删内容保合法"）；拒绝替换后原
     标记留在原文走降级，内容缺失对用户可见。
@@ -650,8 +650,8 @@ def process_question(user_question: str, max_corrections: int = 2,
                      effort: str = None, max_tokens: int = None) -> str:
     """端到端处理用户问题，返回含渲染后图示代码的文本。
 
-    流程：LLM 生成 → 解析标记 → 契约校验（P1）→ 逐标记渲染 → 注入替换。
-    P2 渲染反馈闭环：首次渲染若有失败（校验拦截 / 渲染器失败），携带失败
+    流程：LLM 生成 → 解析标记 → 契约校验 → 逐标记渲染 → 注入替换。
+    渲染反馈闭环：首次渲染若有失败（校验拦截 / 渲染器失败），携带失败
     清单回传 LLM 自动修正（最多 max_corrections 次），修正版重新走管线；
     仍失败则降级（校验失败标记 → 友好提示，渲染失败标记 → 渲染器错误串）。
 
@@ -665,8 +665,8 @@ def process_question(user_question: str, max_corrections: int = 2,
         `effort_effective` / `notice`，并把提示追加到回答末尾（§4.5.5）。
 
     history: 多轮对话历史（透传给 ask_llm，见 core.llm_client）。
-    progress_callback: 可选，LLM 每段生成内容实时回调（B2 流式转发草稿）。
-    correction_callback: 可选，P2 修正触发时回调（无参），前端据此提示
+    progress_callback: 可选，LLM 每段生成内容实时回调（流式转发草稿）。
+    correction_callback: 可选，修正触发时回调（无参），前端据此提示
         "正在修正回答…"；修正等辅助调用走"尽量关思考"（机械性任务，
         思考链收益小、延迟高）。
     diagnostics: 可选 list，调用方传入后**每一轮校验/渲染失败**（含修正机会
@@ -693,7 +693,7 @@ def _generate_with_corrections(user_question: str, model=None,
                                responses: list = None,
                                thinking: str = None, effort: str = None,
                                max_tokens: int = None) -> str:
-    """单模型生成 + P2 修正闭环；末尾统一追加"档位被静默改写"的提示（§4.5.5）。"""
+    """单模型生成 + 修正闭环；末尾统一追加"档位被静默改写"的提示（§4.5.5）。"""
     text, notice = _generate_inner(
         user_question, model=model, max_corrections=max_corrections,
         history=history, progress_callback=progress_callback,
@@ -794,9 +794,9 @@ def _generate_inner(user_question: str, model=None,
               if getattr(res, "downgraded", False) else notice)
     full_response = (res.text if hasattr(res, "text") else res) or ""
 
-    prev_fps = None   # 上一轮失败 fingerprint（P3 逃生比对）
+    prev_fps = None   # 上一轮失败 fingerprint（逃生比对）
     surgical_tried = set()  # 已尝试过手术式箭头重写的标记原文（每标记只试一次）
-    baseline_counts = None  # 首跑输出的标记清单（G2 内容完整性基线）
+    baseline_counts = None  # 首跑输出的标记清单（内容完整性基线）
     for attempt in range(max_corrections + 1):
         # 2. 解析标记
         tags = parse_tags(full_response)
@@ -807,10 +807,10 @@ def _generate_inner(user_question: str, model=None,
         if attempt == 0:
             baseline_counts = _tag_inventory(full_response)
 
-        # 2.5 标记契约校验（P1）：渲染前拦截坏参数（非法 SMILES / 越界引用 /
+        # 2.5 标记契约校验：渲染前拦截坏参数（非法 SMILES / 越界引用 /
         #    超长 label / 格式错误），降级为友好提示，坏参数不进渲染器
         valid_tags, invalid = validate_tags(tags)
-        # 2.6 确定性自动修复（20260821 P1，不经 LLM）：MECHARROW 键端点
+        # 2.6 确定性自动修复（不经 LLM）：MECHARROW 键端点
         #    "唯一候选"改写——逐标记修复并单标记重校验，全部校验规则
         #    （含化学配对）通过才替换进原文
         if invalid:
@@ -818,12 +818,12 @@ def _generate_inner(user_question: str, model=None,
             for r in invalid:
                 fix = autofix_mech_bond_endpoint(r.tag)
                 if fix is None:
-                    # 立体指定枚举修正（20260906，Q1 病例：CIP/顺反不符时
+                    # 立体指定枚举修正（CIP/顺反不符时
                     # 枚举 @ 组合/翻转方向键，不经 LLM——模型不会做
                     # "声称构型→@ 组合"的反向映射，修正三轮都救不回）
                     fix = autofix_stereo_label(r.tag)
                 if fix is None and "不守恒" in (r.reason or ""):
-                    # 守恒缺口确定性补足（20260906，Q5/Q13 类：旁观离子/水
+                    # 守恒缺口确定性补足（旁观离子/水
                     # 漏写的机械性缺口，修正环实测振荡多轮）
                     fix = autofix_balance_gap(r.tag, r.reason)
                 if fix is None or r.tag.raw not in full_response:
@@ -879,12 +879,12 @@ def _generate_inner(user_question: str, model=None,
             else:
                 rendered[tag.raw] = out
 
-        # 3.5 P2 渲染反馈闭环：有失败（校验拦截或渲染失败）且还有修正机会
+        # 3.5 渲染反馈闭环：有失败（校验拦截或渲染失败）且还有修正机会
         #     → 回传 LLM 部分修正（只重写失败标记，不重输出全文）；同时把
         #     每一轮失败记入 diagnostics（含最后一轮——供后端日志/质量分析，
         #     前端只展示注入的友好降级文本）
         problems = [(r.tag, r.reason) for r in invalid] + failures
-        # P3 逃生锚点（20260821）：错误 fingerprint（类型+原因，数字归一化）
+        # 逃生锚点：错误 fingerprint（类型+原因，数字归一化）
         # 与上一轮完全相同 = LLM 修正无进展（同一错误反复犯）——不再消耗
         # 修正轮次，直接走降级
         fps = sorted(f"{t.type}:{_FP_DIGITS_RE.sub('N', e)}"
@@ -916,7 +916,7 @@ def _generate_inner(user_question: str, model=None,
                 print(f"[process_question] 失败原因与上一轮完全相同，"
                       f"LLM 修正无进展——跳过剩余修正轮次，直接降级")
             else:
-                # 手术式重写（20260827 箭头 / 20260828 结构）：逐失败标记
+                # 手术式重写（箭头 / 结构）：逐失败标记
                 # 分流——纯机理箭头错走"骨架+原子地图"重写，SMILES/label 级
                 # 错走"去锚定微任务"重写；均不依赖错误答案原文。任一成功即
                 # 重解析重校验；不在手术范围的（守恒/格式等）或重写失败的
@@ -936,7 +936,7 @@ def _generate_inner(user_question: str, model=None,
                         # 错侧判定证据序（§16.3）：①确定性 diff 反推（箭头类
                         # 失败 = 产物已过独立检查、可信，免 LLM）→ ②手术重写
                         # （带模拟结论）→ ③仅当失败是"模拟不一致"且修箭头不
-                        # 收敛才翻转产物（Q17 类被模式规则拦截的产物是对的，
+                        # 收敛才翻转产物（被模式规则拦截的产物是对的，
                         # 不可翻转——翻转门只认模拟口径）
                         new_raw = _try_diff_autofix(t)
                         if new_raw is None:
@@ -997,7 +997,7 @@ def _generate_inner(user_question: str, model=None,
         if responses is not None:
             responses.append(full_response)  # 最终采用的原始标记文本
         result_text = inject_tags_into_text(full_response, tags, rendered)
-        # G2 内容完整性对账（20260906，Q10 病例）：修正/重写后标记总数少于
+        # 内容完整性对账：修正/重写后标记总数少于
         # 首跑输出 = 内容被删（"删内容保合法"）——按未解决记账，并在回答
         # 末尾显式告知，不允许无声通过
         if baseline_counts:

@@ -64,7 +64,7 @@ def _composite_trace(tag) -> tuple:
     if layout == "reaction":
         checks.append(("reaction 守恒",
                        _check_reaction_sequence(children, comps)))
-    # 电子流模拟（P1）：机理箭头能否推出声明产物；失败时附操作日志
+    # 电子流模拟：机理箭头能否推出声明产物；失败时附操作日志
     from core.electron_sim import verify_composite_electron_flow
     sim_reason, sim_trace = verify_composite_electron_flow(
         children, comps, comp_mols)

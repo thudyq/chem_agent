@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""core/tag_validator.py — 标记契约校验层（P1）。
+"""core/tag_validator.py — 标记契约校验层。
 
 在 parse_tags 之后、渲染之前统一校验标记参数，坏参数不再进入渲染器：
 
@@ -22,7 +22,9 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import List, Tuple
 
-from .tag_parser import MECH_ARROW_RE as _MECH_ARROW_RE, REAL_ELEMENTS as _REAL_ELEMENTS, RenderTag
+from .tag_parser import (MECH_ARROW_RE as _MECH_ARROW_RE,
+                         REAL_ELEMENTS as _REAL_ELEMENTS,
+                         STRUCT_MODES as _STRUCT_MODES, RenderTag)
 
 # rdkit 可用性探测：缺失时跳过 SMILES / 原子数语义校验（渲染器内部会兜底）
 try:
@@ -42,13 +44,13 @@ def _parse_mol(smiles: str):
     """Chem.MolFromSmiles 局部包装：游离氢组分（合法）的无害警告静默。
     保持经本模块命名空间调用 Chem（fake_rdkit fixture 可替换）。
 
-    **20260821：显式 H 保留解析**——XH 并入 STRUCT 后显式 H 是真实原子
+    **显式 H 保留解析**——XH 并入 STRUCT 后显式 H 是真实原子
     参与编号（如 C([H])([H])([H])[H] 的 1~4 号），校验必须与渲染端
     prepare_mol 同口径（sanitize=False + UpdatePropertyCache，保留显式 H
     原子），否则 atom_counts 少算 H、MECHARROW/HBOND/NEWMAN 序号全偏。
     fake_rdkit（MolFromSmiles 单参 lambda）或解析异常时回退默认解析。
 
-    校验是**探测性解析**（非法 SMILES 是常态输入，P1 要拦截并提示），
+    校验是**探测性解析**（非法 SMILES 是常态输入，要拦截并提示），
     失败时的 RDKit 日志（SMILES Parse Error / Explicit valence 超限）对
     用户与日志都无价值——统一屏蔽 rdApp.error，避免终端被噪音刷屏
     （Drawbacks 九 C-1：O 价态 4 超限的 Explicit valence 日志）。
@@ -56,7 +58,7 @@ def _parse_mol(smiles: str):
     H 数字前缀写法（[H3O+]）先经 normalize_h_prefix_smiles 规范化为
     合法 SMILES（[OH3+]）再解析；通用基团缩写（R/X/Ph/Ac 等）经
     expand_group_abbrevs 替换为 dummy 原子（[*:n]）后解析
-    （20260815：化学式习惯误写与通用基团占位放行）。
+    （化学式习惯误写与通用基团占位放行）。
     """
     if normalize_h_prefix_smiles is not None:
         smiles = normalize_h_prefix_smiles(smiles)
@@ -153,7 +155,7 @@ def tag_name(tag_type: str) -> str:
 def _smiles_ok(smiles: str) -> bool:
     """SMILES 语义校验；rdkit 不可用时放行（格式校验已做）。
 
-    20260821：配离子分子式（[Ag(NH3)2]+ 等，非 SMILES 但走分子式文本
+    配离子分子式（[Ag(NH3)2]+ 等，非 SMILES 但走分子式文本
     通道）同样放行——渲染层按 textcomps 画文本节点。
     """
     if not _RDKIT_OK:
@@ -175,11 +177,7 @@ def _label_ok(label) -> Tuple[bool, str]:
     return True, ""
 
 
-# ---------------------------------------------------------------------------
-# 化学校验（T2）：原子守恒（T2-3）。
-# 失败原因统一以「化学校验：」前缀，metrics 据此统计化学正确率维度。
-# 均为 best-effort：元素计数无法计算（rdkit 缺失/fake mol）时跳过不放行误判。
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------- 化学校验：原子守恒。 失败原因统一以「化学校验：」前缀，metrics 据此统计化学正确率维度。 均为 best-effort：元素计数无法计算（rdkit 缺失/fake mol）时跳过不放行误判。
 
 _CHEM_PREFIX = "化学校验："
 
@@ -279,7 +277,7 @@ def _formula_or_smiles_counts(token: str):
         mol = _parse_mol(token)
     if mol is not None:
         return _mol_counts(mol)
-    # 配离子分子式（[Ag(NH3)2]+ 等，20260821 走分子式文本通道）
+    # 配离子分子式（[Ag(NH3)2]+ 等，走分子式文本通道）
     cion = _parse_complex_ion(token)
     if cion is not None:
         return cion
@@ -424,7 +422,7 @@ _BALANCE_METALS = ("Na", "K", "Li", "Mg", "Ca")
 
 def _balance_guidance(left_counts: dict, right_counts: dict,
                       left_q: int, right_q: int) -> str:
-    """守恒失败的场景化修正指引（20260906，G6：Q5 病例——右侧漏写 Na⁺
+    """守恒失败的场景化修正指引（右侧漏写 Na⁺
     反离子时，通用指引"辅助试剂请写入箭头条件"反而诱导删物种、三轮振荡）。
 
     按差额元素分类：缺金属阳离子且该侧有净负电荷 → 指引补反离子；
@@ -456,7 +454,7 @@ def _balance_guidance(left_counts: dict, right_counts: dict,
             "而非省略主物种")
 
 
-# 箭头类型（大一统架构，20260819）：single=正向 → / reversible=可逆 ⇌ /
+# 箭头类型：single=正向 → / reversible=可逆 ⇌ /
 # resonance=共振 ↔ / retro=逆合成 ⇒
 _ARROW_TYPES = ("single", "reversible", "resonance", "retro")
 
@@ -482,7 +480,7 @@ def _explicit_h_heavy(mol, idx: int):
 
 def _check_proton_transfer_pairing(mech_children: list, comp_mols: dict,
                                    comps: dict) -> str:
-    """质子转移配对校验（20260820 基线驱动，化学复审 4b）。
+    """质子转移配对校验（基线驱动）。
 
     双电子 MECHARROW 引用显式 H 时必须画全配对（§五 规则 7/10）：
     - Case A：终点为显式 H（碱夺 H）→ 需同组件配套箭头：X—H 键中点 → X
@@ -514,7 +512,7 @@ def _check_proton_transfer_pairing(mech_children: list, comp_mols: dict,
             if heavy is not None:
                 bond_pats = {f"{heavy}-{dst_pt}", f"{dst_pt}-{heavy}"}
                 # 配对终点合法集：落回重原子 X（羟醛式脱质子）；若 X 与形式
-                # +1 碳相邻（E1 碳正离子 / EAS σ 络合物，20260827 推广），
+                # +1 碳相邻（E1 碳正离子 / EAS σ 络合物），
                 # 则落向 X—C+ 键（形成 π 键）同样是合法配对——与
                 # _check_elimination_pi_target / _check_eas_rearomatization
                 # 的终点要求保持一致，避免两规则矛盾
@@ -561,11 +559,11 @@ def _check_proton_transfer_pairing(mech_children: list, comp_mols: dict,
 
 
 def _check_eas_rearomatization(mech_children: list, comp_mols: dict) -> str:
-    """EAS σ 络合物脱质子方向校验（20260827，que_test_retry Q17 病例）。
+    """EAS σ 络合物脱质子方向校验。
 
     σ 络合物（环己二烯正离子）脱质子恢复芳香性时，C—H 键电子必须落向
     "sp3 碳与环上 C+ 之间的键"（形成 π 键，canonical 写法
-    sigma:3-4>sigma:3-9）。que_test_retry Q17 实测漏网错误：LLM 写成
+    sigma:3-4>sigma:3-9）。实测漏网错误：LLM 写成
     sigma:1-2>sigma:1（电子落回单个碳 = 碳负离子，不恢复芳香性）外加
     sigma:7-1>sigma:7（从闭环键出发断键 = 环被拆开），文字正确图错误。
 
@@ -633,7 +631,7 @@ def _ch_cation_pairs(mol):
 
 
 def _check_elimination_pi_target(mech_children: list, comp_mols: dict) -> str:
-    """消除成 π 键的方向校验（20260827，EAS σ 规则向普通双键推广——
+    """消除成 π 键的方向校验（EAS σ 规则向普通双键推广——
     用户 E1 实测病例：叔丁基碳正离子脱 β-H 生成异丁烯，C—H 键电子
     终点写成 C 原子，应为 C—C 键）。
 
@@ -712,7 +710,7 @@ def _sigma_complex_signature(mol):
 
 
 def _check_sn2_attack_site(mech_children: list, comp_mols: dict) -> str:
-    """SN2 进攻位点校验（20260820 基线驱动，化学复审 4c）。
+    """SN2 进攻位点校验（基线驱动）。
 
     亲核进攻终点必须是与离去基团相连的 α-碳（基线病例：质子化乙醇
     CC[OH2+] 被攻到 β-碳 0 号而非 α-碳 1 号）。
@@ -807,7 +805,7 @@ def _check_block(block_children: list) -> Tuple[bool, str]:
     """BLOCK 共振块校验：块内仅 STRUCT / ARROW(type=resonance) / MECHARROW。
 
     块 = 共振极限式序列（如 [B1 ↔ B2 ↔ B3]），作为单一复合结构参与外层
-    序列；块内 MECHARROW 表示共振式间电子流向转化（20260820 支持），
+    序列；块内 MECHARROW 表示共振式间电子流向转化，
     其引用存在性与原子范围由外层统一校验（块内组件注册进全局组件表，
     支持跨块混合引用）。
     """
@@ -839,8 +837,8 @@ def _check_block(block_children: list) -> Tuple[bool, str]:
 
 
 def _check_block_resonance_balance(block_children: list) -> str:
-    """BLOCK 内共振式守恒（20260906，G3：Q6 无单电子共振式 / Q14-m2 五元环
-    病例）——resonance 箭头相邻两侧极限式必须同分子式（含 H）+ 同净电荷 +
+    """BLOCK 内共振式守恒——resonance 箭头相邻两侧极限式
+    必须同分子式（含 H）+ 同净电荷 +
     同自由基单电子总数。无法解析的组件（化学式文本组件/dummy 占位）跳过
     （宁漏勿拦）。返回错误原因或 ""。"""
     # 按 ARROW 分段（BLOCK 内禁 PLUS——每段至多 1 个 STRUCT）
@@ -1035,12 +1033,6 @@ def _check_reaction_step(left_items, right_items, arrow, step, comps) -> str:
                            check_charge=True)
 
 
-# STRUCT 绘制模式（分子家族重构，20260818）：与 tag_parser._STRUCT_MODES 一致。
-# skeleton=键线式/结构简式（默认）；lewis=电子式（+孤对）；stereo=楔形式；
-# chair=椅式构象；newman=纽曼投影。
-_STRUCT_MODES = ("skeleton", "lewis", "stereo", "chair", "newman")
-
-
 def _check_newman_angle(angle: str) -> Tuple[bool, str]:
     """NEWMAN 二面角校验（0~360 数字）。"""
     if not angle:
@@ -1116,7 +1108,7 @@ def _check_radical_charge_conflict(mol) -> str:
     奇数电子与电荷共存于同一原子在教学场景必错（[O-]/[NH3+]/[CH2-]）；
     合法自由基离子的电荷与单电子在不同原子上（超氧根 [O-][O]）。
     电荷+2 单电子是缺电子阳离子的 RDKit 簿记（[Br+]/[Cl+] 为 EAS 亲电
-    试剂的形式写法），不拦（20260821 收窄，修复对溴代机理的误伤）。
+    试剂的形式写法），不拦（收窄以避免误伤溴代机理）。
     fake mol（测试 fixture）跳过。
     """
     atoms_fn = getattr(mol, "GetAtoms", None)
@@ -1128,7 +1120,7 @@ def _check_radical_charge_conflict(mol) -> str:
         # 只拦"电荷 + 恰好 1 个单电子"的真矛盾态（[O-]/[NH3+]/[CH2-] 等——
         # 奇数电子与电荷共存于同一原子，教学场景必错）；
         # 电荷 + 2 单电子是缺电子阳离子的 RDKit 簿记（[Br+]/[Cl+] 为 EAS
-        # 亲电试剂的教科书形式写法），放行（20260821 收窄，修复误伤溴代）
+        # 亲电试剂的教科书形式写法），放行（收窄以避免误伤溴代）
         if fc != 0 and nre == 1:
             return (f"原子 {atom.GetIdx()}（{atom.GetSymbol()}）同时带形式电荷 "
                     f"{fc:+d} 与 1 个自由基单电子——同一原子不能既是离子又是"
@@ -1137,7 +1129,7 @@ def _check_radical_charge_conflict(mol) -> str:
 
 
 def check_protonated_label(mol, label: str) -> str:
-    """（20260821，Q4 连续基线失败）label 标「质子化」但 SMILES 中没有
+    """label 标「质子化」但 SMILES 中没有
     带正电的杂原子——典型的 CCOCC 配"质子化乙醚"错写。质子化醇/醚/羰基
     的杂原子带 +1。「去质子化/脱质子化」不含「质子化」标注语义，不触发。
     返回原因串（"" = 通过/不涉及）。replay 工具复用。"""
@@ -1155,7 +1147,7 @@ def check_protonated_label(mol, label: str) -> str:
 
 
 def _check_radical_label(mol, label: str) -> str:
-    """（20260826）label 含「自由基」→ SMILES 必须有且仅有一个原子带
+    """label 含「自由基」→ SMILES 必须有且仅有一个原子带
     恰好 1 个自由基单电子。
 
     - 所有原子都不带单电子（C/CC/O，非自由基）→ 拦截；
@@ -1187,14 +1179,14 @@ def _check_radical_label(mol, label: str) -> str:
     return ""
 
 
-# ---------------------------------------------------------------------------
-# 中文系统命名 label ↔ SMILES 一致性（20260827，用户实测反馈驱动：
+# ----------------------------------------------------------------
+# 中文系统命名 label ↔ SMILES 一致性（用户实测反馈驱动：
 # "标注 2-丁醇但画的是 2-丙醇"、"2-丁醇 SN1 中间体画成 5 碳碳正离子"）
 # 设计原则（用户裁定）：杂原子要求一律"至少"语义（羧酸 ≥2 O，其余同理——
 # 同一物质可带多个官能团，只校下限）；取代基前缀官能团（羟基/氨基/巯基/
 # 硝基/氟氯溴碘，含二/三/四倍数）计入；宁漏勿拦——命名规则复杂的名称
 # （苯系/醚/酯/酐/盐类等）直接跳过不查。
-# ---------------------------------------------------------------------------
+# ----------------------------------------------------------------
 
 _CN_CARBON_NUM = {"甲": 1, "乙": 2, "丙": 3, "丁": 4, "戊": 5,
                   "己": 6, "庚": 7, "辛": 8, "壬": 9, "癸": 10}
@@ -1248,7 +1240,7 @@ def _chinese_name_constraints(label: str):
         c_src = f"{m.group(1)}={c_total}"
         suffix_txt = m.group(2)
         main_start = m.start()
-        # 复合后缀修正（20260906，难题集 Q13 误报病例）：「2-丁烯醛」
+        # 复合后缀修正：「2-丁烯醛」
         # 「顺丁烯二酸」等 烯/炔+杂原子后缀 复合命名，主正则匹配到 烯/炔
         # 即停（"丁烯"），真正的主基团（醛/酸…）被丢 → 烃类误判把好图拦死。
         # 烃类后缀后紧跟杂原子后缀时，改判杂原子后缀（倍数前缀一并转移，
@@ -1267,7 +1259,7 @@ def _chinese_name_constraints(label: str):
         for g in _CN_GROUP_RE.finditer(label):
             if g.start() >= m.start() and g.start() < m.end():
                 continue
-            # 倍数前缀：二甲基=2×甲基、二乙基=2×乙基（20260830 修复：此前漏算倍数）
+            # 倍数前缀：二甲基=2×甲基、二乙基=2×乙基
             mult = _CN_MULT.get(g.group(1), 1)
             sub_c += mult * _CN_CARBON_NUM[g.group(2)]
         if sub_c:
@@ -1304,10 +1296,9 @@ def _chinese_name_constraints(label: str):
         n_prefix += 1
         if p.group(2) in ("氟", "氯", "溴", "碘") and p.start() < main_start:
             halo_in_head = p.group(2)
-    # 环氧/氧化物命名（20260906，难题集 Q9 误报病例）：1,2-环氧丁烷、
-    # 乙基环氧乙烷、丁烯氧化物等名称自带 1 个 O——此前「环氧」不在杂原子
-    # 前缀表中，n_prefix==0 且后缀为烷/烯时触发烃类误判，把正确的环氧化物
-    # 标记拦死（好图被拦）。
+    # 环氧/氧化物命名：1,2-环氧丁烷、
+    # 乙基环氧乙烷、丁烯氧化物等名称自带 1 个 O——若不计入，n_prefix==0
+    # 且后缀为烷/烯时会触发烃类误判，把正确的环氧化物标记拦死（好图被拦）。
     epoxy = "环氧" in label or label.endswith("氧化物")
     if epoxy:
         hetero_min["O"] = hetero_min.get("O", 0) + 1
@@ -1323,7 +1314,7 @@ def _chinese_name_constraints(label: str):
             "suffix": suffix, "topo": topo}
 
 
-# 拓扑约束（20260828，仲丁基 vs 叔丁基实测病例）：前缀 正/仲/叔/异/新 或
+# 拓扑约束（仲丁基 vs 叔丁基实测病例）：前缀 正/仲/叔/异/新 或
 # 位次号编码了"官能团中心碳的碳邻居数"与"骨架分支特征"，可确定性校验
 _CN_HALO_SYM = {"氟": "F", "氯": "Cl", "溴": "Br", "碘": "I"}
 
@@ -1435,7 +1426,7 @@ def _check_chinese_label(mol, label: str) -> str:
         if hetero:
             return (f"{_CHEM_PREFIX}label「{label}」为烃类（{cons['suffix']}），"
                     f"不应含杂原子，实际含 {'、'.join(sorted(hetero))}")
-    # 类型一致性（20260828，区分 基/碳正离子/碳负离子）：label 声明的中心
+    # 类型一致性（区分 基/碳正离子/碳负离子）：label 声明的中心
     # 类型必须在 SMILES 里存在（仲丁基碳正离子画成自由基这类错误）
     if re.search(r"碳?正离子", label) and not any(
             a.GetAtomicNum() == 6 and a.GetFormalCharge() == 1
@@ -1487,12 +1478,12 @@ def _cn_find_center(mol, kind: str):
 
 
 def autofix_balance_gap(tag, reason: str = "") -> tuple | None:
-    """守恒缺口确定性补足（20260906，难题集 Q5/Q13 类——旁观离子/水反复
-    漏写导致修正振荡）：reaction 布局按步核算，缺口为可机械补足的模式时
+    """守恒缺口确定性补足（旁观离子/水反复漏写导致修正振荡）：
+    reaction 布局按步核算，缺口为可机械补足的模式时
     直接补齐，不经 LLM：
 
     - 缺金属反离子（Na/K/Li，缺 1 个）：该侧有且仅有 1 个带负电组分 →
-      反离子写进该组分（`[C-]#C.[Na+]`，Q5 病例）；
+      反离子写进该组分（`[C-]#C.[Na+]`）；
     - 缺一分子水（差额恰为 H±2、O±1）→ 该侧补 `[STRUCT:O,label=水]`
       （缩合/酯化漏写水的高频病例）。
 
@@ -1695,7 +1686,7 @@ def _extract_cistrans_claim(label: str) -> str:
 
 
 def _check_cip_label(mol, label: str) -> str:
-    """CIP 构型与 label 的 R/S 声称交叉核对（20260906，G4：难题集 Q1 病例——
+    """CIP 构型与 label 的 R/S 声称交叉核对（典型病例：
     (2S,3S) 的 SMILES 标「(2R,3S)」放行渲染；@/@@ 由 LLM 凭感觉写，错误高发）。
 
     集合级比对（避开"IUPAC 位次→原子"映射难题）：label 括号内 R/S 描述符的
@@ -1730,7 +1721,7 @@ def _check_cip_label(mol, label: str) -> str:
 
 def _check_cistrans_label(mol, label: str) -> str:
     """顺/反（cis/trans、Z/E）label 与 SMILES 双键立体交叉核对
-    （20260906，G4：难题集 Q3/Q10 类"顺反写反"）。
+    （拦截"顺反写反"类错误）。
 
     跳过面（宁漏勿拦）：label 无顺/反/(Z)/(E) 声称；无立体双键（SMILES
     未写 / \\）或立体双键多于 1 个；双键取代基含杂原子（此时 顺反 与
@@ -1783,8 +1774,8 @@ def _check_cistrans_label(mol, label: str) -> str:
 
 
 def autofix_stereo_label(tag) -> tuple | None:
-    """立体指定确定性自动修正（20260906，难题集 Q1/Q3 病例——模型不会做
-    "声称构型 → @/@@ 组合"的反向映射，校验拦下后三轮都修不对）：
+    """立体指定确定性自动修正（模型不会做"声称构型 → @/@@ 组合"的
+    反向映射，校验拦下后反复修不对）：
 
     label 的 R/S 或顺/反声称与 SMILES 不符时，枚举手性中心 @/@@ 组合
     （或翻转双键方向键 / ↔ \\）找出与声称一致的写法——不经 LLM，
@@ -1874,7 +1865,7 @@ def _validate_struct_args(args: list, attrs: dict = None) -> Tuple[bool, str]:
     """校验单个 STRUCT 参数（顶层或容器内）：SMILES 非空 + label 长度 + 模式参数。
 
     attrs 携带 mode/subs/bond/angle/charge。mode 分派各画法的专项校验；
-    20260821 起 bond/charge 并入 STRUCT 参数（单分子标注，替代顶层
+    bond/charge 并入 STRUCT 参数（单分子标注，替代顶层
     BOND/CHARGE 新写法）：
       - bond=a-b：键突出标注（mode=newman 时仍是投影观察键，语义分派）；
       - charge=idx:+/-列表：部分电荷标注（0:+,3:-）。
@@ -1904,23 +1895,23 @@ def _validate_struct_args(args: list, attrs: dict = None) -> Tuple[bool, str]:
             conflict = _check_radical_charge_conflict(mol)
             if conflict:
                 return False, conflict
-            # 氧鎓一致性（20260821，Q4 连续基线失败）：label 标「质子化」
+            # 氧鎓一致性：label 标「质子化」
             # 但 SMILES 无带正电杂原子——典型的 CCOCC 配"质子化乙醚"错写
             label_text = args[1] if len(args) > 1 else ""
             pro_reason = check_protonated_label(mol, label_text)
             if pro_reason:
                 return False, pro_reason
-            # 自由基一致性（20260826）：label 含「自由基」→ SMILES 必须有且
+            # 自由基一致性：label 含「自由基」→ SMILES 必须有且
             # 仅有一个原子带恰好 1 个自由基单电子
             rad_reason = _check_radical_label(mol, label_text)
             if rad_reason:
                 return False, rad_reason
-            # 中文系统命名一致性（20260827）：label 为可靠中文系统名时，
+            # 中文系统命名一致性：label 为可靠中文系统名时，
             # 碳数精确比对 + 杂原子下限比对（命名复杂的跳过不查）
             cn_reason = _check_chinese_label(mol, label_text)
             if cn_reason:
                 return False, cn_reason
-            # G4（20260906，难题集 Q1/Q3 病例）：CIP 构型与顺反标签的
+            # CIP 构型与顺反标签的
             # 交叉核对——(2R,3S) 的 SMILES 实为 (2S,3S)、顺/反写反均可
             # 确定性拦截（集合级比对，避开 IUPAC 位次→原子映射难题）
             cip_reason = _check_cip_label(mol, label_text)
@@ -2126,8 +2117,8 @@ def _component_map_block(child, cid: str) -> str:
 
 
 def build_component_atom_maps(tag) -> str:
-    """COMPOSITE 各 STRUCT 组件的原子编号地图（手术式箭头重写用，
-    20260827 两阶段回放实验驱动）——让 LLM 查表引用端点，不再自己数编号。
+    """COMPOSITE 各 STRUCT 组件的原子编号地图（手术式箭头重写用）——
+    让 LLM 查表引用端点，不再自己数编号。
 
     与 _validate_composite 同口径注册组件：显式 id / 自动编号 r{N}，
     BLOCK 共振块内组件自动编号 b{N}r{N}（N 为全局注册序号），SMILES 剥离
@@ -2148,11 +2139,11 @@ def _validate_mech_arrow_pt(pt: str, n_atoms: int,
                             mol=None) -> str:
     """端点（原子序号 / a-b 键）合法性，返回原因串（""=合法）。
 
-    20260821：显式 H 是真实原子参与编号（如 CC([H])CC 的 2 号是 H），
+    显式 H 是真实原子参与编号（如 CC([H])CC 的 2 号是 H），
     原 a#k 语法废弃——引用 H 直接写原子序号即可，无需 XH 配对检查。
     mol：RDKit Mol（可选）——"a-b" 键端点用它验证两原子间确实存在化学键，
     防止引用不存在的键（如乙醛 CC=O 的 0-2 无键）；mol 缺失时只查序号范围。
-    错误信息"可照抄化"（20260821 P0）：键不存在时给出带元素符号的连接表、
+    错误信息"可照抄化"：键不存在时给出带元素符号的连接表、
     唯一显式 H 邻居的直接改写建议、无显式 H 时的写法指引，并附原子编号
     地图——模型照抄即可，不需自行推理索引。
     """
@@ -2224,17 +2215,17 @@ def _validate_mech_arrow_pt(pt: str, n_atoms: int,
 def _check_polar_arrow_semantics(src_id: str, src_pt: str,
                                  dst_id: str, dst_pt: str,
                                  comp_mols: dict) -> str:
-    """双电子箭头（>）的化学合理性确定性规则（20260821，que_test6 漏网
-    错误）；鱼钩（>>）单电子化学不适用，由调用方排除。返回原因串（""=通过）。
+    """双电子箭头（>）的化学合理性确定性规则；
+    鱼钩（>>）单电子化学不适用，由调用方排除。返回原因串（""=通过）。
 
     R1 目标端点是"带正电 + 有孤对电子 + 八隅体已满"的二周期原子（氧鎓/
     质子化羰基 O 等）——无空轨道，不能接受电子对（典型误写：脱质子把
-    箭头指向 O 而非 H，que_test6 图 26）。豁免：碳正离子/NO2+ 的 N 等
+    箭头指向 O 而非 H）。豁免：碳正离子/NO2+ 的 N 等
     缺电子原子（无孤对）、[Br+] 等三周期亲电体（可成键扩八隅）。
     R2 极性 π 键（C=X，X∈{N,O,S}）作源、电子流向碳端——应流向电负性
-    大的杂原子（que_test6 图 23 羧酸根共振箭头反向）。
+    大的杂原子（羧酸根共振箭头反向）。
     R3 源为原子（孤对电子）、目标为双/三键——孤对只能汇入单键形成新
-    π 键（图 23 羧酸根 O- 孤对错指 C=O 双键）。
+    π 键（羧酸根 O- 孤对错指 C=O 双键）。
     fake mol（测试 fixture，无 GetBondBetweenAtoms）跳过。
     """
     from renderers.mol_primitives import lone_pair_count
@@ -2304,7 +2295,7 @@ def _check_polar_arrow_semantics(src_id: str, src_pt: str,
                             f"无空轨道接受电子对——若意图是碱夺 H⁺（脱质子），"
                             f"请把目标 H 写成显式 [H] 并指向该 H；若意图是"
                             f"亲核进攻，目标应是缺电子原子（碳正离子/羰基碳）")
-    # R4（20260826，A1）π 进攻靶不能是"中性氧"（仅跨分子亲核进攻）：
+    # R4：π 进攻靶不能是"中性氧"（仅跨分子亲核进攻）：
     # π 电子（双键/芳香键）作供体时，靶原子若为电负性的中性 O，则 O 不是
     # 亲电体（亲电中心应是与之相连的中央原子/带正电原子/缺电子原子）。
     # 典型误写：苯磺化 ar:0-1>so3:0（π 攻 O，应攻 S so3:1）。仅跨分子触发
@@ -2349,7 +2340,7 @@ def _check_polar_arrow_semantics(src_id: str, src_pt: str,
 
 
 def autofix_mech_bond_endpoint(tag) -> tuple | None:
-    """MECHARROW 键端点高置信自动修复（20260821 P1，不经 LLM）。
+    """MECHARROW 键端点高置信自动修复（不经 LLM）。
 
     场景：COMPOSITE 内某 MECHARROW 的 a-b 键端点引用了不存在的键。
     两类唯一候选修复（合计候选必须恰好 1 个，否则不修）：
@@ -2434,7 +2425,7 @@ def autofix_mech_bond_endpoint(tag) -> tuple | None:
 
 
 def _check_xh_h_usage(mol, idxs: list, what: str) -> str:
-    """A2：XH 叠加次数不得超过原子可用隐含 H 数（防"幽灵 H"——
+    """XH 叠加次数不得超过原子可用隐含 H 数（防"幽灵 H"——
     渲染端纯几何放置，不看 GetTotalNumHs）。fake mol（无 GetAtomWithIdx）
     时跳过。返回错误原因或 ""。"""
     gai = getattr(mol, "GetAtomWithIdx", None)
@@ -2456,7 +2447,7 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
         return False, f"未知布局「{layout_name}」，支持 {'/'.join(COMPOSITE_LAYOUTS)}"
 
     # 收集组件：id → {smiles, at}（attrs 由 tag_parser 结构化提取，不再从 raw 二次解析）
-    # BLOCK 内 STRUCT 也注册进全局组件表（20260820：块内/跨块 MECHARROW
+    # BLOCK 内 STRUCT 也注册进全局组件表（块内/跨块 MECHARROW
     # 统一引用；显式 id 全局查重，自动编号块内用独立前缀避免冲突）
     comps = {}
     for child in children:
@@ -2485,7 +2476,7 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
                 "formula": is_formula,
             }
             # STRUCT 子标记本身递归校验（mode 分派）。容器内 mode 按布局
-            # 放开（20260821 扩充）：reaction 禁 newman（投影
+            # 放开：reaction 禁 newman（投影
             # 是整图语义，与反应序列不兼容）；row/energy 不限制。
             # stereo/chair/newman 组件预渲染为不透明单元，仅展示。
             mode = child.attrs.get("mode", "skeleton")
@@ -2535,8 +2526,7 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
         return False, "容器内缺少 [STRUCT] 组件"
 
     # energy 布局：每个 STRUCT 必须有 at= 且不越界；ENERGY 点序列复用
-    # _validate_energy（≥3 点 + 奇数个——COMPOSITE 内嵌 ENERGY 原先不递归
-    # validate_tag，奇数校验漏掉；20260828 补上，与顶层 ENERGY 一致）
+    # _validate_energy（≥3 点 + 奇数个，与顶层 ENERGY 一致）
     if layout_name == "energy":
         energy_child = next((c for c in children if c.type == "ENERGY"), None)
         if energy_child is None or not energy_child.args or not energy_child.args[0]:
@@ -2624,7 +2614,7 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
                         if not 0 <= i < n:
                             return False, f"CHARGE 原子编号 {i} 超出组件 {ref} 范围 0~{n - 1}"
             else:
-                # HBOND（20260821 起语义）：HBOND:idA:a>idB:b——a 为给体组件
+                # HBOND 语义：HBOND:idA:a>idB:b——a 为给体组件
                 # 中显式 H 原子的真实序号（SMILES 显式 H 参与编号，如
                 # [H]OCCO[H] 的 0 号；a#k 语法废弃）；受体为 idB 组件的原子 b。
                 found = 0
@@ -2704,7 +2694,7 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
                 a, b = int(m.group(1)), int(m.group(2))
                 if not (0 <= a < n and 0 <= b < n):
                     return False, f"BOND 键 {a}-{b} 超出组件 {ref} 范围 0~{n - 1}"
-                # A1：a-b 必须真实成键（渲染端对不存在的键静默跳过）
+                # a-b 必须真实成键（渲染端对不存在的键静默跳过）
                 gba = getattr(comp_mols.get(ref), "GetBondBetweenAtoms", None)
                 if gba is not None and gba(a, b) is None:
                     return False, (f"BOND 键 {a}-{b} 在组件 {ref} 中不存在"
@@ -2714,8 +2704,8 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
     # 块内/跨块混合引用自动支持）
     blank_refs = {}   # 成键空白位（规范化键）→ [(是否鱼钩, spec)]，配对校验用
     # 组件 → 步序号（顶层 ARROW 分步；BLOCK 内组件归属块所在步；sup 附件
-    # 按符号归属：+id 随左侧步、-id 随右侧步）——跨步校验用（20260822：
-    # que_test8 图 4，etoh:2>pro:2 跨主箭头进攻产物）
+    # 按符号归属：+id 随左侧步、-id 随右侧步）——跨步校验用（典型误写：
+    # etoh:2>pro:2 跨主箭头进攻产物）
     comp_step = {}
     step = 0
     for child in children:
@@ -2746,7 +2736,7 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
                 return False, f"MECHARROW 格式错误「{spec}」"
             src_id, src_pt, _, dst_id, dst_pt, dst2_id, dst2_pt = m.groups()
             # 始末相同即无电子流向，必是写错（如 sigma:1-2>sigma:1-2，
-            # que_test7 脱质子步应为 1-2>1-7）；成键空白位
+            # 脱质子步应为 1-2>1-7）；成键空白位
             #（me:0>>me:0+cl2:0，dst2 非空）是合法例外
             if src_id == dst_id and src_pt == dst_pt and dst2_id is None:
                 return False, (f"MECHARROW 起点与终点相同「{spec.strip()}」"
@@ -2804,7 +2794,7 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
                     frozenset(((dst_id, dst_pt), (dst2_id, dst2_pt))),
                     []).append((m.group(3), spec.strip()))
 
-    # R4 成键空白位配对（20260821，que_test6 图 20）：鱼钩成键必须恰好
+    # 成键空白位配对：鱼钩成键必须恰好
     # 两根汇聚同一空白位（各贡献一个单电子）；极性成键一根双电子箭头
     # 即可。两个空白位各 1 根鱼钩（指向写岔）时给出可照抄的归并建议
     singles = []   # 配对不合法的空白位：(规范化键, 鱼钩 specs, 双电子 specs)
@@ -2850,19 +2840,19 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
                            f"（arrow 令牌组件必须被唯一一个 ARROW 引用）")
 
     if _RDKIT_OK:
-        # 质子转移配对（4b）：双电子箭头引用显式 H 时必须画全配对
+        # 质子转移配对：双电子箭头引用显式 H 时必须画全配对
         reason = _check_proton_transfer_pairing(mech_children, comp_mols, comps)
         if reason:
             return False, reason
-        # SN2 进攻位点（4c）：终点必须是连离去基团的 α-碳
+        # SN2 进攻位点：终点必须是连离去基团的 α-碳
         reason = _check_sn2_attack_site(mech_children, comp_mols)
         if reason:
             return False, reason
-        # EAS σ 络合物脱质子方向（20260827）：C—H 电子落向 sp3C—C+ 键
+        # EAS σ 络合物脱质子方向：C—H 电子落向 sp3C—C+ 键
         reason = _check_eas_rearomatization(mech_children, comp_mols)
         if reason:
             return False, reason
-        # 消除成 π 键方向（20260827，EAS 规则向普通双键推广）：C(H)—C+
+        # 消除成 π 键方向（EAS 规则向普通双键推广）：C(H)—C+
         # 相邻时 C—H 电子终点必须是 C—C 键，不能落回 C 原子
         reason = _check_elimination_pi_target(mech_children, comp_mols)
         if reason:
@@ -2877,7 +2867,7 @@ def _validate_composite(layout: str, children: list) -> Tuple[bool, str]:
             reason = _check_reaction_sequence(children, comps)
             if reason:
                 return False, reason
-        # 电子流模拟（P1，20260828）：机理箭头能否推出声明产物——自洽性
+        # 电子流模拟：机理箭头能否推出声明产物——自洽性
         # 深层兜底（σ 络合物分子式错、跳中间体、方向反等守恒拦不住的
         # 错误类）。错侧判定：模拟产物不合法 → 箭头必错；不一致 → 默认
         # 信产物修箭头（产物已过守恒/价态/label 独立检查）
@@ -2900,7 +2890,7 @@ def validate_tag(tag: RenderTag) -> ValidationResult:
             else (False, "COMPOSITE 缺少容器参数")
         return ValidationResult(tag, ok, reason)
     if ttype == "HBOND":
-        # 顶层 HBOND 已移除（2026-08-15 语义分离）：氢由分子渲染（SMILES
+        # 顶层 HBOND 已移除：氢由分子渲染（SMILES
         # 显式 H）负责、HBOND 只画点状虚线，且仅支持容器内
         # HBOND:idA:给体H原子号>idB:原子
         return ValidationResult(
@@ -2936,16 +2926,11 @@ def validate_tags(tags: List[RenderTag]) -> Tuple[List[RenderTag], List[Validati
     return valid, invalid
 
 
-def _tag_name_for(tag: RenderTag) -> str:
-    """降级提示的标记中文名（旧标记已在解析层归一化为 STRUCT+mode）。"""
-    return _TAG_NAMES.get(tag.type, tag.type)
-
-
 def degrade_text_friendly(tag: RenderTag) -> str:
     """用户可见降级提示（友好版）：不含校验技术细节（原子守恒/元素差/索引
     等），只告知该处图示未生成并给出文字回退选项——普通用户不关心内部校验
-    原因。详细原因仍由 reason（P2 修正 prompt / diagnostics / metrics）承载。"""
-    return (f"（{_tag_name_for(tag)}图示无法渲染，已省略"
+    原因。详细原因仍由 reason（修正闭环 prompt / diagnostics / metrics）承载。"""
+    return (f"（{tag_name(tag.type)}图示无法渲染，已省略"
             f"——需要的话我可以用文字讲清关键分子）")
 
 

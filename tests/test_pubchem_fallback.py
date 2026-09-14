@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""app.py 的 PubChem 兜底辅助函数测试（校验失败时注入权威 SMILES 参考）。
+"""tests/test_pubchem_fallback.py — app.py 的 PubChem 兜底辅助函数测试（校验失败时注入权威 SMILES 参考）。
 
 mock 掉 LLM 翻译与 PubChem 网络（不依赖真实服务）：
 - _translate_name_zh2en：monkeypatch app.ask_llm
@@ -25,7 +25,7 @@ def _failure(raw: str, reason: str):
     return [(tag, reason)]
 
 
-# ---------------- _extract_chem_labels ----------------
+# ---------------------------------------------------------------- _extract_chem_labels
 
 def test_extract_chem_labels_picks_smiles_failures():
     """SMILES 相关失败（无效/化学校验/越界）提取 label。"""
@@ -52,7 +52,7 @@ def test_extract_chem_labels_requires_label():
     assert app._extract_chem_labels(fails) == []
 
 
-# ---------------- _translate_name_zh2en ----------------
+# ---------------------------------------------------------------- _translate_name_zh2en
 
 def test_translate_name_zh2en_english_passthrough():
     """英文名直通（无需 LLM）。"""
@@ -71,7 +71,7 @@ def test_translate_name_zh2en_llm_failure_returns_none(monkeypatch):
     assert app._translate_name_zh2en("阿司匹林") is None
 
 
-# ---------------- _fetch_pubchem_references ----------------
+# ---------------------------------------------------------------- _fetch_pubchem_references
 
 def test_fetch_pubchem_references_full_flow(monkeypatch):
     """完整链路：提取 → 翻译 → PubChem → 参考文本。"""

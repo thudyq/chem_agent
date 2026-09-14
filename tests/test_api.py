@@ -133,7 +133,7 @@ def test_sse_no_draft_reasoning_frames(monkeypatch):
                       correction_callback=None, diagnostics=None, responses=None):
         progress_callback("苯的硝化是亲电芳香取代反应（SEAr）的经典范例。")
         progress_callback("[COMPOSITE:reaction][STRUCT:...]")
-        correction_callback()          # P2 修正触发
+        correction_callback()          # 修正触发
         progress_callback("修正后的标记内容")
         return "最终回答内容。"
 
@@ -181,7 +181,7 @@ def test_chat_multimodal_image(client, monkeypatch, tmp_path):
     # 配置**）。patch `api.settings` 是重构前的失效写法——`api.settings` 只是
     # 导入时的引用，改了它对 `vision_config()` 没有影响，用例会悄悄退化成
     # "看开发者 .env 里有没有 VISION_*"：本机配了 glm 就绿、删掉就红
-    # （20260910 实测：删掉 VISION_MODEL 后本文件 3 条 + ocr 全部变红）。
+    # （实测：删掉 VISION_MODEL 后本文件 3 条 + ocr 全部变红）。
     monkeypatch.setattr(cred, "vision_config", lambda: types.SimpleNamespace(
         is_configured=True, model_name="vision-test",
         base_url="https://vision.example/v1", api_key="sk-vision-test",
@@ -204,7 +204,7 @@ def test_chat_multimodal_image(client, monkeypatch, tmp_path):
 
 
 def test_build_question_image_caution(monkeypatch):
-    """B3（20260826）：图片输入时提示识别可能有误（smiles_ok 缺省 → 一般提示）。"""
+    """图片输入时提示识别可能有误（smiles_ok 缺省 → 一般提示）。"""
     import types
 
     from core import credentials as cred
@@ -336,7 +336,7 @@ _TIKZ_ANSWER = ("苯的结构式如下：\n\\begin{tikzpicture}\\draw (0,0)--(1,
 
 
 def test_x_soda_attachments_non_stream(client, monkeypatch):
-    """20260826（a557787）起：图以行内 markdown 引用（![化学图示-N](fileUrl)）
+    """图以行内 markdown 引用（![化学图示-N](fileUrl)）
     随正文下发，不再挂 x_soda.attachments（平台会把 attachments 渲染成文末
     缩略图，行内引用才可能内联）。正文不留裸 TikZ。"""
     monkeypatch.setattr(api, "process_question",
@@ -455,7 +455,7 @@ def test_serve_attachment(client, tmp_path, monkeypatch):
 def test_image_without_vision_config(client, monkeypatch):
     """收到图片但视觉不可用：回答中明确说明原因，不静默忽略。
 
-    注（20260830 重构）：视觉可用性由 `credentials.vision_config()` 判定
+    注：视觉可用性由 `credentials.vision_config()` 判定
     （`.env` 未配 `VISION_*` 时**回退用主模型**）。因此：
     - 本用例把视觉判为不可用（模拟"主模型也不支持视觉"）；
     - 必须 monkeypatch 掉 `describe_image`，否则会**真实联网**打用户配置的
@@ -552,17 +552,15 @@ def test_validate_download_url_dns(monkeypatch):
     assert not api._validate_download_url("http://unknown.invalid/x")
 
 
-# ---------- 多轮对话图片丢失（20260828）：手写图片链接的剥离 ----------
+# ---------------------------------------------------------------- 多轮对话图片丢失：手写图片链接的剥离
 
 _FAKE_MD_IMAGE = ("![化学图示-1](https://60.205.181.60/files/"
                   "2d4b8e9f0a5e4d2f9a1b3c6d7e8f9a0b.png)")
 
 
 def test_extract_history_strips_md_images():
-    """_extract_history：assistant 历史以去锚定状态摘要回喂（20260830
-    主题摘要方案）——图片 markdown/标记/TikZ 都不可能进入历史；
-    user 消息原文不动。（20260906 同步：20260828 版断言的 `[化学图示]`
-    占位是 _strip_render_code 层的输出，历史层已整体升级为摘要。）"""
+    """_extract_history：assistant 历史以去锚定状态摘要回喂——
+    图片 markdown/标记/TikZ 都不可能进入历史；user 消息原文不动。"""
     msgs = [
         {"role": "user", "content": "介绍 SN1 机理"},
         {"role": "assistant", "content": f"分两步：\n\n{_FAKE_MD_IMAGE}"},
@@ -606,7 +604,7 @@ def test_output_strips_hallucinated_md_images_stream(client, monkeypatch):
     assert "完" in content
 
 
-# ---------- 多轮对话标记恢复（20260828 方案 A：回答缓存） ----------
+# ---------------------------------------------------------------- 多轮对话标记恢复（回答缓存）
 
 from core import answer_cache
 
@@ -674,7 +672,7 @@ def test_is_correction_intent():
     assert api._is_correction_intent("你画错了")
     assert api._is_correction_intent("再画一遍")
     assert api._is_correction_intent("这个结构不对")
-    assert api._is_correction_intent("重新绘制总反应")     # 20260830 补：重绘变体
+    assert api._is_correction_intent("重新绘制总反应")     # 重绘变体
     assert api._is_correction_intent("重新绘制 3,3-二甲基-2-丁醇脱水重排的总反应式")
     assert not api._is_correction_intent("继续画那个环己烷")
     assert not api._is_correction_intent("这是什么结构")
@@ -750,7 +748,7 @@ def test_stream_registers_answer_cache(client, monkeypatch):
 def test_startup_banner_survives_gbk_console():
     """★ 回归：Windows 默认代码页（GBK）下，打印日志不得把服务打崩。
 
-    20260830 实测：启动横幅里放了个 `⚠`（U+26A0），GBK 编码不了，
+    实测：启动横幅里放了个 `⚠`（U+26A0），GBK 编码不了，
     `print` 抛 `UnicodeEncodeError` → 进程直接
     `ERROR: Application startup failed. Exiting.`，**服务完全起不来**。
 

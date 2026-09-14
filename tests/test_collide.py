@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""renderers/collide.py 单元测试（几何求交 + Occupancy 候选放置）。
+"""tests/test_collide.py — renderers/collide.py 单元测试（几何求交 + Occupancy 候选放置）。
 
 运行: python -m pytest tests/test_collide.py -v
 """
@@ -63,7 +63,7 @@ class TestOccupancy:
 
 
 class TestRenderedChargeClearance:
-    """TikZ 回放检查（R-8 检查机制固化）：带电物种电池组中，圆圈电荷
+    """TikZ 回放检查：带电物种电池组中，圆圈电荷
     与任何键线段的距离必须大于圈半径（Drawbacks 一-8 类重叠回归）。"""
 
     CASES = ["O=[N+]([O-])c1ccccc1", "[OH-]", "[Cl-]", "CC(=O)[O-]",

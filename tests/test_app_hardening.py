@@ -69,7 +69,7 @@ def _payload(session_id=SID, stream=False):
             "stream": stream, "session_id": session_id}
 
 
-# ================================================================ R9 CORS
+# ---------------------------------------------------------------- R9 CORS
 
 class TestCorsOrigins:
     def test_default_has_no_wildcard(self):
@@ -104,7 +104,7 @@ class TestCorsOrigins:
         assert r.headers.get("access-control-allow-origin") == "http://127.0.0.1:8000"
 
 
-# ========================================================== R10 安全响应头
+# ---------------------------------------------------------------- R10 安全响应头
 
 class TestSecurityHeaders:
     @pytest.mark.parametrize("path", ["/chat", "/api/web-config"])
@@ -126,7 +126,7 @@ class TestSecurityHeaders:
         assert r.headers.get("x-frame-options") == "DENY"
 
 
-# ===================================================== R11 会话 id 归属
+# ---------------------------------------------------------------- R11 会话 id 归属
 
 class TestSessionOwnership:
     def test_unknown_id_is_replaced(self, web):
@@ -169,13 +169,13 @@ class TestSessionOwnership:
         assert r.json()["session_id"] == SID
 
 
-# ================================================ R13 事件循环不被阻塞
+# ---------------------------------------------------------------- R13 事件循环不被阻塞
 
 class TestEventLoopNotBlocked:
     def _fast_request_while_slow_is_held(self, web, monkeypatch, slow_attr):
         """慢请求**确实还在跑**时，快请求必须能返回。
 
-        ★ 用 Event 精确控制时序，**不用 sleep 竞速**（20260911 修正）：
+        ★ 用 Event 精确控制时序，**不用 sleep 竞速**：
         最初写的是"慢函数 sleep 0.6 秒 + 断言快请求 < 0.4 秒"，结果在压测里
         12 轮抖 1 次（`assert 1.08 < 0.4`）——那是**测试自身不稳**，不是产品回归。
         现在改成：慢函数一进入就 `entered.set()` 并阻塞在 `release` 上，我们等到
@@ -231,7 +231,7 @@ class TestEventLoopNotBlocked:
     def test_threadpool_keeps_user_credentials(self, web, monkeypatch):
         """★ 线程池必须看得到用户凭证（contextvar 会随 context 拷贝过去）。
 
-        这是 20260830 那次"网页填了 A、实际用 .env 的 B"事故的同类风险：
+        这是"网页填了 A、实际用 .env 的 B"事故的同类风险：
         把活儿挪进线程池时，凭证作用域绝不能丢。
         """
         seen = {}

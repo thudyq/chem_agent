@@ -20,10 +20,12 @@
     X-Chem-Api-Key        必填，用户自己的 LLM API Key
     X-Chem-Base-Url       选填，OpenAI 兼容端点（默认 https://api.deepseek.com/v1）
     X-Chem-Model          选填，主模型名（默认 deepseek-flash）
-    X-Chem-Fallback-Model 选填，回退模型（主模型思考过长时用）
-    X-Chem-Upgrade-Model  选填，升级模型（难题直用）
-    X-Chem-Vision-Model   选填，视觉模型（不填则图片输入不可用）
-    X-Chem-Thinking       选填，enabled/disabled
+    X-Chem-Thinking       选填，思考开关 on/off
+    X-Chem-Effort         选填，思考强度 low/medium/high/max
+    X-Chem-Max-Tokens     选填，最大输出 token 上限
+    X-Chem-Vision-Model   选填，视觉模型（留空用主模型识图；主模型纯文本时必填）
+    X-Chem-Vision-Base-Url / X-Chem-Vision-Api-Key   选填，视觉端点与 Key
+    X-Chem-Vision-Thinking / X-Chem-Vision-Effort    选填，视觉思考参数
 
 安全
 ----
@@ -229,7 +231,7 @@ def _credentials_from_headers(kwargs: dict) -> dict:
     绝不把服务器 .env 的视觉模型/计费施加到用户请求上）。若在这里顺手把
     主 Key 填进 `vision_api_key`，用户没配视觉模型时也会被判为"已配置"，
     进而在 `settings.vision.model_name` 兜底（很可能是服务器 .env 的视觉
-    模型名）下**拿用户 Key 去调一个他并没有指定的模型**——20260830 实测
+    模型名）下**拿用户 Key 去调一个他并没有指定的模型**——实测
     踩到（真实网络 401 泄漏进单元测试）。用户单独填了视觉 Key/端点时，
     下面的映射照常带上。
     """
@@ -577,8 +579,6 @@ _WEB_IMAGE_MSGS = {
     "fetch_fail": "（第 {i} 张图片下载/解码失败，已忽略）",
     "smiles_bad": "（提示：图片 {i} 识别出的结构式无法解析，识别可能"
                   "有误；请在回答中提醒用户核对，必要时请用户用文字描述）",
-    "downgraded": "（提示：图片 {i} 识别受限，以上为尽力提取的片段，"
-                  "可能不完整；请提醒用户以原图为准）",
     "generic": "（提示：图片 {i} 为视觉模型自动识别，识别可能有误；"
                "请在回答中提醒用户以原图为准、核对识别内容）",
     "recog_fail": "（用户上传的图片 {i} 识别失败：视觉模型未能理解图片内容。"
@@ -670,7 +670,7 @@ def _prepare_answer(answer: str, session_id: str) -> str:
     直接打开的，相对路径必然解析到"用户此刻正在访问的那个源"，因此：
 
     * 不会把服务器 `.env` 的公网地址施加给访客——那个地址上既没有这条会话
-      路由、也没有这张图（图落盘在本机 `_SESSIONS_DIR`）。20260910 实测：
+      路由、也没有这张图（图落盘在本机 `_SESSIONS_DIR`）。实测：
       本地 `uvicorn` 起服务时所有图示全裂，浏览器按 `.env` 的
       `PUBLIC_BASE_URL=https://60.205.181.60` 去请求
       `https://60.205.181.60/api/session/<sid>/<name>.png`，而那台机器跑的是
@@ -809,8 +809,8 @@ async def make_title(request: Request,
         body = {}
     question = str((body or {}).get("question") or "")
     with credentials.user_credentials(creds):
-        credentials.set_request_ip(_client_ip(request))   # 按 IP 的在途闸门（R5）
-        # ★ R13：一次真实的 LLM 调用（1~3 秒起），同样不能占着事件循环
+        credentials.set_request_ip(_client_ip(request))   # 按 IP 的在途闸门（安全审查 R5）
+        # ★ 安全审查 R13：一次真实的 LLM 调用（1~3 秒起），同样不能占着事件循环
         title = await run_in_threadpool(summarize_title, question)
     return {"title": title}
 
@@ -909,7 +909,7 @@ async def chat(request: Request,
             # 它的函数体要到**被迭代时**才执行——那时本 `with` 块已退出、
             # contextvar 已 reset。若只在外面 set，生成器内（及其 SSE 工作线程）
             # 看到的 `credentials.current()` 是空的 → 模型/端点/密钥全部回退
-            # 服务器 `.env`（20260830 实测：网页填 deepseek-flash、日志却是
+            # 服务器 `.env`（实测：网页填 deepseek-flash、日志却是
             # .env 的 gemini-3.7-flash，根因即此）。由生成器自己重新建立作用域。
             return StreamingResponse(
                 _sse_stream(question, history, session_id,
@@ -976,14 +976,14 @@ def _sse_stream(question: str, history: list, session_id: str,
     ★ `creds`：用户凭证 dict **必须由调用方传入**（不能只在外层 `with
     user_credentials(...)`）。原因：本函数是**生成器**，函数体在被迭代时才执行，
     那时外层 `with` 已退出、contextvar 已 reset——生成器内会读不到凭证，
-    从而静默回退服务器 `.env` 的模型/端点/密钥（20260830 实测病例）。
+    从而静默回退服务器 `.env` 的模型/端点/密钥（实测病例）。
 
     ★ 但**不要在本函数体里设置凭证**：本函数是生成器，它的每一段都在
     线程池里被独立 `next()`；Starlette 每次迭代都从请求任务上下文**重新拷贝**
     一份 Context，因此在第 1 次 `next()` 里 `set` 的值，到第 N 次 `next()` 里
     已经不存在了。凭证必须在 **`work()` 内部**设置——那个函数整体跑在同一个
     `ctx.run(...)` 里，一次 `set` 对该线程后续全部管线代码（及其 `copy_context()`
-    子线程）都可见（20260830 实测：只在生成器里 set，流式仍回退服务器 `.env`
+    子线程）都可见（实测：只在生成器里 set，流式仍回退服务器 `.env`
     的 gemini-3.7-flash）。
 
     同理不能用 `with user_credentials(...)`：`reset` 要求 set/reset 同 Context，

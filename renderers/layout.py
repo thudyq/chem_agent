@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""renderers/layout.py — 统一坐标布局引擎（R-7）。
+"""renderers/layout.py — 统一坐标布局引擎。
 
 把"分子 + 连接符 + 反应箭头"组成的组件序列排布到统一水平坐标系：
 按视觉包围盒计算每个组件的位置、避免重叠、对齐箭头。
@@ -56,7 +56,7 @@ class PlacedText:
 
 @dataclass
 class PlacedBlock:
-    """已定位的复合块组件（[BLOCK] 共振块，20260819 大一统架构）。
+    """已定位的复合块组件（[BLOCK] 共振块，大一统架构）。
 
     lines 为块内部预渲染的 TikZ 行（局部坐标，含分子 scope），
     整体随 shift 平移；bbox 为块内部布局的局部包围盒（占位宽度）。
@@ -102,7 +102,9 @@ def layout_row(items: list, *, mol_gap: float = 1.6, plus_w: float = 1.1,
                                           渲染端画文本节点；coeff 语义同上）；
             ("plus",)          加号连接符；
             ("arrow", cond)    主反应箭头（cond 为条件文本，可空）；
-            ("resarrow",)      共振箭头 ↔ 连接符。
+            ("resarrow",)      共振箭头 ↔ 连接符；
+            ("block", key, lines, bbox)   [BLOCK] 共振块：预渲染的 TikZ 行
+                                          与局部包围盒，按 bbox 占位整体平移。
         mol_gap: 相邻两个 mol 之间无连接符时的水平间距。
         plus_w / res_w: 加号 / 共振箭头占位宽度。
         arrow_w: 反应箭头占位宽度。
@@ -137,7 +139,7 @@ def layout_row(items: list, *, mol_gap: float = 1.6, plus_w: float = 1.1,
             bbox = bbox_fn(mol)
             min_x, min_y, max_x, max_y = bbox
             local_cy = (min_y + max_y) / 2.0
-            # 系数节点左侧留白（"2" / "1/2" 约 0.5 宽，乘位数缩放）
+            # 系数节点左侧留白（"2" / "1/2" 约 0.6 宽）
             coeff_pad = 0.6 if coeff and coeff != 1 else 0.0
             if label:
                 # 标签外延：以分子 bbox 中心 x 为轴，左右各扩 label 半宽；
@@ -237,7 +239,7 @@ def _resolve_row_overlaps(layout: RowLayout, pad: float = 0.05) -> float:
 
 
 def layout_rows(items: list, *, row_gap: float = 1.2, **kwargs):
-    """多行布局：items 中的 ("newline",) 分隔各行（R-6 上下排列）。
+    """多行布局：items 中的 ("newline",) 分隔各行（上下排列）。
 
     每行用 layout_row 排布（kwargs 透传），再按行内最高组件的间距包围盒
     高度（含标签向下外延）+ row_gap 逐行向下堆叠（y 向下为负方向）。
@@ -291,12 +293,12 @@ def molecule_scope_lines(mol, shift: Tuple[float, float], *,
     bond_margin_scale: 键线留白缩放系数——容器内分子坐标按 _MOL_SCALE
     缩放后，标签字号不变、键线修剪量（label_bond_margin）若仍按原标签
     宽度计算，键线两端会深入标签背景被 fill=white 盖住（如 CH₃Cl 只剩
-    "—Cl"）；调用方应传分子坐标缩放系数使修剪量同步缩放（20260821 修复）。
+    "—Cl"）；调用方应传分子坐标缩放系数使修剪量同步缩放。
     aromatic_rings: aromatic_ring_info() 的输出——全芳香单环跳过环内键、
         在质心画圆（芳香小写 c1ccccc1 风格）；为 None 时不画圈（凯库勒交替键）。
     occupancy: 可选的 collide.Occupancy（局部坐标）——键/环/标签/电子点
         逐笔登记，电荷圈据此选零冲突候选位；传入时供调用方后续注解
-        （XH 显式 H 等）继续避让（R-8）。
+        （XH 显式 H 等）继续避让。
     """
     hs = explicit_hs or {}
     # 统一标签规则：≤2 重原子小分子结构简式，其余键线式
@@ -309,7 +311,7 @@ def molecule_scope_lines(mol, shift: Tuple[float, float], *,
     # 键线留白随分子缩放补偿（见 bond_margin_scale 说明）
     margin_fn = (lambda lab: label_bond_margin(lab) * bond_margin_scale)
     # 芳香画圈：调用方显式传入（structure.py）或从 mol property 自动读取
-    # （prepare_mol 已存 _aromatic_lowercase，ARROW/REACTION/COMPOSITE 共用）
+    # （prepare_mol 已存 _aromatic_lowercase）
     if aromatic_rings is None:
         try:
             if mol.HasProp("_aromatic_lowercase") \
@@ -320,7 +322,7 @@ def molecule_scope_lines(mol, shift: Tuple[float, float], *,
     lines = [
         f"  \\begin{{scope}}[shift={{({shift[0]:.2f},{shift[1]:.2f})}}]"
     ]
-    # 占据注册表（R-8，局部坐标）：键线段/芳香环圆/标签矩形逐笔登记，
+    # 占据注册表（局部坐标）：键线段/芳香环圆/标签矩形逐笔登记，
     # 电荷圈等注解元素据此选零冲突候选位（不撞键/标签/彼此）
     occ = occupancy if occupancy is not None else Occupancy()
     skip_rings = [aromatic_rings[k][0] for k in range(len(aromatic_rings or []))]
@@ -397,11 +399,10 @@ def molecule_scope_lines(mol, shift: Tuple[float, float], *,
 
 def energy_point_coords(values: list, *, x0: float = 1.0, xstep: float = 1.5,
                         height: float = 3.0, steps: list = None) -> dict:
-    """能量点序列 → 势能面画布坐标（R-3 驻点布局）。
+    """能量点序列 → 势能面画布坐标（驻点布局）。
 
     steps：逐间隙宽度列表（len = n-1），优先于等距 xstep——energy 布局
-    按驻点结构实际宽度自适应加宽（20260821 方案 A：宽结构横向重叠导致
-    被迫下移脱离驻点）。
+    按驻点结构实际宽度自适应加宽（宽结构横向重叠会导致被迫下移脱离驻点）。
 
     返回 dict：
         points: [(i, value, x, y), ...]  每个驻点的序号、能量值、画布坐标；
@@ -423,6 +424,12 @@ def energy_point_coords(values: list, *, x0: float = 1.0, xstep: float = 1.5,
         "max_idx": values.index(emax),
         "x_last": points[-1][2],
     }
+
+
+# 驻点角色标签的纵向偏移：过渡态标签在峰上方，其余驻点在点下方
+# （energy.py 与 composite.py 的 energy 布局共用）。
+ENERGY_TS_YOFF = 0.35
+ENERGY_LABEL_YOFF = -0.3
 
 
 def energy_point_roles(values: list) -> dict:

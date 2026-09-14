@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""P3 布局升级测试：字符宽度表、标签自动换行与矩形相交（纯函数，无 rdkit 依赖）。
+"""tests/test_mol_widths.py — 布局升级测试：字符宽度表、标签自动换行与矩形相交（纯函数，无 rdkit 依赖）。
 
 - label_visual_width：区分全角/半角，西文宽度与旧估算一致、中文修正；
-- wrap_label_lines / wrap_format_text / label_wrapped_size：C2 标签自动换行；
+- wrap_label_lines / wrap_format_text / label_wrapped_size：标签自动换行；
 - _rects_intersect：energy 布局 at= 冲突消解的基础。
 """
 
@@ -53,9 +53,9 @@ def test_rect_no_intersect_beyond_pad():
     assert not _rects_intersect(a, (1.3, 0, 2.3, 1))
 
 
-# ---------------------------------------------------------------------------
+# ----------------------------------------------------------------
 # C2 标签自动换行
-# ---------------------------------------------------------------------------
+# ----------------------------------------------------------------
 
 def test_wrap_short_label_single_line():
     """短标签（≤ 默认 3.5 宽）原样单行返回。"""

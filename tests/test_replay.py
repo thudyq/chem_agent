@@ -8,7 +8,7 @@ import pytest
 
 from core.replay import replay
 
-# Q17 病例：σ 络合物脱质子箭头写错（文字/产物对、箭头乱写）
+# σ 络合物脱质子箭头写错病例（文字/产物对、箭头乱写）
 _Q17_BAD = ("[COMPOSITE:reaction]"
             "[STRUCT:BrC([H])1C=CC=C[CH+]1,label=σ 络合物,id=sigma]"
             "[ARROW:type=single]"

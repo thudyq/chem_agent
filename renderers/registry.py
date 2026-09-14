@@ -3,7 +3,7 @@
 
 每种 [TAG] 标记对应一个渲染函数，在此注册供主流程分派。
 分子家族（lewis/stereo/chair/newman）统一为 STRUCT+mode 由
-render_structure 分派（旧标记解析入口已于 B3 清理移除）。
+render_structure 分派（旧标记解析入口已清理移除）。
 """
 
 from .structure import render_structure

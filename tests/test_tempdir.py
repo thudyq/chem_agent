@@ -6,7 +6,7 @@
 权限受限的 CI）下有两个坑：
 1. 系统 temp 根本不可写 → `mkdtemp` 出来的目录写不进文件；
 2. 更隐蔽：目录建得出、却在 `__exit__` 清理时被拒 → **回答已经生成好**，
-   整请求却因为"删临时文件失败"而 500（20260830 实测，22 个用例因此变红）。
+   整请求却因为"删临时文件失败"而 500（实测，22 个用例因此变红）。
 """
 
 import os
@@ -149,7 +149,7 @@ def test_probe_returns_none_when_writable(clean_env, tmp_path, monkeypatch):
 def test_probe_reports_problem_when_unwritable(clean_env, tmp_path, monkeypatch):
     """★ 探测必须把"目录建得出但写不进"这种情形说清楚。
 
-    这是 20260830 排查中最费时的一类：`mkdtemp` 成功、写入被拒，症状只是
+    这是排查中最费时的一类：`mkdtemp` 成功、写入被拒，症状只是
     回答里冒出"（图示未能渲染）"，完全指不到临时目录。探测要给出可行动的
     提示（点名 `CHEM_AGENT_TMPDIR`）。
     """
@@ -196,7 +196,7 @@ def test_tempdir_logs_are_gbk_encodable(clean_env, tmp_path, monkeypatch):
     """★ 日志文案必须能被 GBK 编码：Windows 默认代码页下 `print` 遇到
     转不了的字符（`⚠` `✓` `⁻` …）会抛 `UnicodeEncodeError`。
 
-    20260830 实测：启动横幅里一个 `⚠` 让 uvicorn 直接
+    实测：启动横幅里一个 `⚠` 让 uvicorn 直接
     `Application startup failed. Exiting.` —— **服务完全起不来**。
     这里把该模块会打印的所有文案都过一遍 GBK 编码。
     """

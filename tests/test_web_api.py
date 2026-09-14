@@ -120,7 +120,7 @@ def test_private_base_url_rejected(web):
     assert "端点地址" in r.json()["detail"]
 
 
-# ------------------------------------------------- 视觉端点的 SSRF（安全审查 R2）
+# ---------------------------------------------------------------- 视觉端点的 SSRF（安全审查 R2）
 
 PRIVATE_VISION_URLS = [
     "http://127.0.0.1:11434/v1",
@@ -311,7 +311,7 @@ def test_stream_frame_sequence(web, answered):
 def test_stream_credentials_reach_worker_thread(web, answered):
     """★ 用户实测病例回归：**流式**也必须全程用网页里填的模型/端点/密钥。
 
-    根因（20260830 定位）：`_sse_stream` 是生成器，Starlette 把它放进线程池
+    根因：`_sse_stream` 是生成器，Starlette 把它放进线程池
     **逐块**迭代，每次 `next()` 都从请求任务上下文重新拷贝一份 Context ——
     在生成器迭代处 `apply_credentials()` 写下的凭证，传不到后面启动工作线程
     的那一次迭代。于是工作线程读到空凭证 → 静默回退服务器 `.env`
@@ -425,7 +425,7 @@ def test_answer_compiles_tikz_to_session_image(web, answered, monkeypatch):
 
 def test_session_image_url_is_origin_relative_and_fetchable(web, answered,
                                                              monkeypatch):
-    """★ 回归（20260910）：图示 URL 是同源相对路径，且真能取回 PNG。
+    """★ 回归：图示 URL 是同源相对路径，且真能取回 PNG。
 
     以前 `_prepare_answer` 把服务器 `.env` 的 `PUBLIC_BASE_URL` 当图片前缀，
     于是**本机起服务**时浏览器会去请求那台公网机器上的

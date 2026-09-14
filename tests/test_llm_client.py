@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""core/llm_client.py 测试：思考参数映射、降级链、摘字段行为判定（不访问网络）。
+"""tests/test_llm_client.py — core/llm_client.py 测试：思考参数映射、降级链、摘字段行为判定（不访问网络）。
 
 运行: python -m pytest tests/test_llm_client.py -v
 """
@@ -126,7 +126,7 @@ class TestPayloadMapping:
             p = self._payload(True, eff)
             assert p["thinking"] == {"type": "enabled"}
             assert p["reasoning_effort"] == eff
-            assert "temperature" not in p     # 思考模式下无效（F6）
+            assert "temperature" not in p     # 思考模式下无效
 
     def test_dropped_fields_are_omitted(self):
         p = self._payload(True, EFFORT_LOW, dropped={"thinking", "max_tokens"})

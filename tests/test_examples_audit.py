@@ -2,8 +2,8 @@
 """tests/test_examples_audit.py — 示例一致性长期回归（审计）。
 
 把 prompts / README / 文档 / 源码 docstring 与 __main__ demo 中的全部标记示例
-提取出来，过真实 P1 + 化学校验（core.tag_validator），防止"自带示例写错"
-（历史案例：20260808 硝酸的 prompt 示例误写为硝酸根 [O-][N+](=O)[O-]、
+提取出来，过真实契约校验 + 化学校验（core.tag_validator），防止"自带示例写错"
+（历史案例：硝酸的 prompt 示例误写为硝酸根 [O-][N+](=O)[O-]、
 README 的 c1ccccc1NO2 非法 SMILES，均由该校验口径抓获）。
 
 过滤规则（宁可漏报、不可误报）：
@@ -100,7 +100,7 @@ def _unexpected_invalids(path: Path) -> list:
 @pytest.mark.parametrize("path", _audit_files(),
                          ids=lambda p: str(p.relative_to(_ROOT)))
 def test_examples_valid(path: Path):
-    """文件中的标记示例全部通过真实 P1 + 化学校验（占位/故意示例除外）。"""
+    """文件中的标记示例全部通过真实契约校验 + 化学校验（占位/故意示例除外）。"""
     problems = _unexpected_invalids(path)
     assert not problems, (
         f"{path.name} 中 {len(problems)} 个示例标记未通过校验：\n"

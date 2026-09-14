@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""tests/test_electron_sim.py — 电子推动模拟器（core/electron_sim.py，P1）测试。
+"""tests/test_electron_sim.py — 电子推动模拟器（core/electron_sim.py）测试。
 
 验证机理图的自洽性：弯箭头能否从反应物推出声明产物（Drawbacks §16.2/16.3）。
 
@@ -29,7 +29,7 @@ def _validate_text(text):
     return validate_tags(parse_tags(text))
 
 
-# ---------- canonical 机理放行（回归锚点：模拟结果正确性） ----------
+# ---------------------------------------------------------------- canonical 机理放行（回归锚点：模拟结果正确性）
 
 
 def test_sn2_passes():
@@ -88,11 +88,11 @@ def test_hydride_shift_passes():
                 [("p", "C[CH+]C")]) == ""
 
 
-# ---------- 拦截案例（错侧判定） ----------
+# ---------------------------------------------------------------- 拦截案例（错侧判定）
 
 
 def test_q17_wrong_arrows_rejected():
-    """que_test_retry Q17 病例：文字/产物对、箭头乱写（落回单原子 +
+    """文字/产物对、箭头乱写（落回单原子 +
     从闭环键断键）→ 拦截，且消息默认修箭头（产物已过独立检查）。"""
     pytest.importorskip("rdkit")
     reason = _run([("sigma", "BrC([H])1C=CC=C[CH+]1")],
@@ -100,7 +100,7 @@ def test_q17_wrong_arrows_rejected():
                   [("bp", "BrC1=CC=CC=C1"), ("hp", "[H+]")])
     assert "推不出声明的产物" in reason
     assert "重画机理箭头" in reason          # 错侧判定：信产物修箭头
-    assert "改为模拟推得的结构" in reason      # 附模拟预期值（P1.5 翻转提示）
+    assert "改为模拟推得的结构" in reason      # 附模拟预期值（翻转提示）
 
 
 def test_missing_compensation_arrow_impossible():
@@ -122,11 +122,11 @@ def test_h_atom_as_fishhook_source_rejected():
     assert "不成立" in reason
 
 
-# ---------- 校验器集成与跳过面 ----------
+# ---------------------------------------------------------------- 校验器集成与跳过面
 
 
 def test_validator_integration_rejects_q17():
-    """完整校验路径：Q17 病例被拦（EAS 方向规则先开枪；模拟器是深层
+    """完整校验路径：脱质子错误箭头被拦（EAS 方向规则先开枪；模拟器是深层
     兜底，两规则给出同一正确建议 sigma:1-2>sigma:1-7）。"""
     pytest.importorskip("rdkit")
     _, bad = _validate_text(
@@ -180,7 +180,7 @@ def test_skips_no_arrow_and_formula_components():
 
 def test_impossible_message_uses_local_refs():
     """超价等"不可能"报错用 组件:局部序号（nu:0），LLM 可直接定位——
-    不用大图全局序号或 RDKit 碎片内序号（P2 修正 prompt 依赖可读定位）。"""
+    不用大图全局序号或 RDKit 碎片内序号（修正 prompt 依赖可读定位）。"""
     pytest.importorskip("rdkit")
     reason = _run([("ar", "C1=CC=CC=C1"), ("nu", "[N+](=O)=O")],
                   ["ar:0-1>nu:0"],
@@ -190,7 +190,7 @@ def test_impossible_message_uses_local_refs():
     assert "atom #" not in reason      # 不裸用 RDKit 碎片内序号
 
 
-# ---------- P1.5：图 diff 反推箭头 + 错侧自动翻转 ----------
+# ---------------------------------------------------------------- 图 diff 反推箭头 + 错侧自动翻转
 
 
 def _fix_arrows(text):
@@ -204,7 +204,7 @@ def _flip(text):
 
 
 def test_diff_autofix_q17():
-    """Q17 病例：错误箭头 → 反推 sigma:1-2>sigma:1-7（脱质子落闭环键），
+    """错误箭头 → 反推 sigma:1-2>sigma:1-7（脱质子落闭环键），
     免 LLM，重校验通过。"""
     pytest.importorskip("rdkit")
     fix = _fix_arrows(
@@ -295,7 +295,7 @@ def test_diff_autofix_none_when_underivable():
 
 
 def test_flip_missing_intermediate():
-    """错侧翻转：corpus 真实病例（que_test8 5.png——产物写成乙醚+水+H+，
+    """错侧翻转：corpus 真实病例（产物写成乙醚+水+H+，
     箭头推出质子化乙醚+水）→ 产物改为模拟推得（乙醚+H+ 合并为
     质子化乙醚），箭头不动，重校验通过。"""
     pytest.importorskip("rdkit")

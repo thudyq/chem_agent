@@ -90,7 +90,7 @@ def test_struct_mode_named_params():
     t4 = parse_tags("[STRUCT:CCl,label=底物,id=s0]")[0]
     assert t4.attrs["mode"] == "skeleton"
     assert t4.attrs["id"] == "s0"
-    # 20260821：bond=/charge= 参数化标注（bond 与 newman 语义分派）
+    # bond=/charge= 参数化标注（bond 与 newman 语义分派）
     t5 = parse_tags("[STRUCT:CCC=O, bond=1-2, charge=0:+,3:-]")[0]
     assert t5.args[0] == "CCC=O"
     assert t5.attrs["mode"] == "skeleton"
@@ -332,7 +332,7 @@ def test_composite_reasoning_inside_filtered():
 
 
 def test_composite_charge_hbond_children():
-    """[COMPOSITE] 内 CHARGE/HBOND 子标记解析（R-2），不作为顶层标记。"""
+    """[COMPOSITE] 内 CHARGE/HBOND 子标记解析，不作为顶层标记。"""
     text = (
         "[COMPOSITE:row]"
         "[STRUCT:OCC,id=et]"
@@ -349,7 +349,7 @@ def test_composite_charge_hbond_children():
 
 
 def test_composite_struct_at_pos_attrs():
-    """[COMPOSITE] energy 布局 STRUCT 的 at=/pos= 不污染 SMILES 与 label（R-3）。"""
+    """[COMPOSITE] energy 布局 STRUCT 的 at=/pos= 不污染 SMILES 与 label。"""
     text = "[COMPOSITE:energy][STRUCT:CCl,label=底物,at=1,pos=below][/COMPOSITE]"
     child = parse_tags(text)[0].args[1][0]
     assert child.args == ["CCl", "底物"]

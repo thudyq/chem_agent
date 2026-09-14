@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
-"""core/electron_sim.py — 电子推动模拟器（P1，Drawbacks §16.2/§16.3）。
+"""core/electron_sim.py — 电子推动模拟器（Drawbacks §16.2/§16.3）。
 
 给定一步反应的"反应物组件 + 机理弯箭头"，确定性模拟电子流（RWMol 图
 操作），把推出的产物与声明的产物做图同构比对——验证机理图的**自洽性**
 （箭头 ⇄ 产物一致），不评判机理选择的化学真理（超出确定性方法范围）。
 
-关键设计（20260828）：
+关键设计：
 - 形式电荷**不做增量簿记**——改为跟踪孤对电子对数/自由基单电子数，
   末尾按"族价电子 − 非键电子 − 键级和"公式对**被触碰的原子**重算
   （增量簿记在"得键 + 失键"协同场景如 SN2 的碳上必错）；未触碰原子
@@ -18,8 +18,8 @@
   两个变体都试，任一与声明产物一致即通过（≤2 根歧义箭头，超出跳过）；
 - 错侧判定（§16.3）：模拟产物连价态/消毒都过不了 → 箭头必错（确定）；
   不一致 → 默认信产物修箭头（产物已过守恒/价态/label 独立检查），
-  报错附模拟预期值；"修箭头不收敛/产物不可达 → 翻修产物"归 P1.5
-  （需图 diff 分析），本版只在消息中提示。
+  报错附模拟预期值；"修箭头不收敛/产物不可达 → 翻修产物"需图 diff
+  分析（见下文），本处只在消息中提示。
 
 跳过面（宁漏勿拦）：无箭头步、化学式文本组件、含 dummy 原子（R/Ph）
 的组件参与的步、BLOCK 内外混合引用、不认识的箭头形态。
@@ -35,9 +35,6 @@ _ARROW_SPEC_RE = MECH_ARROW_RE
 
 _BOND_UP = {1: Chem.BondType.DOUBLE, 2: Chem.BondType.TRIPLE}
 _BOND_DOWN = {2: Chem.BondType.SINGLE, 3: Chem.BondType.DOUBLE}
-
-_MAX_VARIANTS = 4          # π 进攻歧义组合上限（2 根歧义箭头），超出跳过该步
-_FREE_PROTONS = {"[H+]", "[H]", "[H-]"}   # 脱质子副产惯例（允许预告多出）
 
 
 class _Sim:
@@ -420,7 +417,7 @@ def _compare(predicted, declared, left_sigs):
 
 def simulate_step_products(left, mech_children):
     """模拟一步并返回首个可构成的预测产物集。
-    返回 (frags 或 None, 原因或 None, trace)——frags 供错侧翻转（P1.5）
+    返回 (frags 或 None, 原因或 None, trace)——frags 供错侧翻转
     替换声明产物用。"""
     results = simulate(left, mech_children)
     traces = []
@@ -438,7 +435,7 @@ def verify_step(left, mech_children, right) -> tuple:
     返回 (原因串, trace)——原因为 "" 表示通过。错侧判定：
     - 全部变体连合法结构都产不出 → 箭头必错（确定）；
     - 有产物但推不出声明产物 → 默认信产物修箭头（产物已过守恒/价态
-      独立检查），消息附模拟预期值；翻转修产物归 P1.5。
+      独立检查），消息附模拟预期值；翻转修产物见图 diff 反推。
     """
     if not mech_children:
         return "", []
@@ -469,9 +466,7 @@ def verify_step(left, mech_children, right) -> tuple:
             f"（若确认箭头无误，产物应改为模拟推得的结构）"), traces
 
 
-# ---------------------------------------------------------------------------
-# COMPOSITE 级接入：reaction 布局逐步模拟 + BLOCK 共振块内模拟
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------- COMPOSITE 级接入：reaction 布局逐步模拟 + BLOCK 共振块内模拟
 
 def _segments(children):
     """按 ARROW 分段（与 tag_validator 的 comp_step 口径一致）：
@@ -626,15 +621,15 @@ def verify_composite_electron_flow(children, comps, comp_mols) -> tuple:
     return "", traces
 
 
-# ---------------------------------------------------------------------------
-# 图 diff 反推箭头 + 错侧自动翻转（P1.5，20260828）
+# ----------------------------------------------------------------
+# 图 diff 反推箭头 + 错侧自动翻转
 #
 # 设计（Drawbacks §16.3）：反应物 + 声明产物都正确时，两侧图差异本身就是
 # 电子流规范——断键/成键/键级变化/电荷转移/H 迁移全部可计算。分解唯一 →
 # 确定性反推箭头（免 LLM，全量重校验把关）；不唯一 → None（归手术重写，
 # diff 作提示）。错侧翻转：箭头收敛不了时把声明产物改为模拟推得（同样
 # 重校验把关——翻转产物若与 label/守恒冲突会被拒，安全回退）。
-# ---------------------------------------------------------------------------
+# ----------------------------------------------------------------
 
 
 def _fold_with_map(mol):
@@ -658,7 +653,7 @@ def _fold_with_map(mol):
             heavy += 1
     folded = Chem.RemoveHs(mol, sanitize=False)
     folded.UpdatePropertyCache(strict=False)   # 重算隐含 H（否则折叠后
-    # GetTotalNumHs 返回折叠前的旧值，h_delta 永远为空——20260828 实测）
+    # GetTotalNumHs 返回折叠前的旧值，h_delta 永远为空——实测）
     return folded, orig_of_folded, explicit_h_orig
 
 
@@ -994,7 +989,7 @@ def fix_arrows_by_diff(tag):
     children = tag.args[1]
     segments, comp_seg, block_inner, child_of = _segments(children)
     # 组件表（与校验器同口径的 coeff 处理；无 id 组件经 child_of 的自动
-    # 编号定位——Q17 病例的产物侧就没有显式 id）
+    # 编号定位——产物侧可能没有显式 id）
     from core.tag_validator import _parse_coeff, _parse_mol
     mols = {}
     for cid, child in child_of.items():

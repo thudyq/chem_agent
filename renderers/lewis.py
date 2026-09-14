@@ -34,8 +34,7 @@ def render_lewis(smiles: str, label: str = None) -> str:
 
     # 键：与标签绘制端同一 labeler（atom_main_label）计算留白——否则键线式
     # 口径（atom_label）对非环碳返回 None → 碳标签 "C" 无留白、键线从标签
-    # 中心穿出；留白按 label_bond_margin 分档（单字符 0.30），Lewis 标签
-    # 基本为单/双字符，数值与原固定 0.30 一致（碳标签是新获得留白者）。
+    # 中心穿出；留白按 label_bond_margin 分档（见 mol_primitives）。
     for segs in bond_segments(mol, labeler=atom_main_label,
                               margin_fn=label_bond_margin, bond_gap=0.09):
         for x1, y1, x2, y2 in segs:

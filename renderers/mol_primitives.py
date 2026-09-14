@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """renderers/mol_primitives.py — RDKit 分子骨架绘制的共享工具。
 
-把 mechanism / lewis / stereo / charge / hbond 中重复的原子标签、
-2D 坐标计算、键线绘制逻辑抽取到这里，避免复制粘贴。
+各渲染器共用的原子标签、2D 坐标计算、键线绘制、孤对电子与弯箭头原语，
+避免复制粘贴。
 """
 
 import math
@@ -80,7 +80,7 @@ def atom_label(atom, explicit_hs: int = 0, flip: bool = False) -> str | None:
         # 带电碳同样不标——正电荷由圆圈电荷 ⊕ 标注
         return None
     # 孤立碳（仅连 H，如 CH4 的 C）无键线式可言——必须显示 C/CH4
-    # （B1 20260812：自由基夺氢机理的单碳组分，否则图上是空位）
+    # （自由基夺氢机理的单碳组分，否则图上是空位）
 
     sym = atom.GetSymbol()
     sym = sym[0].upper() + sym[1:]
@@ -88,7 +88,7 @@ def atom_label(atom, explicit_hs: int = 0, flip: bool = False) -> str | None:
     if (h >= 1 and atom.GetAtomicNum() in _H_PREFIX_ELEMENTS
             and atom.GetFormalCharge() >= 0 and _only_h_neighbors(atom)):
         # 氢化物惯例 H 前置（HF/HCl/HBr/HI/H2O/H2S）；正离子氢化物同惯例
-        # （H3O⁺ 而非 OH3⁺，20260815）；负离子保持 XH（如 OH⁻ 写 OH，
+        # （H3O⁺ 而非 OH3⁺）；负离子保持 XH（如 OH⁻ 写 OH，
         # 不写 HO）；碳始终 CHn（C 在前，·CH3 也写 CH3）；
         # N/P/B/Si 的氢化物写 NH3/PH3/BH3/SiH4（元素在前）——问题 2（NH3→H3N）
         parts = (f"H$_{{{h}}}$" if h > 1 else "H") + sym
@@ -133,7 +133,7 @@ _FORMULA_LABEL_RE = re.compile(r"^([A-Z][a-z]?\d*)+([+-]\d*)?$")
 # 配离子/配合物分子式：[Ag(NH3)2]+、[Cu(NH3)4]2+、[Fe(CN)6]3-，及带反
 # 离子的中性形式 [Ag(NH3)2]OH、K4[Fe(CN)6]、[Co(NH3)6]Cl3——方括号包裹、
 # 内部为"中心原子 + (配体元素序列)系数"，尾部电荷或前后置反离子
-# （20260821：配离子走分子式文本通道，无需写 SMILES 结构式）。
+# （配离子走分子式文本通道，无需写 SMILES 结构式）。
 _COMPLEX_ION_RE = re.compile(
     r"^(?:[A-Z][a-z]?\d*)*"
     r"\[[A-Z][a-z]?(?:\((?:[A-Za-z]\d*)+\)\d*)+\]"
@@ -146,7 +146,7 @@ def is_formula_label(label: str) -> bool:
     用于决定 label 是否在分子下方重复显示：纯化学式（CH3Cl、OH-、Cl·）
     分子本身已展示，不重复；中文/角色标注（底物、质子化乙醇）需显示。
     去 · 后需全由可识别元素 + 数字组成（首字符大写）。
-    20260821：配离子分子式（[Ag(NH3)2]+ 等）同样识别为纯化学式；
+    配离子分子式（[Ag(NH3)2]+ 等）同样识别为纯化学式；
     系数前缀（模型误把系数写进 label，如 "2 Cl·"）剥掉再判。
     """
     s = (label or "").strip().replace("·", "")
@@ -199,7 +199,7 @@ def label_bond_margin(label: str) -> float:
 def format_partial_charge(raw: str) -> str:
     """部分电荷文本排版：δ+ / + → $\\delta^+$，δ- / - → $\\delta^-$；其他原样。
 
-    20260821：STRUCT 参数化 charge= 支持裸 +/- 输入（LLM 免打 δ 字符），
+    STRUCT 参数化 charge= 支持裸 +/- 输入（LLM 免打 δ 字符），
     渲染端按部分电荷惯例补 δ；旧 `idx:δ±` 写法（容器 CHARGE 子标记）兼容。
     """
     raw = raw.strip()
@@ -391,7 +391,7 @@ def place_explicit_hs(mol, idx: int, count: int = 1,
                   y + h_len * math.sin(math.radians(a)))
                  for a in angles[:count]]
     if len(positions) < count:
-        # 空档不足截断（E6）：相邻空档过近被跳过时少画，告警而非静默
+        # 空档不足截断：相邻空档过近被跳过时少画，告警而非静默
         print(f"[mol_primitives] 显式 H 空档不足：原子 {idx} 请求 {count} 个，"
               f"实际画出 {len(positions)} 个")
     return positions
@@ -410,7 +410,7 @@ def place_donor_h(mol, x_idx: int, y_pos: tuple[float, float],
 
 def place_h_avoiding(mol, idx: int, pos: tuple[float, float],
                      occupancy, radius: float = 0.15) -> tuple[float, float]:
-    """显式 H 节点的避障放置（R-8）：规则位置为首选，冲突时绕原子旋转
+    """显式 H 节点的避障放置：规则位置为首选，冲突时绕原子旋转
     ±15°/±30°/±45° 取第一个零冲突候选。pos 为规则给出的局部坐标；
     返回避障后的局部坐标。"""
     ax, ay = atom_pos(mol, idx)
@@ -451,9 +451,7 @@ def h_label_edge_point(hx: float, hy: float, toward: tuple[float, float],
 
     与原子端 label_edge_point 同一留白口径：H 节点是几何放置的伪标签
     （单字符 "H"，label_bond_margin("H")=0.30），X—H 键线终点停在 H
-    标签占位之外，不再画到 H 中心靠 fill=white 遮盖。假骨架水/氨的
-    X—H 已用此口径（composite._pseudo_hbond_lines 的 gap_h），普通
-    [XH]（顶层与容器内）补齐——三处绘制统一。
+    标签占位之外，不再画到 H 中心靠 fill=white 遮盖。
     toward 为原子 idx 的坐标（X 端）；返回从 H 向 X 收缩 margin 的点。
     """
     tx, ty = toward
@@ -527,7 +525,7 @@ def lone_pair_count(atom) -> tuple[int, int]:
     不在表中的元素（金属等）返回 (0, 0)。
     带形式电荷原子的 2 个"自由基电子"是 RDKit 对缺电子离子的簿记
     （[Br+]/[Cl+]：6 个价电子实为 3 对孤对电子）——并入非键电子按
-    孤对电子画出，不画单电子点（20260821，教学画法：Br⁺ 三对孤对电子）。
+    孤对电子画出，不画单电子点（教学画法：Br⁺ 三对孤对电子）。
     """
     ve = _VALENCE_ELECTRONS.get(atom.GetAtomicNum())
     if ve is None:
@@ -564,7 +562,7 @@ def _label_h_is_left(mol, idx: int) -> bool:
     标签以 H 开头且非元素符号开头即为 H 前缀（阻挡左侧 180°）；
     H 后缀（OH₂/CH₃）阻挡右侧（0°）。此前仅按化学惯例判断，
     带电 flip 场景（如 [OH2+] 标签 H₂O）误判 H 在右 → 孤对/电荷
-    压住左侧 H 前缀（20260815 修复）。
+    压住左侧 H 前缀。
     """
     atom = mol.GetAtomWithIdx(idx)
     if _implicit_shown_hs(atom) == 0:
@@ -834,7 +832,7 @@ def atom_main_label(atom, explicit_hs: int = 0, flip: bool = False) -> str | Non
         sym = sym[0].upper() + sym[1:]
     h = max(0, atom.GetTotalNumHs() - explicit_hs)
     # 氢化物惯例 H 前置（HF/HCl/HBr/HI/H2O/H2S，见 _H_PREFIX_ELEMENTS）；
-    # 正离子氢化物同惯例（H3O⁺ 而非 OH3⁺，20260815）；负离子保持 XH
+    # 正离子氢化物同惯例（H3O⁺ 而非 OH3⁺）；负离子保持 XH
     # （如 OH⁻ 写 OH，不写 HO）；碳始终 CHn；N/P/B/Si
     # 氢化物写 NH3/PH3/BH3/SiH4（元素在前）——问题 2（NH3→H3N）
     if (h >= 1 and atom.GetAtomicNum() in _H_PREFIX_ELEMENTS
@@ -872,7 +870,7 @@ _CHARGE_SCALE = 0.5        # 电荷圈缩放（为默认大小的一半）
 
 def _charge_dist(mol, idx: int, explicit_hs: int = 0) -> float:
     """电荷圈径向距离：原子无可见标签（键线式碳，含带电碳）时贴近
-    （水平/竖直分量 0.10）；有标签（杂原子/结构简式碳）保持 0.34。
+    （水平/竖直分量 0.15）；有标签（杂原子/结构简式碳）保持 0.34。
     与绘制端同一 labeler（mol_default_labeler）判断，保证口径一致。"""
     if mol_default_labeler(mol)(mol.GetAtomWithIdx(idx), explicit_hs) is None:
         return _CHARGE_POS_DIST_NO_LABEL
@@ -899,7 +897,7 @@ def charge_tikz(mol, idx: int, shift=(0.0, 0.0), explicit_hs: int = 0,
                 occupancy=None) -> str | None:
     r"""圆圈电荷节点；无电荷返回 None。
 
-    occupancy 非空时启用候选位放置（R-8）：候选角 = [现有规则首选, 镜像,
+    occupancy 非空时启用候选位放置：候选角 = [现有规则首选, 镜像,
     上, 下, 右, 左] × 距离（有标签 0.34/0.44；无标签碳 0.141/0.241），
     逐个查占据表取第一个零冲突者（不撞键/标签/其他电荷圈）；
     首选即现有规则输出，零冲突时图面不变。
@@ -937,7 +935,7 @@ def partial_charge_angle(mol, idx: int, explicit_hs: int = 0) -> float:
 
     起点与形式电荷圈一致（_charge_angle：默认右上 45°；标签氢在右侧
     且左侧无阻碍时左上 135°）；**原子带形式电荷时起点 +45° 偏移**，
-    避免 δ 标注与圆圈电荷同位重叠（P2）；再按避让方向（直接相连的
+    避免 δ 标注与圆圈电荷同位重叠；再按避让方向（直接相连的
     键/原子 + 标签氢 + **该原子实际孤对电子点槽位**）微调（过近 ≤30°
     时向 ±30°/±60°/90° 微调；极端拥挤保持原角）。
     """
@@ -945,7 +943,7 @@ def partial_charge_angle(mol, idx: int, explicit_hs: int = 0) -> float:
     if mol.GetAtomWithIdx(idx).GetFormalCharge() != 0:
         base = (base + 45.0) % 360.0
     avoid = _bond_blocks(mol, idx)
-    # 孤对电子点槽位角度（P3'）：δ 标注不得压住电子点
+    # 孤对电子点槽位角度：δ 标注不得压住电子点
     groups, singles = lone_pair_dot_groups(mol, idx, explicit_hs=explicit_hs)
     cx, cy = _dot_center(mol, idx, explicit_hs)
     for px, py in [p for g in groups for p in g] + singles:
@@ -958,7 +956,7 @@ def partial_charge_pos(mol, idx: int, shift=(0.0, 0.0),
     """部分电荷标注的画布坐标（元素符号中心 + 方向避让，见 partial_charge_angle）。
 
     距离复用 _charge_dist（与形式电荷圈一致）：无标签碳（键线式端点）
-    水平/竖直分量 0.10，有标签原子保持 0.34。
+    水平/竖直分量 0.15，有标签原子保持 0.34。
     """
     cx, cy = _dot_center(mol, idx, explicit_hs)
     r = math.radians(partial_charge_angle(mol, idx, explicit_hs))
@@ -987,7 +985,7 @@ def lone_pair_dot_groups(mol, idx: int, shift=(0.0, 0.0), explicit_hs: int = 0):
         cx = cx0 + _LP_DIST * math.cos(r)
         cy = cy0 + _LP_DIST * math.sin(r)
         px, py = -math.sin(r), math.cos(r)
-        sep = 0.055
+        sep = 0.055   # 一对电子两点沿法线各偏 0.055（成对点的总间距 0.11）
         groups.append(((cx + px * sep, cy + py * sep),
                        (cx - px * sep, cy - py * sep)))
     singles = []
@@ -1163,7 +1161,7 @@ def prepare_mol(smiles: str, *, add_hs: bool = False, kekulize: bool = False,
     # H 数字前缀写法（[H3O+]）规范化为合法 SMILES（[OH3+]）再解析；
     # 通用基团缩写（R/X/Ph/Ac 等）替换为 dummy 原子（[*:n]），解析后
     # 给 dummy 原子设 _abbr prop（标签端显示缩写文本）
-    # （20260815：与 tag_validator._parse_mol 同口径）
+    # （与 tag_validator._parse_mol 同口径）
     smiles = normalize_h_prefix_smiles(smiles)
     smiles, abbr_map = expand_group_abbrevs(smiles)
 
@@ -1182,7 +1180,7 @@ def prepare_mol(smiles: str, *, add_hs: bool = False, kekulize: bool = False,
             # （sanitize=False + 手动 sanitize，排除 SETAROMATICITY/KEKULIZE，
             # 避免 RDKit 把交替单双键归一化为芳香环、丢失用户指定的键级）。
             # 该路径依赖较新的 RDKit flags 组合，旧版 RDKit 可能对部分输入
-            # 抛异常（20260821 服务器实测：C1=CC=CC=C1 等合法凯库勒 SMILES
+            # 抛异常（服务器实测：C1=CC=CC=C1 等合法凯库勒 SMILES
             # 被整体判无效）——异常时回退标准解析（Chem.MolFromSmiles 自动
             # sanitize），保证合法分子至少能渲染（键级可能被归一化）。
             mol = Chem.MolFromSmiles(smiles, sanitize=False) if smiles else None
@@ -1214,7 +1212,7 @@ def prepare_mol(smiles: str, *, add_hs: bool = False, kekulize: bool = False,
         if use_prepare:
             # rdMolDraw2D 延迟导入：旧版 RDKit 可能缺该模块（或绘图支持裁剪），
             # 缺失/失败时回退 AllChem.Compute2DCoords——坐标计算不受影响，
-            # 避免"整个 prepare_mol 因绘图模块导入失败而返回 None"（20260821
+            # 避免"整个 prepare_mol 因绘图模块导入失败而返回 None"（
             # 服务器实测：合法 SMILES 全被判无效）。
             try:
                 from rdkit.Chem.Draw import rdMolDraw2D
@@ -1587,9 +1585,7 @@ def format_chem_text(text: str) -> str:
     return _GREEK_RE.sub(lambda m: f"${_GREEK_TO_MATH[m.group(0)]}$", out)
 
 
-# ---------------------------------------------------------------------------
-# 标签自动换行（C2 / P3 暂缓项）
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------- 标签自动换行
 
 _LABEL_WRAP_MAX = 3.5    # 标签/条件换行默认最大行宽（视觉宽度单位）
 _LABEL_LINE_H = 0.35     # 标签单行高（TikZ 单位，估）
@@ -1671,9 +1667,8 @@ def split_arrow_condition(cond: str) -> tuple:
     return ", ".join(above), ", ".join(below)
 
 
-# 可逆令牌：仅 ⇌（20260816 用户决策）。写在条件字段中切换双向箭头，
-# 渲染时从显示文本剥离；校验层（_arrow_supplement_tokens）无法把 ⇌ 解析
-# 为化学式，自动忽略，无需改动。
+# 可逆令牌：仅 ⇌。写在条件字段中切换双向箭头，渲染时从显示文本剥离；
+# 校验层无法把 ⇌ 解析为化学式，自动忽略。
 _REV_ARROW_TOKENS = re.compile(r"⇌")
 
 
@@ -1720,7 +1715,7 @@ def main_arrow_lines(x1: float, x2: float, condition: str = "", *,
         return [f"  \\node[font=\\large] at ({(x1 + x2) / 2:.2f},{y:.2f}) "
                 f"{{$\\leftrightarrow$}};"]
     if k == "retro":
-        # 逆合成双线推导箭头（⇒，与 retro.py 画法一致，提取为共享）
+        # 逆合成双线推导箭头（⇒）
         tip, add = 0.23, 0.14
         base = x2 - tip
         tail = base + add
@@ -1746,7 +1741,7 @@ def main_arrow_lines(x1: float, x2: float, condition: str = "", *,
         ]
     node = _node(above, "above") + _node(below, "below")
     # 单向主箭头：Stealth 尖（2.5mm，比机理弯箭头的 2.2mm 略大——
-    # 主箭头视觉层级更高；20260820 起与机理箭头统一为 Stealth 风格）
+    # 主箭头视觉层级更高；与机理箭头统一为 Stealth 风格）
     return [
         f"  \\draw[-{{Stealth[length=2.5mm]}}, {style}] ({x1:.2f},{y:.2f}) -- "
         f"({x2:.2f},{y:.2f}){node};",
@@ -1762,7 +1757,7 @@ def split_species_coeff(seg: str) -> list:
     """多物种分段 → [(coeff, bare_smiles), ...]（支持系数前缀）。
 
     "2CCO;1/2O2" → [(2, "CCO"), (0.5, "O2")]。非法系数组分丢弃（返回空对）；
-    系数 1 省略。供 REACTION/ARROW 渲染时剥离系数、显示系数节点。
+    系数 1 省略。供反应式渲染时剥离系数、显示系数节点。
     """
     out = []
     for tok in re.split(r"[;,]", seg or ""):
@@ -1805,7 +1800,7 @@ def mech_arrow_origin(mol, spec: str, shift=(0.0, 0.0),
     参数:
         mol: RDKit Mol（需已有 2D 坐标）。
         spec: "a"（原子序号，含 SMILES 显式 H 原子）或 "a-b"（原子 a 与 b
-            之间的键中点）。20260821：显式 H 是真实原子参与编号，原 a#k
+            之间的键中点）。显式 H 是真实原子参与编号，原 a#k
             语法废弃——引用 H 直接写其原子序号（如 CC([H])CC 的 2 号），
             断键（C–H 键）写键中点 a-b（如 1-2）。
         shift: 分子在画布上的平移量。
@@ -1870,7 +1865,7 @@ def mech_arrow_origin(mol, spec: str, shift=(0.0, 0.0),
     atom = mol.GetAtomWithIdx(ia)
     # 电子点分支：lone_pair_offset 且非碳原子（孤对/单电子），或 碳自由基
     # （鱼钩 prefer_single 且原子带单电子）——碳自由基的单电子点是合法
-    # 鱼钩起点（B1）；碳无孤对电子，进攻箭头（非 prefer_single）对碳
+    # 鱼钩起点；碳无孤对电子，进攻箭头（非 prefer_single）对碳
     # 保持原子中心；lone_pair_offset=False（目标端）不落电子点。
     has_radical = atom.GetNumRadicalElectrons() > 0
     if (lone_pair_offset and atom.GetAtomicNum() != 6) \
@@ -1894,7 +1889,7 @@ def mech_arrow_origin(mol, spec: str, shift=(0.0, 0.0),
             r = math.radians(best)
             # 起点 = 电子点中心（槽位方向 _LP_DIST）——gap 由 mech_arrow_tikz
             # 沿弯向（bend_side 法线方向）追加，保证 gap 方向与弧线弯向一致
-            # （20260815：原在槽位方向外移 gap，方向与弯向可能不一致）。
+            # （原在槽位方向外移 gap，方向与弯向可能不一致）。
             d = _LP_DIST
             return (cx + d * math.cos(r), cy + d * math.sin(r), False, True, False)
     if labeler is not None and toward is not None:
@@ -1926,13 +1921,15 @@ def mech_arrow_between(fx: float, fy: float, tx: float, ty: float,
 
     bond_break（σ 断键源）/ gap_along_bend（电子点起点）的起点 gap 沿弯向
     法线方向（mech_arrow_tikz 的 gap_along_bend，bend_side 决定侧——
-    "向上弯则向上 gap"，20260815 起取代原固定画布向下偏移 fy-=inset_start）；
+    "向上弯则向上 gap"，取代原固定画布向下偏移 fy-=inset_start）；
     aim_end（字母标签目标）让终点沿末端切线退到标签正方形外 inset_end 处，
     尖端指向原子中心且不压标签。
     bend_side: 显式弯向（±1，弦法线方向）——空间感知弯向由调用方计算
     （draw_mech_arrows）；None 时按 bend 符号 + 法线 y 近似选择（旧逻辑）。
     """
     dist = math.hypot(tx - fx, ty - fy)
+    # 弯曲幅度随弦长线性增长并封顶：终点吸附标签边（aim_end）的箭头允许
+    # 更弯（上限 1.15），普通箭头平缓贴分子（上限 0.6）；0.15 为最短弦的基线弯幅
     if aim_end:
         mag = min(0.30 * dist + 0.15, 1.15)
     else:
@@ -1980,7 +1977,7 @@ def mech_arrow_tikz(fx: float, fy: float, tx: float, ty: float,
             切线退到正方形边缘外 inset_end（_MECH_LABEL_GAP=0.05），
             控制点随后按"起点→末端"实际箭头段重算（短箭头不重叠）。
         bend_side: 显式弯向（±1，弦法线方向；None=按 bend 符号 + 法线 y
-            近似选择，20260815 起空间感知弯向由调用方计算后传入）。
+            近似选择，空间感知弯向由调用方计算后传入）。
         gap_along_bend: 起点 gap 沿弯向法线方向偏移（断键/电子点起点——
             "向上弯则向上 gap"），而非沿弦方向。
     """
@@ -2051,7 +2048,7 @@ def mech_arrow_tikz(fx: float, fy: float, tx: float, ty: float,
     lines = []
     if kind == "fishhook":
         # 鱼钩（单电子）：Stealth 半箭头尖（[left] 只画左半边，arrows.meta）
-        # ——替代手拼 barb 短线，与双电子箭头风格一致（20260820 借鉴
+        # ——替代手拼 barb 短线，与双电子箭头风格一致（借鉴
         # Gemini 输出样式；端点留白由上游 inset/aim_end 逻辑精确控制，
         # 不叠加 shorten）
         lines.append(

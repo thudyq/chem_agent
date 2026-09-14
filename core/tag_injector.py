@@ -27,7 +27,7 @@ def inject_tags_into_text(original_text: str, tags: List[RenderTag], rendered_ma
     for tag in sorted(tags, key=lambda t: t.start_pos, reverse=True):
         if tag.type == "REASONING":
             # REASONING 无渲染器：整体剥离——思考过程仅用于引导模型规划，
-            # 不出现在交付给用户的 content 中（20260820 起）
+            # 不出现在交付给用户的 content 中
             replacement = ""
         else:
             replacement = rendered_map.get(tag.raw, tag.raw)

@@ -67,17 +67,15 @@ def _get_str_fallback(*names: str, default: str = "") -> str:
     return default
 
 
-# ---------------------------------------------------------------------------
-# 思考参数的取值与归一（模型与思考参数重构 §4.4 / §4.5.3）
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------- 思考参数的取值与归一（模型与思考参数重构 §4.4 / §4.5.3）
 
 # 思考开关
 THINKING_ON = "on"
 THINKING_OFF = "off"
 THINKING_CHOICES = (THINKING_ON, THINKING_OFF)
 
-# 思考强度（低 → 高）；别名按官方归一化映射（F5）：
-#   minimal→low / medium→high / xhigh→high / ultra→max
+# 思考强度（低 → 高）；端点别名归一化映射：
+#   minimal→low / xhigh→high / ultra→max（medium/high/max 为本名原样）
 EFFORT_LOW, EFFORT_MEDIUM, EFFORT_HIGH, EFFORT_MAX = "low", "medium", "high", "max"
 EFFORT_CHOICES = (EFFORT_LOW, EFFORT_MEDIUM, EFFORT_HIGH, EFFORT_MAX)
 _EFFORT_ALIASES = {
@@ -234,9 +232,8 @@ class ServiceConfig:
     https://your.host），用于拼接附件下载 URL；缺省用请求 Host 推导。
     attachment_dir: 图片附件存放目录。
     attachment_max_bytes: 附件目录总字节上限，超过时删最旧图片
-    （默认 2GB；0/负数=不按大小限制）。清小搭对 /files 是热链、未必转存
-    到自己的 OSS，所以图片必须在我们这长期保留，只在磁盘超配额时才回滚删，
-    不能按时间 TTL 硬删——否则历史对话的图会因文件被清而 404。
+    （默认 2GB；0/负数=不按大小限制）。附件生命周期语义见
+    core/attachments.py 模块 docstring（不按时间 TTL 硬删，超配额才删最旧）。
     attachment_max_files: 附件目录最多保留的图片数量（默认 50000；0/负数=不限）。
     """
 

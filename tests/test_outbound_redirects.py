@@ -132,7 +132,7 @@ def test_v1_image_download_disables_redirects(monkeypatch, tmp_path):
     assert seen["allow_redirects"] is False
 
 
-# ------------------------------------------------- 用户可见提示
+# ---------------------------------------------------------------- 用户可见提示
 
 @pytest.mark.parametrize("raw", ["HTTP 301: moved", "HTTP 302: <html>",
                                  "HTTP 307: T", "http 308: y"])

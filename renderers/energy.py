@@ -6,7 +6,9 @@
 驻点坐标由布局引擎（renderers/layout.py::energy_point_coords）计算。
 """
 
-from .layout import energy_annotation_placement, energy_point_coords, energy_point_roles
+from .layout import (ENERGY_LABEL_YOFF, ENERGY_TS_YOFF,
+                     energy_annotation_placement, energy_point_coords,
+                     energy_point_roles)
 
 
 def render_energy(points_str: str) -> str:
@@ -24,12 +26,13 @@ def render_energy(points_str: str) -> str:
     x_last = info["x_last"]
     roles = energy_point_roles(values)
 
-    # 驻点标签占用区域 → 标注框与纵轴高度（避免遮挡）
+    # 驻点标签占用区域 → 标注框与纵轴高度（避免遮挡）。
+    # 标签占位估算：半宽 0.85（角色名+能量值约 8 字符）、半高 0.22（单行 \small）
     occupied = []
     for i, v, x, y in info["points"]:
         if i not in roles:
             continue
-        yoff = 0.35 if roles[i] == "过渡态" else -0.3
+        yoff = ENERGY_TS_YOFF if roles[i] == "过渡态" else ENERGY_LABEL_YOFF
         occupied.append((x - 0.85, y + yoff - 0.22, x + 0.85, y + yoff + 0.22))
     box_x, box_y, box_anchor, axis_top = energy_annotation_placement(
         occupied, x_last)
@@ -55,7 +58,7 @@ def render_energy(points_str: str) -> str:
         lines.append(f"  \\begin{{scope}}[shift={{({x:.1f},{y:.2f})}}]")
         lines.append("    \\fill[blue] (0,0) circle (0.06);")
         if i in roles:
-            yoff = 0.35 if roles[i] == "过渡态" else -0.3
+            yoff = ENERGY_TS_YOFF if roles[i] == "过渡态" else ENERGY_LABEL_YOFF
             lines.append(f"    \\node[font=\\small] at (0,{yoff:.2f}) {{{roles[i]} ({v:+.0f})}};")
         lines.append("  \\end{scope}")
     # Ea / ΔH 标注框（净空带，anchor 定位）

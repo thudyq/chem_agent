@@ -44,7 +44,7 @@ from core.web_api import prune_web_attachments
 from utils.tempdir import work_dir
 from utils import tempdir
 
-# ── 控制台/日志编码兜底（20260830）──────────────────────────────────────────
+# ── 控制台/日志编码兜底 ──────────────────────────────────────────
 # Windows 默认代码页常见 GBK，而日志里难免出现它转不了的字符（`⚠` `✓` `⁻`
 # `⇌` 等化学符号尤其多）。`print` 遇到这种字符会抛 UnicodeEncodeError——
 # 实测把**启动横幅**直接打成 `ERROR: Application startup failed. Exiting.`，
@@ -64,7 +64,7 @@ except (AttributeError, OSError, ValueError):     # 非 TextIOWrapper / 已接�
 async def _lifespan(_app: FastAPI):
     """应用生命周期：启动时拉起网页会话清理线程 + 打印生效配置。
 
-    启动横幅（20260830 诊断）：把**实际生效**的服务器模型/端点/思考参数打出来，
+    启动横幅：把**实际生效**的服务器模型/端点/思考参数打出来，
     便于一眼核对"重启后是不是加载了新配置"——此前排查
     "网页填了 A、日志却是 .env 的 B" 时无法确认这一点。
     只打指纹，**绝不打完整密钥**。
@@ -438,14 +438,14 @@ def _subject_summary(meta: dict) -> str:
 
 
 def _extract_history(messages: list, max_items: int = 10) -> list:
-    """提取最后一条 user 消息之前的对话历史（A3 多轮对话）。
+    """提取最后一条 user 消息之前的对话历史（多轮对话）。
 
     返回 [{"role": "user"/"assistant", "content": 文本}, ...]（最近 max_items 条）。
     - 当前问题 = 最后一条 user 消息（由 _extract_question 处理），其本身不在此处；
     - **user 消息原文保留**（承载话题/意图，追问靠它）；
     - **assistant 消息不以原文喂**：替换为"去锚定状态摘要"（是否通过校验），
       绝不回喂标记/TikZ/机制结构——避免自我锚定导致同对话同质化、照抄错版
-      （20260830 观察：新对话多样且常对，同对话同质化且常错）。
+      （观察：新对话多样且常对，同对话同质化且常错）。
     - 多模态 content 数组只取文本部分。
     """
     if not isinstance(messages, list):
@@ -477,7 +477,7 @@ def _extract_history(messages: list, max_items: int = 10) -> list:
             continue
         if role == "assistant":
             _raw, meta = answer_cache.lookup_full(text)
-            text = _subject_summary(meta)   # 去锚定：主题+状态，绝不回喂原文
+            text = _subject_summary(meta)   # 去锚定：仅状态，绝不回喂原文
         if text.strip():
             history.append({"role": role, "content": text.strip()})
     return history
@@ -565,12 +565,9 @@ def _image_question_parts(images: list, fetch_image, msgs: dict,
             # 图片描述与用户文字合并为同一问题（多模态两段式，B 方案）
             parts.append(f"（用户上传的图片 {i} 的内容（{desc['type']}）："
                          f"{desc['content']}）")
-            # B3（20260826）：图像为视觉模型自动识别，提示用户识别可能有误
+            # 图像为视觉模型自动识别，提示用户识别可能有误
             if desc.get("smiles_ok") is False:
                 parts.append(msgs["smiles_bad"].format(i=i))
-            # 20260828：识别降级（未产出结构化两行，仅保留尽力提取的片段）
-            elif desc.get("downgraded"):
-                parts.append(msgs["downgraded"].format(i=i))
             else:
                 parts.append(msgs["generic"].format(i=i))
         else:
@@ -592,9 +589,6 @@ _API_IMAGE_MSGS = {
     "smiles_bad": "（提示：图片 {i} 识别出的结构式 SMILES 经校验无法解析，"
                   "识别可能有误；请在回答中提醒用户核对图片/结构，"
                   "必要时请用户用文字描述该结构）",
-    "downgraded": "（提示：图片 {i} 识别受限，以上为尽力提取的片段，"
-                  "可能不完整或有误；请在回答中提醒用户以图片为准，"
-                  "必要时请用户用文字补充说明）",
     "generic": "（提示：图片 {i} 为视觉模型自动识别，识别可能有误；"
                "请在回答中提醒用户以图片为准、核对识别内容，"
                "如有出入可请用户用文字补充说明）",
@@ -693,7 +687,7 @@ def _sse_stream_core(frame, work, error_frame, stop_frame, unpack,
     * `work(answer_q, progress_q, correction_mark, safe_put)`：管线执行与结果
       整备（/v1：编译附件 + 剥离手写图片链接；网页：凭证/按 IP 闸门在 work 内
       落地 + 会话附件 + LaTeX 源码）。完成时把 payload 放进 answer_q，异常原样
-      放入。correction_mark 是 P2 修正触发的哨兵（correction_callback 经
+      放入。correction_mark 是修正触发的哨兵（correction_callback 经
       progress_q 传给主循环的非文本片段）；safe_put 在队列满时丢弃（修正提示是
       装饰性的，不阻塞管线）；
     * `error_frame(exc)`：异常收尾帧（/v1 带 usage + 原始 message；网页用
@@ -709,7 +703,7 @@ def _sse_stream_core(frame, work, error_frame, stop_frame, unpack,
     必须显式 copy_context().run() 把请求上下文带进去。BYOK 凭证则必须由
     `work()` 在自己内部 set：本生成器被 Starlette 逐块迭代时每次 next() 都从
     请求上下文重新拷贝一份 Context，迭代处 set 的值传不到后续迭代
-    （20260830 实测病例，详见 core/web_api.py `_sse_stream` 的说明）。
+    （实测病例，详见 core/web_api.py `_sse_stream` 的说明）。
     """
     yield frame({"role": "assistant"})
     yield frame({"reasoning": "正在思考并绘制化学图示…"})
@@ -787,14 +781,10 @@ def _sse_stream_core(frame, work, error_frame, stop_frame, unpack,
 
 def _sse_stream(question: str, history: list, cid: str, created: int,
                 public_base: str):
-    """SSE 帧序列：role 帧 → 思考帧（固定提示 + 低频心跳 + P2 修正提示；不再
-    转发草稿增量——清小搭等前端对 reasoning 帧逐条追加显示，草稿帧会造成
-    "正在生成… 草稿"无限叠加错乱）→ content 增量（文本里的 TikZ 已替换为
-    行内图片引用 ![化学图示-N](fileUrl)）→ stop 帧（usage）→ [DONE]。
-
-    文本先行：process_question 一返回立即发 content 帧，附件 PNG 编译在
-    work 线程与 content 发送并行、完成后挂 stop 帧——用户先读到完整文字
-    回答，图示随后到达（与本地界面"文本先行、图片回填"同构）。
+    """/v1 的 SSE 流：骨架见 `_sse_stream_core`；本路径 content 帧里的 TikZ
+    已替换为行内图片引用 ![化学图示-N](fileUrl)，stop 帧带 usage 与
+    x_soda.attachments（附件 PNG 在 work 线程与 content 发送并行编译，
+    文本先行、图示随后）。
     """
     result_q = queue.Queue(maxsize=1)    # attachments 编译完成
 
@@ -850,11 +840,13 @@ def _sse_stream(question: str, history: list, cid: str, created: int,
 
 @app.get("/")
 def root():
+    """服务自描述（探活用）：服务名与端点清单。"""
     return {"service": "chem_agent", "endpoints": ["/v1/models", "/v1/chat/completions"]}
 
 
 @app.get("/v1/models")
 def list_models(authorization: str | None = Header(None)):
+    """OpenAI 兼容模型清单（单模型 chem-agent）；兼作凭证连通性自检。"""
     _check_auth(authorization)
     return {"object": "list", "data": [
         {"id": "chem-agent", "object": "model", "owned_by": "chem_agent"},
@@ -877,6 +869,12 @@ def serve_attachment(filename: str):
 
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request, authorization: str | None = Header(None)):
+    """OpenAI 兼容对话端点：stream=true 走 SSE（见 `_sse_stream`），否则一次性 JSON。
+
+    多模态 content 数组（图片/音频/文件）经 `_extract_question` 解析、
+    `_build_question` 并入问题文本；回答中的 TikZ 编译为 PNG 附件
+    （`x_soda.attachments`），Bearer 鉴权（SERVICE_API_KEY）。
+    """
     _check_auth(authorization)
     body = await request.json()
     # 严格按 JSON 布尔解析 stream（字符串 "false" 视为非流式）
@@ -942,7 +940,7 @@ async def chat_completions(request: Request, authorization: str | None = Header(
         "usage": _usage(question, answer),
     }
     # 图已通过行内 markdown 引用（content 里的 ![化学图示-N](fileUrl)）展示，
-    # 不再挂 x_soda.attachments，避免文末再出现一排缩略图（20260826）。
+    # 不再挂 x_soda.attachments，避免文末再出现一排缩略图。
     return JSONResponse(payload)
 
 

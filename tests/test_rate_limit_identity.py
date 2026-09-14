@@ -78,7 +78,7 @@ def _payload():
             "stream": False, "session_id": "a" * 32}
 
 
-# ------------------------------------------------- 1. 伪造头不能刷出新桶
+# ---------------------------------------------------------------- 1. 伪造头不能刷出新桶
 
 def test_spoofed_xff_does_not_reset_rate_limit(web, answered, monkeypatch):
     """★ R4 核心回归：每次都换一个伪造 IP，第 3 次必须仍然被限流。
@@ -105,7 +105,7 @@ def test_same_client_still_limited(web, answered, monkeypatch):
                     headers=KEY_HEADERS).status_code == 429
 
 
-# ------------------------------------------------- 2. 只认净化后的 client
+# ---------------------------------------------------------------- 2. 只认净化后的 client
 
 def test_client_ip_ignores_forwarded_header():
     """请求头里的 IP 链完全被忽略（那是客户端可控的输入）。"""
@@ -124,7 +124,7 @@ def test_client_ip_normalizes_ipv6():
     assert web_api._client_ip(_req(client=("2001:0db8::1", 1))) == "2001:db8::1"
 
 
-# ------------------------------------------------- 3. 部署配置不得用追加写法
+# ---------------------------------------------------------------- 3. 部署配置不得用追加写法
 
 @pytest.mark.parametrize("rel", ["deploy/nginx-chem-agent.conf", "DEPLOY.md"])
 def test_forwarded_for_must_overwrite_not_append(rel):

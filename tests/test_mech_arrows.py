@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""renderers.composite.draw_mech_arrows 单元测试（改进 1 模块化）。
+"""tests/test_mech_arrows.py — renderers.composite.draw_mech_arrows 单元测试（改进 1 模块化）。
 
 机理箭头几何逻辑（p0/p1 定位、端点吸附避让）提取为独立函数后，
 可脱离完整 COMPOSITE 渲染独立测试。需要真实 RDKit。
@@ -49,7 +49,7 @@ def test_draw_mech_arrows_fishhook():
 
 def test_carbon_radical_fishhook_starts_at_single_electron():
     """碳自由基（·CH3）的鱼钩起点落在单电子点上（on_electron），
-    而非 C 原子中心——回归锚点（20260815：mech_arrow_origin 的
+    而非 C 原子中心——回归锚点（mech_arrow_origin 的
     电子点分支原排除全部碳原子，碳自由基起点退化为原子中心）。"""
     from renderers.mol_primitives import (
         lone_pair_dot_groups, mech_arrow_origin,
@@ -90,7 +90,7 @@ def test_draw_mech_arrows_skip_invalid_point():
 
 
 def test_draw_mech_arrows_explicit_h_point():
-    """20260821：显式 H 是真实原子参与编号（a#k 废弃），MECHARROW 直接用
+    """显式 H 是真实原子参与编号（a#k 废弃），MECHARROW 直接用
     H 原子序号引用（CC([H])CC 的 2 号原子是 H）。
     """
     mols = _mols("CC([H])CC")   # 5 原子：C0-C1(H2)-C3-C4，2 号是显式 H

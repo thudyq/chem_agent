@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""手术式箭头重写（20260827）测试。
+"""tests/test_arrow_rewrite.py — 手术式箭头重写测试。
 
-背景：que_test6~9 回放实验证明——纯机理箭头类失败（编号/方向/配对）时，
+背景：回放实验证明——纯机理箭头类失败（编号/方向/配对）时，
 给 LLM"固定骨架 + 原子编号地图"单独补写 MECHARROW（查表代替数编号），
 5 个箭头类案例 15/15 通过；STRUCT 化学/守恒级错误地图无效（对照组）。
 本文件验证：
@@ -55,7 +55,7 @@ def _dispatch(answers, calls):
     return fake_ask
 
 
-# ---------- 原子地图生成 ----------
+# ---------------------------------------------------------------- 原子地图生成
 
 
 def test_atom_maps_basic():
@@ -104,7 +104,7 @@ def test_atom_maps_auto_id_and_non_composite():
     assert build_component_atom_maps(parse_tags("[STRUCT:CCO]")[0]) == ""
 
 
-# ---------- 失败分类 ----------
+# ---------------------------------------------------------------- 失败分类
 
 
 def _composite_tag(with_mech=True):
@@ -118,7 +118,7 @@ def _composite_tag(with_mech=True):
 
 @pytest.mark.parametrize("reason,expected", [
     # 端点错误消息尾部含"…需先在 SMILES 中把该 H 写成显式 [H]…"指引——
-    # 拦截词若用"SMILES"单词会误伤此类（20260827 实测回归）
+    # 拦截词若用"SMILES"单词会误伤此类（实测回归）
     ("MECHARROW 源端点「ox:2-3」键端点「2-3」引用原子 2 与 3 之间的键，"
      "但该分子中这两原子没有成键（原子 2=C 连接 [1=C]；可直接引用的键：2-1；"
      "该分子没有显式 H 原子——若意图引用 X—H 键（如脱质子），需先在 SMILES 中"
@@ -151,7 +151,7 @@ def test_is_arrow_fixable_requires_composite():
     assert _is_arrow_fixable(tag, "MECHARROW 源端点…") is False
 
 
-# ---------- 端到端 ----------
+# ---------------------------------------------------------------- 端到端
 
 
 def test_surgical_rewrite_end_to_end(monkeypatch):
@@ -219,7 +219,7 @@ def test_surgical_not_triggered_for_conservation(monkeypatch):
 
 def test_surgical_attempted_once_per_tag(monkeypatch):
     """手术重写对同一标记只尝试一次：重写非法 → 常规修正原样重犯 →
-    P3 逃生降级（不无限烧调用）。"""
+    逃生降级（不无限烧调用）。"""
     pytest.importorskip("rdkit")
     calls = []
     monkeypatch.setattr("app._translate_name_zh2en", lambda n: None)
@@ -229,7 +229,7 @@ def test_surgical_attempted_once_per_tag(monkeypatch):
         "correction": _BAD_PROTONATION,             # 常规修正原样重犯
     }, calls))
     result = process_question("乙醇被质子酸质子化的过程", max_corrections=2)
-    # 主生成 1 + 手术 1 + 常规修正 1（修正后 fingerprint 相同 → P3 逃生）
+    # 主生成 1 + 手术 1 + 常规修正 1（修正后 fingerprint 相同 → 逃生）
     assert len(calls) == 3
     assert sum(1 for c in calls
                if c["sp"] == load_mech_arrow_prompt()) == 1  # 手术只试一次
@@ -269,7 +269,7 @@ def test_rewrite_rejects_invalid_llm_output():
         app_mod.ask_llm = orig_ask
 
 
-# ---------- P2：电子流模拟结论注入手术重写（20260828） ----------
+# ---------------------------------------------------------------- 电子流模拟结论注入手术重写
 
 # 均裂两根鱼钩都归同一原子（模式规则不查，模拟器兜底拦截）
 _SIM_FAIL = (
@@ -300,7 +300,7 @@ def test_surgical_includes_sim_conclusion(monkeypatch):
     assert len(calls) == 2                          # 主生成 + 手术重写
     surg = calls[1]
     assert surg["sp"] == load_mech_arrow_prompt()
-    assert "电子流模拟" in surg["q"]                 # 模拟结论注入（P2）
+    assert "电子流模拟" in surg["q"]                 # 模拟结论注入
     assert "不成立" in surg["q"]                      # 含模拟失败原因（双自由基超价）
     assert "tikzpicture" in result                   # 重写后渲染成功
 
@@ -334,7 +334,7 @@ def test_correction_prompt_sim_guidance():
     assert "预期产物" in prompt
 
 
-# ---------- P1.5 管线集成：diff 反推 / 错侧翻转的证据序 ----------
+# ---------------------------------------------------------------- 管线集成：diff 反推 / 错侧翻转的证据序
 
 _Q17_WRONG = (
     "脱质子恢复芳香性：\n\n"

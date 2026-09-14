@@ -33,7 +33,7 @@ def test_lookup_miss_returns_none():
 
 
 def test_reasoning_stripped_on_store():
-    """[REASONING] 思考块不进入缓存（过程而非结论，20260828 用户裁定）。"""
+    """[REASONING] 思考块不进入缓存（过程而非结论，用户裁定）。"""
     answer_cache.store(
         "渲染后文本",
         "前言 [REASONING]先数原子编号：0=C 1=O[/REASONING] 正文 "

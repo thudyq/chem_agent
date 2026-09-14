@@ -8,7 +8,7 @@ RDKit 解析含 @/@@ 的 SMILES → PrepareMolForDrawing（含坐标+楔形方�
 
 import math
 
-from .mol_primitives import _label_flip_for, atom_label, atom_pos, bond_type_order, \
+from .mol_primitives import _BOND_GAP, _label_flip_for, atom_label, atom_pos, bond_type_order, \
     charge_tikz, label_bond_margin, label_node_pos, mol_visual_bbox, prepare_mol, wrap_format_text
 
 
@@ -31,8 +31,8 @@ def stereo_scope_lines(mol) -> list:
         L = math.hypot(dx, dy) or 1.0
         ux, uy = dx / L, dy / L
         px, py = -uy, ux
-        # 标签留白按 label_bond_margin 分档（OH/NH₂=0.30、CH₃=0.45…）——
-        # 原固定 0.25 对双字符标签（半宽≈0.26）留白不足、端点落入标签字符区
+        # 标签留白按 label_bond_margin 分档（见 mol_primitives）——
+        # 固定值对双字符标签（半宽≈0.26）留白不足、端点会落入标签字符区
         lab_i = atom_label(mol.GetAtomWithIdx(i))
         lab_j = atom_label(mol.GetAtomWithIdx(j))
         si = label_bond_margin(lab_i) if lab_i else 0.0
@@ -63,10 +63,10 @@ def stereo_scope_lines(mol) -> list:
         else:
             lines.append(f"  \\draw ({x1:.2f},{y1:.2f}) -- ({x2:.2f},{y2:.2f});")
             if order >= 2:
-                d = 0.08
+                d = _BOND_GAP
                 lines.append(f"  \\draw ({x1+px*d:.2f},{y1+py*d:.2f}) -- ({x2+px*d:.2f},{y2+py*d:.2f});")
             if order >= 3:
-                d = 0.08
+                d = _BOND_GAP
                 lines.append(f"  \\draw ({x1-px*d:.2f},{y1-py*d:.2f}) -- ({x2-px*d:.2f},{y2-py*d:.2f});")
 
     for atom in mol.GetAtoms():

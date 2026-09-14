@@ -20,9 +20,9 @@ LLM 在容器内显式列出结构组件、连接符与机理箭头，渲染器�
 布局种类：
     reaction: 反应式与多步序列（可叠加机理箭头），每个 ARROW 分隔一步；
     row: 纯横向组件排列（并列结构、构象对比等），[NEWLINE] 换行。
-    energy: 势能面 + 驻点结构（R-3）：容器内需一个 [ENERGY:点序列]，
+    energy: 势能面 + 驻点结构：容器内需一个 [ENERGY:点序列]，
         每个 STRUCT 用 at=点序号 挂到驻点上（pos=above/below 可选，默认 above）。
-    共振式（R-6）：用 [BLOCK]...[/BLOCK] 组装——块内 STRUCT 与
+    共振式：用 [BLOCK]...[/BLOCK] 组装——块内 STRUCT 与
         ARROW:type=resonance，自动画方括号并保留各极限式显式键级
         （Kekulé 式不统一芳香化）。
     头部可追加标志：[COMPOSITE:reaction,numbering] 打开原子序号标注
@@ -40,7 +40,7 @@ LLM 在容器内显式列出结构组件、连接符与机理箭头，渲染器�
 杂原子起点自动上移到孤对电子区域；键中点出发的箭头向下弯，其余向上弯。
 引用未知 id 或越界原子的箭头会被跳过，不影响整体渲染。
 
-组件级标注（R-2，随分子 scope 一起移动）：
+组件级标注（随分子 scope 一起移动）：
     [CHARGE:ref|idx:δ+,idx:δ-,...]   组件 ref 上的部分电荷（红色）
     [HBOND:ref|from-to,...]          组件 ref 内的氢键虚线（teal dashed）
 
@@ -79,6 +79,7 @@ if __name__ == "__main__":
         is_formula_label, heavy_atom_count, label_wrapped_size,
     )
     from renderers.layout import (
+        ENERGY_LABEL_YOFF, ENERGY_TS_YOFF,
         energy_annotation_placement, energy_point_coords, energy_point_roles,
         layout_row, layout_rows, molecule_scope_lines, place_bbox,
     )
@@ -101,6 +102,7 @@ else:
         is_formula_label, heavy_atom_count, label_wrapped_size,
     )
     from .layout import (
+        ENERGY_LABEL_YOFF, ENERGY_TS_YOFF,
         energy_annotation_placement, energy_point_coords, energy_point_roles,
         layout_row, layout_rows, molecule_scope_lines, place_bbox,
     )
@@ -227,7 +229,7 @@ def _arc_mid(fx, fy, tx, ty, mag, side):
 
 
 def _pick_bend_side(p0, p1, from_bond, aim_end, sm, dm):
-    """空间感知弯向（20260815）：评估两个候选弯向（弦法线 ±）的弧线中点
+    """空间感知弯向：评估两个候选弯向（弦法线 ±）的弧线中点
     距源/目标组件键线的最短距离，选空旷侧。
 
     默认侧复现原 bend 语义（from_bond 断键→法线反侧、进攻→法线正侧，
@@ -378,7 +380,7 @@ def draw_mech_arrows(mols: dict, arrows: list,
         # aim_end（末端沿切线退让到标签正方形外 0.05）：纯原子终点
         # （元素标签）启用——H 原子终点（\node{H}）与普通元素同机制，
         # 占位约边长 0.26（_LABEL_SQUARE_HALF=0.13），箭头尖端沿切线
-        # 退到正方形边缘外 _MECH_LABEL_GAP（20260815）。
+        # 退到正方形边缘外 _MECH_LABEL_GAP。
         tb = None
         aim_end = False
         if p1[4] and "-" not in dst_pt:
@@ -423,8 +425,8 @@ def _collect_components(children):
                 "label": label,
                 "at": child.attrs.get("at"),
                 "pos": child.attrs.get("pos", "above"),
-                # 分子家族重构（20260818）：容器内 mode 按布局放开——
-                # reaction 禁 newman，row/energy 不限（20260821 扩充）；
+                # 分子家族重构：容器内 mode 按布局放开——
+                # reaction 禁 newman，row/energy 不限；
                 # mode=lewis 时该组件显示孤对电子点；stereo/chair/newman
                 # 预渲染为不透明组件（见 modecomps）
                 "mode": mode,
@@ -433,11 +435,11 @@ def _collect_components(children):
                 "bond_spec": child.attrs.get("bond", "")
                 if mode == "newman" else "",
                 "angle": child.attrs.get("angle", ""),
-                # 大一统架构（20260819）：arrow 令牌 = 箭头上附件（副反应物/
+                # 大一统架构：arrow 令牌 = 箭头上附件（副反应物/
                 # 副产物），不参与主序列，由 ARROW 的 sup= 参数引用
                 "arrow": bool(child.attrs.get("arrow")),
             })
-            # 20260821：STRUCT 参数化标注（bond=/charge=）并入组件注解，
+            # STRUCT 参数化标注（bond=/charge=）并入组件注解，
             # 与容器内 [BOND:id|a-b] / [CHARGE:id|idx:+/-] 子标记等效
             # （newman 的 bond= 是投影观察键，不属于键突出标注）
             if child.attrs.get("bond") and mode != "newman":
@@ -488,7 +490,7 @@ def _molecule_with_annotations_lines(info: dict, *, show_numbers: bool,
                                      hbond_away: dict = None) -> list:
     """单个分子组件的完整绘制行：系数 + scope 骨架/标签/电子点 + 组件级注解
     （CHARGE 部分电荷 / HBOND 氢键 / XH 显式氢 / BOND 键突出），全部随
-    info["shift"] 移动。主行布局与 energy 布局共用（B3：energy 驻点结构
+    info["shift"] 移动。主行布局与 energy 布局共用（energy 驻点结构
     不再静默丢弃注解）。
 
     hbond_toward/hbond_away：HBOND 方向回灌——{原子序号: 目标方向点（本组件
@@ -505,7 +507,7 @@ def _molecule_with_annotations_lines(info: dict, *, show_numbers: bool,
     # 其余键线式（带 XH/BOND/HBOND 标注的分子自然落在键线式——标注
     # 聚焦反应位点，碳不标 CHn）
     labeler = _mech_labeler(info)
-    occ = Occupancy()   # R-8 占据注册表（局部坐标）：scope 内元素 + XH 注解共用
+    occ = Occupancy()   # 占据注册表（局部坐标）：scope 内元素 + XH 注解共用
     if info.get("coeff", 1.0) != 1.0:
         bbox = info.get("bbox")
         if bbox:
@@ -556,7 +558,7 @@ def _molecule_with_annotations_lines(info: dict, *, show_numbers: bool,
         else:
             pos_list = place_explicit_hs(mol, a, count, h_len=h_len)
         for hx, hy in pos_list:
-            # R-8 避障：规则位置撞键/标签/电荷圈/电子点时绕原子旋转取候选
+            # 避障：规则位置撞键/标签/电荷圈/电子点时绕原子旋转取候选
             hx, hy = place_h_avoiding(mol, a, (hx, hy), occ)
             sx, sy = label_edge_point(mol, a, (hx, hy), labeler=labeler)
             # H 端同规则留白（label_bond_margin("H")=0.30）：键线终点停在
@@ -681,7 +683,7 @@ def _shift_scope_lines(scope_lines, dx, dy):
 def _render_energy_layout(points_str: str, structs: list, mols: dict,
                           show_numbers: bool, modecomps: dict = None,
                           textcomps: dict = None) -> str:
-    """energy 布局：势能面曲线 + 驻点结构组件（R-3）。
+    """energy 布局：势能面曲线 + 驻点结构组件。
 
     每个 STRUCT 通过 at= 挂到能量点上（pos=above/below，默认 above），
     分子按视觉包围盒置于驻点正上方/下方；驻点标签优先用 STRUCT 的 label。
@@ -709,7 +711,7 @@ def _render_energy_layout(points_str: str, structs: list, mols: dict,
                     f"at={comp['at']} 超出能量点范围 0~{n - 1}）")
         at_map[comp["at"]] = comp
 
-    # 方案 A（20260821，que_test7 图 28）：先算各驻点结构的实际 bbox，
+    # 先算各驻点结构的实际 bbox，
     # 相邻"有结构"驻点的横向间距按 (w_i + w_j)/2 + 0.6 加宽——固定
     # xstep=1.5 时宽结构（叔丁基 ~2.2）横向必重叠，上方空间被相邻
     # 高峰 TS 标签挤占，结构被迫整体下移脱离驻点
@@ -725,7 +727,7 @@ def _render_energy_layout(points_str: str, structs: list, mols: dict,
         else:
             cinfo = mols[comp["id"]]
             # 多组分（`CCl.[OH-]` 等点分隔驻点结构）：预渲染片段竖直
-            # 堆叠，组合 bbox 参与放置（20260821：energy 驻点支持多组分）
+            # 堆叠，组合 bbox 参与放置（energy 驻点支持多组分）
             frags = _split_mol_frags(cinfo["mol"])
             if len(frags) > 1:
                 frag_lines, frag_bbox = _frag_lines_and_bbox(
@@ -748,9 +750,9 @@ def _render_energy_layout(points_str: str, structs: list, mols: dict,
     roles = energy_point_roles(values)
 
     # 先计算全部组件的已占区域，再决定标注框与纵轴高度（避免遮挡）
-    # P3 冲突消解：先预置驻点标签区域；结构按驻点序号放置（相邻先检测），
+    # 冲突消解：先预置驻点标签区域；结构按驻点序号放置（相邻先检测），
     # 与已占区域重叠时向右错开（最多 8.0），避免相邻驻点结构互相压叠。
-    # 标签矩形按实际文本宽度计算（20260821：原 ±0.85 固定半宽是幻影占位，
+    # 标签矩形按实际文本宽度计算（原 ±0.85 固定半宽是幻影占位，
     # 宽结构上方放置被相邻 TS 标签幻影区挤出）
     occupied = []
     label_meta = {}   # 点序号 → [yoff, 宽, 高, occupied 索引]（后处理可翻转）
@@ -759,7 +761,7 @@ def _render_energy_layout(points_str: str, structs: list, mols: dict,
                  if (i in at_map and at_map[i]["label"]) else roles.get(i))
         if not label:
             continue
-        yoff = 0.35 if roles.get(i) == "过渡态" else -0.3
+        yoff = ENERGY_TS_YOFF if roles.get(i) == "过渡态" else ENERGY_LABEL_YOFF
         w_t, h_t = label_wrapped_size(f"{format_chem_text(label)} ({v:+.0f})")
         label_meta[i] = [yoff, w_t, h_t, len(occupied)]
         occupied.append((x - w_t / 2 - 0.15, y + yoff - h_t / 2 - 0.05,
@@ -851,7 +853,7 @@ def _render_energy_layout(points_str: str, structs: list, mols: dict,
             occupied[oi] = new_rect
             meta[0] = -yoff
 
-    # 引导线（方案 A 兜底）：结构最近边与驻点距离 > 0.8 时连接二者；
+    # 引导线（兜底）：结构最近边与驻点距离 > 0.8 时连接二者；
     # 锚点 = 矩形上离驻点最近的点（对齐/翻转后的最终位置）
     leaders = []
     for at, r in resolved.items():
@@ -885,7 +887,7 @@ def _render_energy_layout(points_str: str, structs: list, mols: dict,
         lines.append("    \\fill[blue] (0,0) circle (0.06);")
         if label:
             yoff = (label_meta[i][0] if i in label_meta
-                    else (0.35 if roles.get(i) == "过渡态" else -0.3))
+                    else (ENERGY_TS_YOFF if roles.get(i) == "过渡态" else ENERGY_LABEL_YOFF))
             lines.append(f"    \\node[font=\\small] at (0,{yoff:.2f}) "
                          f"{{{format_chem_text(label)} ({v:+.0f})}};")
         lines.append("  \\end{scope}")
@@ -1020,7 +1022,7 @@ def render_composite(layout: str, children: list) -> str:
         mol = prepare_mol(comp["smiles"], allow_aromatic=allow_aromatic)
         if mol is None:
             # 双轨制：非 SMILES 但为纯化学式（KMnO4、H2SO4、CaCO3 等）
-            # 走文本节点轨道（与旧 REACTION 一致）；其余无效 SMILES 报错
+            # 走文本节点轨道；其余无效 SMILES 报错
             if is_formula_label(comp["smiles"]):
                 textcomps[comp["id"]] = {
                     "text": comp["smiles"],
@@ -1049,7 +1051,7 @@ def render_composite(layout: str, children: list) -> str:
         }
 
     # 氢键场景构象调整（布局前）：分子内氢键给体/受体折到主链同一侧。
-    # 给体端点为显式 H 原子（a），先取其重原子邻居作为给体 X（20260821）。
+    # 给体端点为显式 H 原子（a），先取其重原子邻居作为给体 X。
     for ida, a, idb, b in _parse_hbond_specs(annotations):
         if ida != idb:
             continue
@@ -1070,7 +1072,7 @@ def render_composite(layout: str, children: list) -> str:
         order = [structs[el[1]]["id"] for el in sequence if el[0] == "mol"]
         _align_h_transfer(mols, _parse_mech_arrows(mech_specs), order)
 
-    # HBOND 给体/受体引用（20260821：显式 H 参与编号，a#k 废弃；给体 H 为
+    # HBOND 给体/受体引用（显式 H 参与编号，a#k 废弃；给体 H 为
     # SMILES 显式 H 原子，如 [H]OCCO[H] 的 0 号。水/氨等小分子直接用
     # O([H])[H] / N([H])([H])[H] 写完整结构式，无需假骨架）。
     hbond_specs = _parse_hbond_specs(annotations)
@@ -1110,7 +1112,7 @@ def render_composite(layout: str, children: list) -> str:
 
     # 统一布局引擎：组件序列 → 位置/加号/共振箭头/反应箭头（视觉包围盒防重叠）
     # [BLOCK] 共振块预渲染：块内 STRUCT + 共振箭头 → 内部布局 → lines + bbox
-    # （20260820：块内 MECHARROW 支持 + 方括号 [] + 块内 mols 表供跨块箭头）
+    # （块内 MECHARROW 支持 + 方括号 [] + 块内 mols 表供跨块箭头）
     block_data = {}      # 块序号 → (lines, bbox, 块内组件表 {id: {mol, shift}})
     block_mech_ids = {}  # 块序号 → 块内 MECHARROW 引用的组件 id 集合
     # 主行 MECHARROW 引用的组件 id（判断跨块引用 → 块内组件显示孤对）
@@ -1124,7 +1126,7 @@ def render_composite(layout: str, children: list) -> str:
         b_items = []
         b_ids = []
         b_mech = []
-        b_labels = {}   # 块内组件 id → (label 文本, STRUCT 子标记)——label 渲染用
+        b_labels = {}   # 块内组件 id → label 文本（label 渲染用）
         for bc in bchildren:
             if bc.type == "STRUCT":
                 bmol = prepare_mol(bc.args[0].strip() if bc.args else "",
@@ -1138,7 +1140,7 @@ def render_composite(layout: str, children: list) -> str:
                 b_items.append(("mol", bid_, bmol))
                 # label 随块内组件移动：记录原始 label 文本供渲染
                 # （主行组件 label 在布局后单独画；块内组件 label 需在此
-                # 预渲染阶段一并产出——20260821 修复：此前块内 label 丢失）
+                # 预渲染阶段一并产出——此前块内 label 丢失）
                 blabel = bc.args[1] if len(bc.args) > 1 else None
                 if blabel:
                     b_labels[bid_] = blabel
@@ -1188,7 +1190,7 @@ def render_composite(layout: str, children: list) -> str:
             ys += [bb[1] + placed.shift[1], bb[3] + placed.shift[1]]
         bbox = (min(xs) - 0.2, min(ys) - 0.2, max(xs) + 0.2, max(ys) + 0.2) \
             if xs else (0.0, -0.3, blayout.width, 0.3)
-        # 方括号 [ ]（教科书共振式，20260820）：块 bbox 左右外扩画
+        # 方括号 [ ]（教科书共振式）：块 bbox 左右外扩画
         bmin_x, bmin_y, bmax_x, bmax_y = bbox
         _BRK_W, _BRK_G = 0.08, 0.04   # 括号横线长 / 与块间隙
         _by0, _by1 = bmin_y - _BRK_G, bmax_y + _BRK_G
@@ -1273,7 +1275,7 @@ def render_composite(layout: str, children: list) -> str:
 
     # HBOND 方向回灌：给体 H 朝向受体（X—H···Y 尽量直线）、受体 H 远离给体
     # （避免遮挡虚线）。布局 shift 已定，转各组件局部坐标供 XH 绘制使用。
-    # （20260821：a#k 废弃后仅 [XH] 旧标记画 H 时受益；SMILES 显式 H 的
+    # （a#k 废弃后仅 [XH] 旧标记画 H 时受益；SMILES 显式 H 的
     # 朝向由分子构象决定，不参与回灌。）
     hbond_toward = {}   # {idA: {原子a: 受体在 idA 局部坐标}}
     hbond_away = {}     # {idB: {原子b: 远离给体方向点（idB 局部坐标）}}
@@ -1349,7 +1351,7 @@ def render_composite(layout: str, children: list) -> str:
             lines.append("  \\end{scope}")
 
     # 氢键点状虚线（分子内/分子间统一）：给体 H 为 SMILES 显式 H 原子
-    # （真实原子，参与编号；20260821 起 a#k 废弃），受体为组件 idB 的
+    # （真实原子，参与编号；a#k 已废弃），受体为组件 idB 的
     # 原子 b——HBOND 只画 H···Y 点；X—H 实线与 H 节点由分子渲染负责。
     for ida, a, idb, b in _parse_hbond_specs(annotations):
         info_a, info_b = mols.get(ida), mols.get(idb)
@@ -1413,7 +1415,7 @@ def render_composite(layout: str, children: list) -> str:
     for rx, yoff in res_positions:
         lines.extend(main_arrow_lines(rx, rx, y=-yoff, kind="resonance"))
 
-    # 附件与箭头的通用边距（20260820 布局避让，实测校准）：
+    # 附件与箭头的通用边距（布局避让，实测校准）：
     # 附件垂直位置由 bbox 朝向箭头的**真实边**决定（charge_mirror=False——
     # 不带电荷圈镜像补偿，避免 OH⁻ 等"电荷在上"组件的 bbox 下界失真）：
     # 上方：bbox 真实底边距箭头 0.15；下方：bbox 真实顶边距箭头 0.15。
@@ -1481,7 +1483,7 @@ def render_composite(layout: str, children: list) -> str:
                 f"({px:.2f},{cy:.2f}) {{{wrap_format_text(atext)}}};")
 
     for x1, x2, cond, yoff, a_kind, sup in main_arrows:
-        # 主反应箭头（→/⇌/↔/⇒ 统一）：共享函数与 reaction/arrow 共用；
+        # 主反应箭头（→/⇌/↔/⇒ 统一，共享 main_arrow_lines）：
         # kind 由 [ARROW:type=...] 显式传入（旧 ⇌ 令牌由函数内部识别）
         lines.extend(main_arrow_lines(x1, x2, cond, y=-yoff, kind=a_kind))
         # 附件结构式：副反应物（+E）画在箭头上方、副产物（-F）下方——
@@ -1502,7 +1504,7 @@ def render_composite(layout: str, children: list) -> str:
     # 加号实际坐标（y 取负：布局 yoff 向下为正，渲染取反）——供成键空位避让
     plus_xy = [(px, -yoff) for px, yoff in plus_positions]
     # 块内组件注册到主行 mols（全局坐标 = 块全局 shift + 块内局部 shift）——
-    # 支持跨块 MECHARROW（块内组件 → 块外组件 / 反向，20260820）
+    # 支持跨块 MECHARROW（块内组件 → 块外组件 / 反向）
     for row_layout, yoff in zip(rows, y_offsets):
         for placed in row_layout.blocks:
             if not placed.key.startswith("block"):

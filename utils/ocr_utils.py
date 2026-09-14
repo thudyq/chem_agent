@@ -42,7 +42,7 @@ _DESCRIBE_PROMPT = """请描述这张图片的内容，供后续化学问答使�
 - 尽快输出这两行结论，不要长时间空想；若图过于复杂或关键信息无法可靠
   确定，也在"内容"里给出你确定的部分（至少转录到的文字），不要给空。"""
 
-# 视觉调用总尝试次数：初始 1 次 + 失败重试 2 次（连接不稳定场景，20260818）
+# 视觉调用总尝试次数：初始 1 次 + 失败重试 2 次（连接不稳定场景）
 _VISION_MAX_ATTEMPTS = 3
 # 重试间隔秒数（避免瞬时限流/抖动时立即连打）
 _RETRY_DELAY = 1.0
@@ -68,7 +68,7 @@ def _is_valid_smiles(smi: str) -> bool:
 
 
 def _structure_smiles_ok(content: str, ctype: str) -> bool:
-    """B1（20260826）：结构式内容里声称的 SMILES 是否可解析（RDKit 硬校验）。
+    """结构式内容里声称的 SMILES 是否可解析（RDKit 硬校验）。
 
     - 非结构式（文字题/反应式/机理图/其他/未分类）→ True（未声称具体结构，
       无可核验的 SMILES 断言）；
@@ -184,7 +184,7 @@ def _describe_once(url: str, headers: dict, payload: dict,
         return None, True
     content = msg.get("content") or ""
     if not content.strip():
-        # ★ 缺陷 B（用户裁定 a，20260830）：**不再**回退 reasoning_content。
+        # ★ **不再**回退 reasoning_content。
         # 理由：思考草稿是未完成的推理过程，把它当"识别结果"会让错误结构
         # 静默到达用户（与 Drawbacks §P0 修过的老 bug 同型，也与本项目
         # "宁可不画，不画错"的理念冲突）。content 为空 → 判识别失败，
@@ -232,13 +232,14 @@ def _learn_rejected(cap_key: str, field: str, value) -> None:
 
 
 def describe_image(image_path: str, max_attempts: int = _VISION_MAX_ATTEMPTS) -> dict | None:
-    """上传图片 → 视觉 LLM 理解 → {"type", "content", "smiles_ok", "downgraded"}。
+    """上传图片 → 视觉 LLM 理解 → {"type", "content", "smiles_ok"}。
 
-    glm-5.3-flash（当前模型）：开启思考（thinking.enabled，实测 disabled 报错）。
-    若模型把结论写进 reasoning_content 致 content 空，不再回退抢救草稿，
-    直接判失败返回 None（缺陷 B 修复：草稿透传会污染下游 SMILES 校验）。
+    思考参数默认显式发 disabled；端点强制思考（如 GLM 对 disabled 报 400）
+    时摘字段重试并记入能力表。若模型把结论写进 reasoning_content 致
+    content 空，直接判失败返回 None（不回退抢救草稿——草稿透传会污染
+    下游 SMILES 校验）。
 
-    连接不稳定容错（20260818）：失败（网络异常 / 5xx / 空响应）自动重试，
+    连接不稳定容错：失败（网络异常 / 5xx / 空响应）自动重试，
     默认最多 max_attempts=3 次（初始 1 次 + 重试 2 次）；配置性失败
     （未配置 / 400/404 不支持视觉 / 本地读图失败）不重试直接返回 None。
 
@@ -314,15 +315,9 @@ def describe_image(image_path: str, max_attempts: int = _VISION_MAX_ATTEMPTS) ->
                 desc, retryable = _describe_once(url, headers, dict(payload), model,
                                                 cap_key=cap_key)
                 if desc:
-                    # B1（20260826）：结构式 SMILES 过 RDKit 硬校验，供调用方示警
+                    # 结构式 SMILES 过 RDKit 硬校验，供调用方示警
                     desc["smiles_ok"] = _structure_smiles_ok(
                         desc.get("content"), desc.get("type"))
-                    # 降级标记：未产出正式"类型/内容"两行 → 调用方据此作"识别受限"处理
-                    if desc.get("type") == "未分类_草稿":
-                        desc["downgraded"] = True
-                        print("[ocr] 识别降级：未产出结构化两行，仅保留最佳提取片段")
-                    else:
-                        desc["downgraded"] = False
                     return desc
                 if not retryable or attempt >= max_attempts:
                     return None

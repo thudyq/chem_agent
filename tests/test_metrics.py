@@ -90,7 +90,7 @@ def test_format_report_without_by_type_ok():
     assert "按标记类型统计" not in out
 
 
-# ---------- 端到端管线评估（evaluate_route，单模型） ----------
+# ---------------------------------------------------------------- 端到端管线评估（evaluate_route，单模型）
 
 def test_evaluate_route_counts(monkeypatch):
     """单模型管线三种结局：一遍过 / 触发修正仍降级 / 修正救回。"""
@@ -169,7 +169,7 @@ def test_format_route_report_and_detail():
 
 
 def test_route_unresolved_dedup_and_corrections_semantics(monkeypatch):
-    """统计口径（单模型口径，20260830 更新）：
+    """统计口径（单模型口径）：
     - 未解决标记按最终回答中未正常渲染的标记数计（降级/错误串出现次数），
       与 diag 轮次记录数无关（同一标记多轮失败不虚增、修正改写法不虚增）；
     - 首轮失败但修正成功 → 不算"修正后仍失败"；

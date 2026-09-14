@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""renderers/chair.py（[CHAIR] 椅式构象）单元测试。
+"""tests/test_chair.py — renderers/chair.py（[CHAIR] 椅式构象）单元测试。
 
 几何断言依据 Klein 五步构造法（instructions/cyclohexane.pdf）：
 三对平行骨架键、axial 严格竖直交替、equatorial 平行浅斜键且指向环外。
@@ -114,7 +114,7 @@ class TestRender:
         assert "渲染失败" in render_chair("CCO")
 
     def test_geminal_two_substituents(self):
-        """偕二取代（20260827）：两个 Br（序号 0/2）都连环碳 1，一 ax 一 eq。
+        """偕二取代：两个 Br（序号 0/2）都连环碳 1，一 ax 一 eq。
 
         渲染骨架 6 键 + 2 条取代基键；两个 {Br} 标签，角度一竖直一平伏。
         """
@@ -182,7 +182,7 @@ class TestGeometry:
             f"equatorial 键不平行浅斜骨架: {ang:.1f}°"
 
     def test_substituent_bond_length(self):
-        """取代基键线终点距环碳 _SUB_LEN=1.1（20260818 微调）。
+        """取代基键线终点距环碳 _SUB_LEN=1.1。
 
         Br 1 位 ax：键线终点 (0,1.10)，标签中心 (0,1.40)
         （再外移 label_bond_margin(Br)=0.30）。
@@ -208,7 +208,7 @@ class TestGeometry:
         return math.degrees(math.atan2(y2 - y1, x2 - x1)) % 360.0
 
     def test_equatorial_pos2_and_pos5_60deg(self):
-        """2/5 号位平伏键与水平呈 60°（fast_latex_test.tex 参考，20260818）。
+        """2/5 号位平伏键与水平呈 60°（fast_latex_test.tex 参考）。
 
         原实现与浅斜骨架键平行（±15°）→ 2 号 165°、5 号 345°（视觉太平）；
         正确：2 号 120°（左上）、5 号 300°（右下）。

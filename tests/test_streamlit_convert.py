@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""streamlit_app 的 mhchem \\ce{...} → KaTeX 转换（_convert_ce_math）单元测试。
+"""tests/test_streamlit_convert.py — streamlit_app 的 mhchem \\ce{...} → KaTeX 转换（_convert_ce_math）单元测试。
 
 覆盖双轨制之外、LLM 直写 \\ce{...} 时的排版规则：电荷上标（含方括号配离子）、
 数字下标、沉淀符号（mhchem 的孤立 v / ↓ → \\downarrow）。

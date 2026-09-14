@@ -40,14 +40,6 @@ from .config import EFFORT_ORDER
 LRU_LIMIT = 2048
 TTL_SECONDS = 7 * 24 * 3600
 
-# 请求体里与"思考"相关的字段名（**我们自己会发送的**，不是厂商映射表）。
-# 仅用于日志措辞与"这个 400 是否可能由思考参数引起"的**提示性**判断；
-# 真正的判定依据是"摘掉字段后能否成功"（见 core/llm_client.ask_llm）。
-THINKING_FIELDS = ("thinking", "reasoning_effort", "reasoning")
-
-# 其余可选字段（同样只做"摘掉重试"的候选）
-OPTIONAL_FIELDS = ("thinking", "reasoning_effort", "temperature", "max_tokens")
-
 # toggle 取值
 TOGGLE_UNKNOWN = "unknown"
 TOGGLE_BOTH = "both"            # 可开可关

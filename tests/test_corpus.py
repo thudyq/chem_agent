@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""P4 端到端语料库回归：读 tests/corpus/*.json，对真实/典型 LLM 坏输出
+"""tests/test_corpus.py — 端到端语料库回归：读 tests/corpus/*.json，对真实/典型 LLM 坏输出
 验证解析+校验行为（坏标记拦截/降级，好标记放行，不崩溃）。
 
 新增语料：把真实 LLM 失败输出按 JSON 格式追加到 tests/corpus/ 即可，

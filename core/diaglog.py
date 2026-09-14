@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """core/diaglog.py — 完整诊断落盘（journald 摘要之外的完整记录）。
 
-背景（20260828 用户反馈）：journald 里的 [api]/[process_question] 打印是
+背景（用户反馈）：journald 里的 [api]/[process_question] 打印是
 **截断摘要**（raw[:60] / reason[:120]）——长标记（如 COMPOSITE）出错时
 看不到 LLM 具体写了什么、哪里错了。本模块把完整诊断落盘到 JSONL 文件
 （默认 data/diagnostics.jsonl，已被 .gitignore 覆盖）：
@@ -11,7 +11,7 @@
 - 每条回答一行：{"type":"answer", ... 最终采用的原始标记文本（渲染前，
   供本地 python -m core.replay 精确重放）}。
 
-★ 隐私与权限（安全审查 R12，20260911）
+★ 隐私与权限（安全审查 R12）
 ------------------------------------
 这个文件里有**真人的提问原文**（`question`，带图时还含视觉模型对图的描述）
 与模型原始输出（`raw`）；只有凭证是**指纹**（不含密钥）。因此：

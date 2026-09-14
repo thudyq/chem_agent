@@ -51,7 +51,7 @@ API key 来用"的公开网页，凭证必须变成**每请求可变**，而管�
 安全约定
 --------
 * 凭证只从**请求头**进入（不由 URL 携带，避免落入访问日志/Referer）。
-* `redact()` 给日志用的指纹形如 `sk-a…f9c2`，**任何日志/异常都不得
+* `redact()` 给日志用的指纹形如 `sk-abc…f9c2`，**任何日志/异常都不得
   打印完整密钥**。
 * 服务端不回显、不落盘用户密钥；`user_credentials` 只在请求生命周期内
   存活（contextmanager 退出即 reset）。
@@ -124,7 +124,7 @@ def normalize(raw: Optional[dict]) -> dict:
 
 
 def redact(secret: Optional[str]) -> str:
-    """密钥指纹（日志用）：`sk-abcd…wxyz`，短密钥只留首尾。绝不返回完整值。"""
+    """密钥指纹（日志用）：`sk-abc…wxyz`（前 6 + 后 4），短密钥只留首字符。绝不返回完整值。"""
     if not secret:
         return "(空)"
     s = str(secret)
@@ -162,7 +162,7 @@ def user_credentials(raw: Optional[dict]):
     同一个 Context 内。Starlette 会把 StreamingResponse 的生成器放进线程池
     逐块迭代，相邻 `next()` 可能属于不同 Context —— 此时 `with` 退出时
     `_CTX.reset(token)` 会抛 `ValueError: Token was created in a different
-    Context`（20260830 实测，SSE 流当场中断）。
+    Context`（实测 SSE 流当场中断）。
 
     SSE 场景的正确写法见 `apply_credentials()`：把凭证直接传给 SSE 生成器，
     由**工作线程函数内部**（`web_api._sse_stream_inner.work`）调用一次
@@ -185,7 +185,7 @@ def apply_credentials(raw: Optional[dict]) -> dict:
     ★ **写入点要选对**：`set` 只作用于**当前 Context**。Starlette 逐块迭代
     `StreamingResponse` 时，每次 `next()` 都从请求任务上下文**重新拷贝**一份
     Context，所以在"生成器迭代处"set 的值传不到后面启动工作线程的那一次迭代
-    （20260830 实测：流式仍回退服务器 `.env`）。凭证必须在工作线程函数**内部**
+    （实测：流式仍回退服务器 `.env`）。凭证必须在工作线程函数**内部**
     set —— 那个函数整体跑在同一个 `copy_context().run(...)` 里。
     """
     creds = normalize(raw)
@@ -478,7 +478,7 @@ def _reset_semaphores_for_tests() -> None:
         _SEMS.clear()
 
 
-# ------------------------------------------------ 全局 / 按 IP 在途上限（R5）
+# ---------------------------------------------------------------- 全局 / 按 IP 在途上限（安全审查 R5）
 # 为什么"按凭证分桶"对服务器没有保护：**假 key 是无限的**。攻击者每个请求换
 # 一个假 key，就得到一个全新的桶；再把 `base_url` 指向自己控制的、故意不回包的
 # 公网地址，就能让每个请求占住一个 worker 直到读超时（`llm_client.READ_TIMEOUT`）。

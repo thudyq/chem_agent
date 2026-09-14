@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""P4 坏输入回归测试：解析层与校验层的异常输入（从代码构造，不依赖真实语料）。
+"""tests/test_bad_inputs.py — 坏输入回归测试：解析层与校验层的异常输入（从代码构造，不依赖真实语料）。
 
 覆盖：半截标记、未知标记类型、畸形参数、括号深度边界、游离氢 SMILES、
 COMPOSITE 嵌套等。好标记必须正常渲染、坏标记必须降级，混合场景不得崩溃。
@@ -11,7 +11,7 @@ from core.tag_parser import parse_tags
 from core.tag_validator import validate_tags
 
 
-# ---------- 解析层 ----------
+# ---------------------------------------------------------------- 解析层
 
 def test_half_tag_ignored():
     text = "苯是 [STRUCT:c1ccc"
@@ -91,7 +91,7 @@ def test_valid_tag_survives_among_bad(fake_rdkit):
     assert len(invalid) == 2
 
 
-# ---------- 管线降级不崩溃 ----------
+# ---------------------------------------------------------------- 管线降级不崩溃
 
 def test_pipeline_mixed_degrades(fake_rdkit, fake_renderers, monkeypatch):
     llm_text = ("好的 [STRUCT:c1ccccc1]，坏的 [STRUCT:XYZABC]，"

@@ -98,7 +98,7 @@ def test_write18_matches_write_not_partial():
     assert lc.forbidden_token("\\write18{x}") == "write"
 
 
-# ------------------------------------------------- 2. 闸门接在编译入口上
+# ---------------------------------------------------------------- 2. 闸门接在编译入口上
 
 def _spy_engine(monkeypatch, calls):
     """把引擎查找与真正的编译都替换掉，只记录调用。
@@ -164,7 +164,7 @@ def _fake_work_dir(prefix="chem_"):
         pass
 
 
-# ------------------------------------------------- 3. 加固选项探测
+# ---------------------------------------------------------------- 3. 加固选项探测
 
 def test_hardening_flags_keeps_only_accepted(monkeypatch):
     monkeypatch.setattr(lc, "_find_latex_engine", lambda: "xelatex")
@@ -190,7 +190,7 @@ def test_security_status_cheap_does_not_verify(monkeypatch):
     assert "--security-check" in st["note"]
 
 
-# ------------------------------------------------- 4. 自检（verify=True）
+# ---------------------------------------------------------------- 4. 自检（verify=True）
 
 def _install_fake_verify(monkeypatch, tmp_path, *, normal_ok=True,
                          plain_ok=True, flagged_ok=False):
@@ -243,7 +243,7 @@ def test_verify_reports_unknown_when_control_doc_fails(monkeypatch):
     assert "对照" in st["note"]
 
 
-# ------------------------------------------------- 5. 调用形态（回归护栏）
+# ---------------------------------------------------------------- 5. 调用形态（回归护栏）
 
 def test_run_latex_uses_relative_path_for_native_engine(monkeypatch, tmp_path):
     """★ 原生引擎必须给相对文件名 + cwd：`openin_any=p` 会拒绝绝对路径主文件，
