@@ -483,7 +483,7 @@ def test_serve_session_attachment_rejects_bad_names(web, sid, name):
 
 def test_image_uses_main_model_when_no_vision_configured(web, answered,
                                                          monkeypatch):
-    """★ 新语义（§4.9）：用户没填视觉模型时**用主模型识图**，而不是判"未配置"。
+    """★ 用户没填视觉模型时**用主模型识图**，而不是判"未配置"。
 
     原生多模态模型（deepseek-flash / Gemini / GLM 视觉版）自带视觉，
     这正是本次重构要消除的"必须再申请一把别家 Key"的误解。

@@ -145,7 +145,7 @@ def _run_with_timeout(fn, timeout: float, default=None):
 def _translate_name_zh2en(name: str, model: str = None) -> str | None:
     """中文化学名 → 英文（LLM 翻译）；已是英文或翻译失败返回原样/None。
 
-    辅助调用（§4.6 契约表 #2）：`thinking="disabled"` + 小 `max_tokens`，
+    辅助调用（翻译/抽取等轻量任务）：`thinking="disabled"` + 小 `max_tokens`，
     **绝不继承用户主档位**；端点强制思考时 `ask_llm` 会摘字段/退让并把结论
     记入能力表。失败一律返回 None（调用方回退英文原名，不影响主流程）。
 
@@ -655,14 +655,14 @@ def process_question(user_question: str, max_corrections: int = 2,
     清单回传 LLM 自动修正（最多 max_corrections 次），修正版重新走管线；
     仍失败则降级（校验失败标记 → 友好提示，渲染失败标记 → 渲染器错误串）。
 
-    **单模型**（`instructions/Model-Config-Refactor.md` D1/D2）：整个服务只用
+    **单模型**：整个服务只用
     一个模型，不再有"升级/回退模型"与难题关键词路由——降级发生在**同一模型
     内部**（思考档位逐级下降，见 `core.llm_client._effort_stages`）。
 
     thinking / effort / max_tokens: 思考开关、思考强度、最大输出上限。
         网页（BYOK）由请求头传入；清小搭与 Streamlit 传 None（用 `.env` 默认）。
         实际生效值可能因端点能力而被改写，此时会在 `diagnostics` 里记
-        `effort_effective` / `notice`，并把提示追加到回答末尾（§4.5.5）。
+        `effort_effective` / `notice`，并把提示追加到回答末尾。
 
     history: 多轮对话历史（透传给 ask_llm，见 core.llm_client）。
     progress_callback: 可选，LLM 每段生成内容实时回调（流式转发草稿）。
@@ -693,7 +693,7 @@ def _generate_with_corrections(user_question: str, model=None,
                                responses: list = None,
                                thinking: str = None, effort: str = None,
                                max_tokens: int = None) -> str:
-    """单模型生成 + 修正闭环；末尾统一追加"档位被静默改写"的提示（§4.5.5）。"""
+    """单模型生成 + 修正闭环；末尾统一追加"档位被静默改写"的提示。"""
     text, notice = _generate_inner(
         user_question, model=model, max_corrections=max_corrections,
         history=history, progress_callback=progress_callback,
@@ -783,7 +783,7 @@ def _generate_inner(user_question: str, model=None,
     res = ask_llm(llm_input, history=history,
                   on_piece=progress_callback, model=model,
                   thinking=thinking, effort=effort,
-                  # 主生成默认上限用调用点常量（§4.2.1）；
+                  # 主生成默认上限用调用点常量；
                   # 网页用户可在设置里覆盖（max_tokens 参数）
                   max_tokens=(max_tokens or MAX_TOKENS_MAIN),
                   return_result=True)

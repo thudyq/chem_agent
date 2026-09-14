@@ -166,7 +166,7 @@ def _cors_origins() -> list:
 
     * 网页与接口**同源**（`/chat` 与 `/api/*` 同一个域名），同源请求根本不需要
       CORS，所以收紧不影响正常使用；
-    * 只有"把页面托管到别的域名"（DEPLOY.md §2.5）才需要额外来源，用
+    * 只有"把页面托管到别的域名"（docs/deploy.md §2.5）才需要额外来源，用
       `CORS_ALLOW_ORIGINS=https://a.com,https://b.com` 显式列出即可。
     """
     raw = (os.environ.get("CORS_ALLOW_ORIGINS") or "").strip()
@@ -541,7 +541,7 @@ def _image_question_parts(images: list, fetch_image, msgs: dict,
     一段。所有失败都给出明确原因，不静默丢弃。
     """
     # 视觉可用性经凭证层判定：`.env` 没配 VISION_* 时**回退用主模型**
-    # （原生多模态模型自带视觉，见 Model-Config-Refactor §4.9）。
+    # （原生多模态模型自带视觉）。
     if not credentials.vision_config().is_configured:
         if msgs.get("no_vision_log"):
             print(msgs["no_vision_log"])

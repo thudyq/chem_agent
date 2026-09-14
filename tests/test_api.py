@@ -554,7 +554,7 @@ def test_validate_download_url_dns(monkeypatch):
 
 # ---------------------------------------------------------------- 多轮对话图片丢失：手写图片链接的剥离
 
-_FAKE_MD_IMAGE = ("![化学图示-1](https://60.205.181.60/files/"
+_FAKE_MD_IMAGE = ("![化学图示-1](https://files.example.com/files/"
                   "2d4b8e9f0a5e4d2f9a1b3c6d7e8f9a0b.png)")
 
 

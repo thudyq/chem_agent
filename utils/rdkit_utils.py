@@ -33,7 +33,7 @@ def normalize_h_prefix_smiles(smiles: str) -> str:
     return _H_PREFIX_SMILES_RE.sub(r"[\2H\1\3]", smiles)
 
 
-# 通用基团缩写（Chemical-Notation.md §二：R 烷基、Ar 芳基、X 卤素、M 金属、
+# 通用基团缩写（R 烷基、Ar 芳基、X 卤素、M 金属、
 # Me/Et/Pr/Bu 烷基、Ph/Bn 芳基、Ac/Bz/Ts/Tf/Ms 酰基/磺酰基、Boc/Cbz/TBDMS/TMS
 # 保护基；补充 n-Pr/i-Pr/n-Bu/i-Bu/s-Bu/t-Bu 带前缀写法）。
 # 这些缩写不是合法 SMILES 元素（RDKit 无法解析），LLM 写通用结构时

@@ -126,7 +126,7 @@ def test_client_ip_normalizes_ipv6():
 
 # ---------------------------------------------------------------- 3. 部署配置不得用追加写法
 
-@pytest.mark.parametrize("rel", ["deploy/nginx-chem-agent.conf", "DEPLOY.md"])
+@pytest.mark.parametrize("rel", ["deploy/nginx-chem-agent.conf", "docs/deploy.md"])
 def test_forwarded_for_must_overwrite_not_append(rel):
     """★ 配置层的同一条：`$proxy_add_x_forwarded_for` 是**追加**，会把客户端
     伪造的值留在最前面。审查时两边都写着这个写法，属于"文档教你踩坑"。"""

@@ -67,7 +67,7 @@ def _get_str_fallback(*names: str, default: str = "") -> str:
     return default
 
 
-# ---------------------------------------------------------------- 思考参数的取值与归一（模型与思考参数重构 §4.4 / §4.5.3）
+# ---------------------------------------------------------------- 思考参数的取值与归一
 
 # 思考开关
 THINKING_ON = "on"
@@ -121,7 +121,7 @@ def normalize_effort(value: str, default: str = EFFORT_LOW) -> str:
 def _thinking_default_env() -> str:
     """`THINKING_DEFAULT`，带**过渡期兼容**读取旧 `THINKING_MODE`。
 
-    理由（重构方案 §4.1）：`THINKING_MODE=disabled` 的用户若被静默改成"开思考"，
+    理由：`THINKING_MODE=disabled` 的用户若被静默改成"开思考"，
     会变慢变贵且没有任何提示——直接影响成本，因此给一条迁移桥 + 废弃告警。
     """
     new = _get_str("THINKING_DEFAULT")
@@ -151,8 +151,7 @@ class LLMConfig:
     """主 LLM 配置（OpenAI 兼容接口）。
 
     「模型与思考参数重构」后的形态：**只有一个模型**，思考由"开关 + 强度"两个
-    正交参数表达；不再有 fallback / upgrade / 关键词路由（见
-    instructions/Model-Config-Refactor.md）。
+    正交参数表达；不再有 fallback / upgrade / 关键词路由。
     """
 
     api_key: str = field(default_factory=lambda: _get_str("API_KEY"))
@@ -163,7 +162,7 @@ class LLMConfig:
     # 思考强度（EFFORT_DEFAULT）：low / medium / high / max。
     effort_default: str = field(default_factory=_effort_default_env)
     # 最大输出上限（MAX_TOKENS）：**上限不是预留**，按实际用量计费。
-    # 思考与正式回答共享该额度，设小会导致截断（§4.2.1）。
+    # 思考与正式回答共享该额度，设小会导致截断。
     max_tokens: int = field(default_factory=lambda: int(_get_str("MAX_TOKENS") or 32768))
     # 并发 LLM 调用上限（MAX_CONCURRENT_LLM，默认 4）：按**凭证指纹**分桶，
     # 同一把 Key 最多同时进行这么多调用，避免打爆上游限流。
@@ -189,7 +188,7 @@ class LLMConfig:
 class VisionConfig:
     """视觉模型配置（图片识别）。
 
-    定位（重构 §4.9）：视觉是**可能完全独立**的一个模型（另一厂商、另一把 Key、
+    定位：视觉是**可能完全独立**的一个模型（另一厂商、另一把 Key、
     另一套思考参数）。三项都留空 = 用主模型识图；只填模型名 = 该模型 + 主模型端点/Key。
     原生多模态模型（deepseek-flash / Gemini / GLM 视觉版）自带视觉，通常整组留空即可。
     """

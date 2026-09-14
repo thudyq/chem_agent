@@ -2,7 +2,7 @@
 """core/tag_injector.py — 标记注入器。
 
 把 LLM 原始响应中的渲染标记替换为已渲染的 TikZ 代码（或错误提示）。
-按 TRANSITION 要求从后往前（start_pos 降序）替换，保证位置偏移不因前序替换而错乱。
+从后往前（start_pos 降序）替换，保证位置偏移不因前序替换而错乱。
 """
 
 from typing import List

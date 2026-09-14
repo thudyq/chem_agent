@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 r"""renderers/chair.py — [CHAIR] 标记渲染器：环己烷椅式构象。
 
-几何规则（Klein《有机化学》SkillBuilder 4.9–4.11，instructions/cyclohexane.pdf）：
+几何规则（Klein《有机化学》SkillBuilder 4.9–4.11 椅式构造法）：
 - 骨架五步法：宽 V → 60° 下降线 → 平行线 → 第二条 60° 线（底端同高）→ 连成环；
   正确的椅式含三对平行键（浅斜 ±σ 两对 + 陡斜 60° 一对）；
 - 竖直键（axial）：严格竖直（90°），绕环交替上/下；
 - 平伏键（equatorial）：永远指向环外、与同一碳的竖直键上下相反；
   1/3/4/6 号位与浅斜键平行（±σ），**2/5 号位（左右两侧中间碳）与水平呈
-  60°**（2→120°、5→300°，fast_latex_test.tex 参考）；
+  60°**（2→120°、5→300°）；
 - 翻转（ring flip）= 两种镜像画法互换：骨架关于水平轴反射（前碳朝下↔朝上）、
   axial 交替翻转；equatorial 仍由质心判定外指。翻转对比画两张 CHAIR——
   正常一张 + flip 令牌一张（flip 令牌位置不限，如 [CHAIR:SMILES,1:ax,flip]）。
@@ -70,7 +70,7 @@ def _equatorial_angle(pos: int, vx: float, vy: float, centroid,
                       axial_up: bool, mirror: bool = False) -> float:
     """平伏键方向：水平分量指向环外、竖直分量与竖直键相反。
 
-    2/5 号位（左右两侧中间碳）与水平呈 60°——fast_latex_test.tex 参考：
+    2/5 号位（左右两侧中间碳）与水平呈 60°：
     5 号位 300°（右下）、2 号位对称 120°（左上）；原"与浅斜骨架键平行
     （±15°）"在这两位视觉上接近水平、画法错误。flip
     画法取 y 反射（2: 120→240°、5: 300→60°），仍满足外指与轴向相反。

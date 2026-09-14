@@ -121,7 +121,7 @@ def _describe_once(url: str, headers: dict, payload: dict,
     - retryable=True：本次失败但值得重试（网络异常 / 5xx / 空响应）；
     - retryable=False：配置性失败（400/404 不支持视觉），重试无意义。
 
-    端点参数适配（重构 §4.8 / 缺陷 A）：与主客户端**同一套行为判定**——
+    端点参数适配：与主客户端**同一套行为判定**——
     非 200 时按字段名逐个摘掉重试（`thinking` → `reasoning_effort` →
     `temperature` → `max_tokens`），**摘掉后成功**即认定该字段是原因并记入
     能力表（`core.capabilities`）。不解析错误文本（GLM 的拒绝是中文，
@@ -263,7 +263,7 @@ def describe_image(image_path: str, max_attempts: int = _VISION_MAX_ATTEMPTS) ->
     url = f"{base_url}/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
-    # ---- 视觉自己的思考参数（§4.9）----
+    # ---- 视觉自己的思考参数 ----
     # 与主生成**解耦**：视觉常是另一家的模型，且识图不需要长思考。
     # `config.thinking` 为空 = "与主模型相同 → 复用主模型设置"（由调用方
     # credentials.vision_is_main() 判定后写入空值）；否则默认关思考。
@@ -279,7 +279,7 @@ def describe_image(image_path: str, max_attempts: int = _VISION_MAX_ATTEMPTS) ->
                 {"type": "image_url", "image_url": {"url": data_url}},
             ],
         }],
-        # 视觉输出上限（§4.2.1）：复杂机理图描述长，且强制思考端点还要吃掉
+        # 视觉输出上限：复杂机理图描述长，且强制思考端点还要吃掉
         # 一部分预算——设小会导致 content 被截断（缺陷 E）。
         "max_tokens": MAX_TOKENS_VISION,
     }

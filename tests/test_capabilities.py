@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """tests/test_capabilities.py — 端点能力表（学习 + 记忆）单元测试。
 
-对应 `instructions/Model-Config-Refactor.md` §4.5.4：能力表**不写死厂商映射**，
+能力表**不写死厂商映射**，
 只记录"行为判定"的结论，维度到**被接受的取值集合**。
 """
 

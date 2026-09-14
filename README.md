@@ -17,7 +17,17 @@
 
 ## 🎯 项目目标
 
-最终交付一个可接入清小搭等 AI 平台的 HTTP 服务，用户输入一个化学问题（可包含文字、结构式图片），系统返回一个**逻辑清晰、图文并茂**的回答。
+项目本体是一条**化学问答管线**：用户输入化学问题（可含文字、结构式图片），
+系统返回**逻辑清晰、图文并茂**的回答。管线末端可接多种形态，当前实现三种：
+
+| 末端 | 形态 | 入口 |
+| :--- | :--- | :--- |
+| **HTTP 服务（OpenAI 兼容）** | 接入清小搭等 AI 平台（`/v1/*`，Bearer 鉴权，SSE 流式，图片附件） | `api.py` |
+| **公开网页（BYOK）** | 任意访客填自己的 API Key 即用（`/chat`，密钥只存浏览器） | `api.py` + `web/index.html` |
+| **本地 Streamlit 界面** | 开发调试与本地使用 | `streamlit_app.py` |
+
+三种形态共用同一条管线（LLM → 标记解析 → 契约校验 → 修正 → 渲染 → 注入），
+互不影响。
 
 ---
 
@@ -94,8 +104,12 @@ graph LR
 │   ├── tag_validator.py       # 标记契约校验层
 │   ├── tag_injector.py        # 标记→TikZ 注入替换
 │   ├── prompt_manager.py      # System Prompt 管理
+│   ├── electron_sim.py        # 电子流模拟器（机理箭头自洽性深层校验）
 │   ├── attachments.py         # TikZ→PNG 附件构建（编译、托管、超配额回收）
+│   ├── answer_cache.py        # 多轮对话标记恢复（渲染后文本 → 原始标记）
 │   ├── web_api.py             # 公开网页后端（/api/chat、BYOK 凭证、限流、会话附件）
+│   ├── replay.py              # 离线重放工具（标记管线归因：校验 trace + 渲染状态）
+│   ├── diaglog.py             # 诊断日志（失败标记与原始输出落盘，0600 滚动）
 │   └── metrics.py             # 基线评测（标记遵循率 / 端到端管线）
 ├── renderers/
 │   ├── registry.py            # 标记调度表
@@ -111,7 +125,8 @@ graph LR
 │   ├── rdkit_utils.py         # RDKit 验证工具
 │   ├── latex_compile.py       # TikZ 编译为 PNG
 │   ├── ocr_utils.py           # 图片多模态理解（视觉模型）
-│   └── name_resolver.py       # 化学名称 → SMILES（PubChem 兜底）
+│   ├── name_resolver.py       # 化学名称 → SMILES（PubChem 兜底）
+│   └── tempdir.py             # 临时目录探测（沙箱/只读 /tmp 环境兜底）
 ├── prompts/
 │   ├── system_prompt.txt      # 核心 System Prompt
 │   └── Instruction-for-SMILES.md   # SMILES 书写规范
@@ -156,7 +171,7 @@ cp .env.example .env
 #   EFFORT_DEFAULT=low             ← 思考强度 low/medium/high/max
 #   MAX_TOKENS=32768               ← 上限而非预留，按实际用量计费
 # 可选：VISION_*（仅当主模型不支持图片识别时才需要；原生多模态模型留空即可）
-# 可选：CHEM_AGENT_TMPDIR（只读 /tmp 的容器里指定可写临时目录；见 DEPLOY.md §2.2）
+# 可选：CHEM_AGENT_TMPDIR（只读 /tmp 的容器里指定可写临时目录；见 docs/deploy.md §2.2）
 # 接入清小搭时还需设置 SERVICE_API_KEY（服务端密钥）
 # 已废弃：FALLBACK_MODEL_NAME / UPGRADE_MODEL_NAME / UPGRADE_KEYWORDS（代码不再读取）；
 #         THINKING_MODE / REASONING_EFFORT 仅作过渡期兜底——新变量未设置时才读取
@@ -220,13 +235,13 @@ uvicorn api:app --host 0.0.0.0 --port 8000
   **绝不继承**服务器 `.env` 的模型/端点/视觉配置（不会把服务器配置静默施加到用户自己的 key）。
   出站请求**不跟随重定向**（3xx 一律当失败）——否则 302 可以绕过上面那道 SSRF
   校验；因此「接口地址」要填**最终的**完整地址。LaTeX 编译另有文件访问限制与
-  源码闸门，见 `instructions/Security-Review.md`。
+  源码闸门，见 `docs/deploy.md` §2.6。
 - **与清小搭互不影响**：`/v1/*` 契约与鉴权一字未改，两类调用方共用同一条
   化学渲染与契约校验管线。
 - 端点：`GET /chat`（或 `/web`）页面、`POST /api/chat`（`stream=true` 走 SSE）、
   `GET /api/web-config`、`GET /api/session/{会话}/{uuid}.png`。
 
-部署（Nginx/HTTPS/systemd 与验收清单）见 `DEPLOY.md`。
+部署（Nginx/HTTPS/systemd 与验收清单）见 `docs/deploy.md`。
 
 ---
 

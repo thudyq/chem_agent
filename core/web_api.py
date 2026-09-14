@@ -197,7 +197,7 @@ def _client_ip(request: Request) -> str:
 # 请求头 → 凭证字段名。**必须显式映射**：`credentials.normalize` 只认
 # `api_key` 这类字段名，直接拿 HTTP 头名（X-Chem-Api-Key）当键会被它当未知键
 # 静默丢弃 —— 表现为"填了 Key 仍提示缺少 Key"。
-# 三列同名同义的登记表见 instructions/Model-Config-Refactor.md 附录 D。
+# 三列同名同义（请求头名 / 字段名 / .env 变量名）的对应见 `_HEADER_TO_FIELD` 与 `_FIELDS`。
 _HEADER_TO_FIELD = {
     _HEADER_KEY: "api_key",
     _HEADER_BASE: "base_url",
@@ -672,8 +672,8 @@ def _prepare_answer(answer: str, session_id: str) -> str:
     * 不会把服务器 `.env` 的公网地址施加给访客——那个地址上既没有这条会话
       路由、也没有这张图（图落盘在本机 `_SESSIONS_DIR`）。实测：
       本地 `uvicorn` 起服务时所有图示全裂，浏览器按 `.env` 的
-      `PUBLIC_BASE_URL=https://60.205.181.60` 去请求
-      `https://60.205.181.60/api/session/<sid>/<name>.png`，而那台机器跑的是
+      `PUBLIC_BASE_URL=https://<服务器域名>` 去请求
+      `https://<服务器域名>/api/session/<sid>/<name>.png`，而那台机器跑的是
       旧版应用（`/api/session/*` 与 `/api/web-config` 均 404），必然加载失败；
     * 反代（Nginx + https）下不会因为推断出的 scheme 是 http 而触发浏览器的
       混合内容拦截——这正是当初引入绝对 URL 想解决的问题，相对路径让它从

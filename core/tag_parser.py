@@ -3,7 +3,7 @@
 
 解析 LLM 输出中的渲染标记，提取为 RenderTag 列表，供渲染器分派。
 
-支持的标记（TRANSITION Section 2）：
+支持的标记：
     [STRUCT:SMILES] 或 [STRUCT:SMILES,label=名称] （复合容器内可再加 ,id=引用名）
     [ENERGY:点序列]
     [REASONING]...[/REASONING]   （配对标记）

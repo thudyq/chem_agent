@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """tests/test_chair.py — renderers/chair.py（[CHAIR] 椅式构象）单元测试。
 
-几何断言依据 Klein 五步构造法（instructions/cyclohexane.pdf）：
+几何断言依据 Klein 五步构造法：
 三对平行骨架键、axial 严格竖直交替、equatorial 平行浅斜键且指向环外。
 
 运行: python -m pytest tests/test_chair.py -v
@@ -208,7 +208,7 @@ class TestGeometry:
         return math.degrees(math.atan2(y2 - y1, x2 - x1)) % 360.0
 
     def test_equatorial_pos2_and_pos5_60deg(self):
-        """2/5 号位平伏键与水平呈 60°（fast_latex_test.tex 参考）。
+        """2/5 号位平伏键与水平呈 60°。
 
         原实现与浅斜骨架键平行（±15°）→ 2 号 165°、5 号 345°（视觉太平）；
         正确：2 号 120°（左上）、5 号 300°（右下）。

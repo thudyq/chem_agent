@@ -131,7 +131,7 @@ def upstream(monkeypatch):
     凭证却回退到服务器配置"的泄漏都会被 mock 原样记录下来。
     """
     up = _Upstream()
-    # 面板允许填内网地址（仅本进程；产品侧默认禁止，见 DEPLOY.md）
+    # 面板允许填内网地址（仅本进程；产品侧默认禁止，见 docs/deploy.md）
     monkeypatch.setenv("WEB_ALLOW_PRIVATE_BASE_URL", "1")
 
     import dataclasses

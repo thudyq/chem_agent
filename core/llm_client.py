@@ -4,7 +4,7 @@
 配置统一从 `core.credentials` 读取（每请求凭证；无覆盖时用 `.env`）。
 system_prompt 未传时自动加载 prompts/system_prompt.txt。
 
-思考参数模型（`instructions/Model-Config-Refactor.md` §4.4）
+思考参数模型（开关 on/off × 强度 low/medium/high/max）
 -----------------------------------------------------------
 用户意图是**两个正交维度**：**开关**（on/off）× **强度**（low/medium/high/max）。
 映射为请求字段：
@@ -14,14 +14,14 @@ system_prompt 未传时自动加载 prompts/system_prompt.txt。
 
 `temperature` 只在"关思考"时发送：思考模式下该参数被上游静默忽略（官方 F6）。
 
-端点不配合时（§4.5.3）
+端点不配合时
 --------------------
 **判定只看行为、不解析错误文本**——GLM 的拒绝是中文（"该模型始终思考，不支持关闭
 思考；请使用 low、high 或 max。"），任何按字段名匹配的规则都会漏判。
 规则：400 → **逐个摘掉候选字段重试** → 摘掉后成功即认定该字段是原因（记入能力表）；
 仍失败即认定与档位无关的真实错误，原样报错（不掩盖）。
 
-降级链（§4.5）
+降级链
 -------------
 `首选档位 → 逐级往低（max→high→medium→low）→ 关思考`（只降不升，同一模型内；
 **不再换模型**）。详见 `_effort_stages`。
@@ -48,7 +48,7 @@ READ_TIMEOUT = 180
 DEFAULT_TIMEOUT = (CONNECT_TIMEOUT, READ_TIMEOUT)
 DEFAULT_RETRIES = 3
 
-# 各调用点的 max_tokens（§4.2.1）。**上限不是预留**，按实际用量计费；
+# 各调用点的 max_tokens。**上限不是预留**，按实际用量计费；
 # 设小会导致截断（思考与回答共享该额度），设大不会多扣费。
 MAX_TOKENS_MAIN = 32768      # 主生成：思考 5k~15k + 回答 1k~3k，留足余量
 MAX_TOKENS_REWRITE = 4096    # 箭头/结构重写：要吐一个 COMPOSITE 块
@@ -76,7 +76,7 @@ class LLMResult:
     error: 失败原因（面向调用方，可含上游原始信息）。
     effort_effective: 实际生效的档位（"off"/"low"/…）；端点不配合时为 None。
     effort_requested: 调用方请求的档位。
-    downgraded: 是否发生了静默改写（用于主生成的"诚实上报"，§4.5.5）。
+    downgraded: 是否发生了静默改写（用于主生成的"诚实上报"）。
     notice: 面向用户的提示（仅在 downgraded 时非空）。
     """
 
@@ -267,7 +267,7 @@ def _capability_key(base_url: str, model: str, api_key: str) -> str:
 
 
 def _downgrade_notice(requested_on: bool, eff_on: bool, eff_effort) -> str:
-    """生成"用户意图被静默改写"的用户可见提示（§4.5.5）。
+    """生成"用户意图被静默改写"的用户可见提示。
 
     只在**主生成**路径使用，且同会话只提示一次（调用方负责去重）。
     文案原则：**描述我们观测到什么，不替厂商下结论**——反例是旧实现里的
@@ -328,7 +328,7 @@ def ask_llm(
         system_prompt: 系统提示；None 时自动加载 prompts/system_prompt.txt。
         temperature: 采样温度；None 用配置默认（0.2）。**仅"关思考"时发送**。
         max_tokens: 最大生成 token 数；None 用配置的 `max_tokens`。
-            各调用点建议用本模块的 MAX_TOKENS_* 常量（§4.2.1）。
+            各调用点建议用本模块的 MAX_TOKENS_* 常量。
         retries: 失败重试次数；None 用配置默认（3）。
         history: 多轮对话历史，插在 system 与当前问题之间；None 表示单轮。
         on_piece: 可选回调，每收到一段生成内容立即调用（流式转发）。
@@ -424,7 +424,7 @@ def ask_llm(
         """一次 HTTP 调用（含"摘字段重试"）。返回 ((content, finish, rchars,
         observed), payload)。
 
-        行为判定（§4.5.3）：非 200 → 逐个摘掉候选字段；**摘掉后成功**即认定该字段
+        行为判定：非 200 → 逐个摘掉候选字段；**摘掉后成功**即认定该字段
         是原因（记入能力表）；摘光仍失败 → 判定为与档位无关的真实错误。
         """
         while True:

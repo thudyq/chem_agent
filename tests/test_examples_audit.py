@@ -35,9 +35,9 @@ _TEXT_FILES = [
     "prompts/system_prompt.txt",
     "prompts/Instruction-for-SMILES.md",
     "README.md",
+    "AGENTS.md",
+    "docs/testing.md",
     "instructions/Test-Method.md",
-    "instructions/Chemical-Notation.md",
-    "instructions/AGENT.md",
 ]
 # 审计的源码目录（docstring 与 __main__ demo 中的字面标记）
 _SRC_DIRS = ["renderers", "core", "utils"]

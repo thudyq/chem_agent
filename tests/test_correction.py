@@ -512,7 +512,7 @@ def test_unresolved_failure_diagnostics_single_stage(fake_rdkit,
     assert all(d["resolved"] is False for d in diag if d.get("type") != "NOTICE")
 
 
-# ---------------------------------------------------------------- 思考档位被静默改写时的诚实上报（§4.5.5）
+# ---------------------------------------------------------------- 思考档位被静默改写时的诚实上报
 
 def test_effort_notice_appended_once(fake_rdkit, fake_renderers, monkeypatch):
     """端点强制思考时：回答末尾追加一次提示，且同会话不重复。"""

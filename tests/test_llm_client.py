@@ -108,7 +108,7 @@ class TestEffortStages:
 
 
 class TestPayloadMapping:
-    """(开关, 强度) → 请求字段（§4.4 二维映射）。"""
+    """(开关, 强度) → 请求字段（二维映射）。"""
 
     def _payload(self, on, effort, dropped=None):
         from core.capabilities import Capability
@@ -248,7 +248,7 @@ class TestResultMetadata:
         assert res.notice == ""
 
     def test_forced_thinking_reports_notice(self, fake_env, monkeypatch):
-        """用户选关、端点强制思考 → 必须给出提示（§4.5.5）。"""
+        """用户选关、端点强制思考 → 必须给出提示。"""
         fake_env(_cfg())
         _http_error_recorder(monkeypatch, [
             (400, "该模型始终思考，不支持关闭思考"), ("答案", "stop", 0)])

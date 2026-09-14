@@ -1,4 +1,4 @@
-# 部署：把 Chem_Agent 发布成一个"任何用户都能用"的公开网页（BYOK）
+# Chem_Agent 自托管部署指南
 
 > 适用版本：`core/web_api.py` + `web/index.html`（公开网页 / BYOK）落地之后。
 > 目标形态：**用户打开网页 → 填自己的 API Key → 直接用**。服务端不提供、
@@ -46,7 +46,7 @@ python -m uvicorn api:app --host 127.0.0.1 --port 8000
 
 #    ─────────────── ⚠️ 下面这个开关只给"本地连自己电脑上的模型"用 ───────────────
 #    WEB_ALLOW_PRIVATE_BASE_URL=1 会让服务端的"内网/本机端点"拦截**整体失效**
-#    （安全审查 R7）。它同时关掉两道防护：
+#    。它同时关掉两道防护：
 #      · R2 —— 视觉端点的 SSRF 校验
 #      · R3 —— 出站请求"不跟随跳转"
 #    也就是说：**线上开着它 = 把服务器变成任意内网地址的请求跳板**，
@@ -86,16 +86,16 @@ mock LLM 端点 + 端到端脚本，可以确认"用户 Key 确实被用到了�
 
 ---
 
-## 2. 服务器部署（阿里云 / 任意 Linux）
+## 2. 服务器部署（任意 Linux + systemd + Nginx 反代）
 
-现有清小搭服务已经跑在同一台机器上（`60.205.181.60`，systemd 单元
-`chem_agent`，目录 `/var/www/chem_agent`）。**公开网页复用同一个服务进程**，
-不需要新开端口、不需要第二个 systemd 单元——重启一次即可同时生效。
+以下假设一台 Linux 服务器：systemd 单元 `chem_agent`，项目目录
+`/var/www/chem_agent`（均为示例值，按实际调整）。**公开网页复用同一个服务
+进程**，不需要新开端口、不需要第二个 systemd 单元——重启一次即可同时生效。
 
 ### 2.1 更新代码
 
 ```bash
-ssh root@60.205.181.60
+ssh <你的服务器>
 cd /var/www/chem_agent
 git pull origin main                 # 本次改动：core/credentials.py、core/web_api.py、
                                      # web/index.html、api.py、core/llm_client.py 等
@@ -140,7 +140,7 @@ CHEM_AGENT_TMPDIR=/var/tmp/chem_agent
 否则限流把所有用户算作同一人（Nginx 的 IP）。★ 转发的写法必须是**覆盖**
 （`$remote_addr`），**不能**用 `$proxy_add_x_forwarded_for` —— 后者是"追加"，
 客户端自己伪造的 `X-Forwarded-For` 会被原样留在最前面，攻击者每个请求换一个假
-IP 就得到一个新的限流桶，"每 IP 20 次/分钟"形同虚设（安全审查 R4）。
+IP 就得到一个新的限流桶，"每 IP 20 次/分钟"形同虚设。
 
 参考 `deploy/nginx-chem-agent.conf`（本仓库内，可直接改域名后使用）：
 
@@ -161,7 +161,7 @@ location / {
 
 改完 reload：`sudo nginx -t && sudo systemctl reload nginx`。
 
-> 服务端**自己不再解析**这个头（安全审查 R4）：它只读 uvicorn 净化后的
+> 服务端**自己不再解析**这个头：它只读 uvicorn 净化后的
 > `request.client`。uvicorn 默认只信任来自 `127.0.0.1` 的代理，并按"从右往左
 > 找第一个不受信地址"取真实客户端。**若你的反代不是从 `127.0.0.1` 连进来**
 > （例如跑在同一台机器的 Docker 网络里、或另有一层 LB），必须给 uvicorn 加
@@ -173,7 +173,7 @@ location / {
 `deploy/chem-agent.service`（本仓库内）。若沿用现有单元，确认三点即可：
 `WorkingDirectory=/var/www/chem_agent`、
 `ExecStart=... -m uvicorn api:app --host 127.0.0.1 --port 8000`、
-**`--forwarded-allow-ips=127.0.0.1`**（安全审查 R4：限流取的是 uvicorn 净化后的
+**`--forwarded-allow-ips=127.0.0.1`**（限流取的是 uvicorn 净化后的
 客户端 IP，uvicorn 只在直连对端是受信代理时才采信 `X-Forwarded-For`；反代不在
 本机时改成它的 IP/网段）。
 
@@ -195,7 +195,7 @@ sudo systemctl daemon-reload && sudo systemctl restart chem_agent
   改成绝对地址，例如把 `fetch("api/chat"` 改为
   `fetch("https://你的域名/api/chat"`；
 * 服务端已开 `CORSMiddleware`，但**默认只放行本机调试地址与你自己的 `PUBLIC_BASE_URL`**
-  （安全审查 R9；网页与接口同源时根本不需要 CORS）。放到异地托管时，必须把那个域名
+  （网页与接口同源时根本不需要 CORS）。放到异地托管时，必须把那个域名
   加进去，否则浏览器预检失败：`CORS_ALLOW_ORIGINS=https://你的静态域名`；
 * 必须允许自定义头，否则浏览器预检失败——当前配置 `allow_headers=["*"]` 已满足；
 * 附件 URL 由服务端按 `PUBLIC_BASE_URL` 生成，与页面托管位置无关。
@@ -203,7 +203,7 @@ sudo systemctl daemon-reload && sudo systemctl restart chem_agent
 > 安全提示：把页面放到第三方域名时，用户的 Key 会经由那个域名的 JS 发出——
 > 只托管你自己控制的页面。
 
-### 2.6 ★ 跑 LaTeX 的隔离要求（安全审查 R1，20260911）
+### 2.6 ★ 跑 LaTeX 的隔离要求
 
 图示是靠**编译 LaTeX** 画出来的，而 `.tex` 内容来自大模型 —— 也就是**可以被用户
 提问影响**。TeX 的 `\input`/`\openin`/`\read` 能读服务器上任意可读文件，并把内容
@@ -261,7 +261,7 @@ curl -s -X POST $BASE/api/chat -H 'Content-Type: application/json' \
      -H 'X-Chem-Api-Key: 你的Key' -H 'X-Chem-Model: deepseek-flash' \
      -d '{"messages":[{"role":"user","content":"画出苯的结构式"}]}' | head -c 400
 
-# ⑥ LaTeX 编译的文件访问限制（安全审查 R1）——★ 必须跑，别假定
+# ⑥ LaTeX 编译的文件访问限制——★ 必须跑，别假定
 python -m utils.latex_compile --security-check
 #    file_read_restricted: true  → 引擎已拦住越界读文件
 #    file_read_restricted: false → 这台机器拦不住（如 MiKTeX），必须做 §2.6 的隔离
@@ -292,13 +292,13 @@ python -m utils.latex_compile --security-check --strict   # 没拦住则以退�
 | 会话附件目录 | `data/web_sessions/<会话id>/`（**按全局配额回收**：2GB / 50000 个文件，**只在超配额时**删最旧的图，不按时间清；见 `core/web_api.py::prune_web_attachments`） |
 | 清小搭附件目录 | `data/attachments/`（独立配额 2GB / 50000，长期保留，与网页互不挤占） |
 | 限流 | 每 IP 每分钟 20 次（`core/web_api.py` 的 `RATE_LIMIT_PER_MINUTE`）；客户端身份取 uvicorn 净化后的对端地址 |
-| 在途上限 | 全局 16、单 IP 4（安全审查 R5）。超了返回 503 + "服务器当前请求较多"（不是用户设置问题）。可用环境变量 `CHEM_AGENT_MAX_INFLIGHT` / `CHEM_AGENT_MAX_INFLIGHT_PER_IP` 调整，设 `0` = 关闭该道闸门 |
-| 图片大小上限 | 单张 8MB、单次合计 16MB（**解码后**，安全审查 R6）；超限 400 并提示压缩/减少张数。反代另需 `client_max_body_size` 放行（见 §2.3） |
+| 在途上限 | 全局 16、单 IP 4。超了返回 503 + "服务器当前请求较多"（不是用户设置问题）。可用环境变量 `CHEM_AGENT_MAX_INFLIGHT` / `CHEM_AGENT_MAX_INFLIGHT_PER_IP` 调整，设 `0` = 关闭该道闸门 |
+| 图片大小上限 | 单张 8MB、单次合计 16MB（**解码后**）；超限 400 并提示压缩/减少张数。反代另需 `client_max_body_size` 放行（见 §2.3） |
 | 单个会话附件上限 | 64MB（`core/web_api.py` 的 `WEB_SESSION_MAX_BYTES`）；超了先回收**该会话内部**最旧的图，再走全局配额 |
 | 浏览器来源（CORS） | 默认只放行本机调试地址 + `.env` 的 `PUBLIC_BASE_URL`（网页与接口同源，同源请求不需要 CORS）。把页面托管到**别的域名**时（§2.5），用 `CORS_ALLOW_ORIGINS=https://a.com,https://b.com` 显式列出 |
 | 安全响应头 | 所有响应带 `X-Frame-Options: DENY`、CSP `frame-ancestors 'none'`、`nosniff`、`Referrer-Policy: no-referrer`（防 iframe 套框/点击劫持） |
 | 用户密钥去向 | 只在请求内存；journald 日志只打指纹（`sk-abc…f3d2`）；**不含密钥** |
-| 诊断日志（★ 含真人提问） | `data/diagnostics.jsonl`（权限 **0600**，安全审查 R12）：清小搭与网页**共用**这一个文件，靠 `cid` 前缀区分（`chatcmpl-*` / `web-*`）；每行含**提问原文**与模型原始输出，只有凭证是指纹。超 8MB 轮转为 `.1.jsonl`（磁盘最多约 16MB）。Streamlit 用**独立**的 `data/streamlit_diagnostics.jsonl`。要清空：`sudo truncate -s 0 data/diagnostics.jsonl` |
+| 诊断日志（★ 含真人提问） | `data/diagnostics.jsonl`（权限 **0600**）：清小搭与网页**共用**这一个文件，靠 `cid` 前缀区分（`chatcmpl-*` / `web-*`）；每行含**提问原文**与模型原始输出，只有凭证是指纹。超 8MB 轮转为 `.1.jsonl`（磁盘最多约 16MB）。Streamlit 用**独立**的 `data/streamlit_diagnostics.jsonl`。要清空：`sudo truncate -s 0 data/diagnostics.jsonl` |
 
 ### 常见问题
 
@@ -308,14 +308,14 @@ python -m utils.latex_compile --security-check --strict   # 没拦住则以退�
 所有用户会共享同一配额，先修反代配置。
 
 **Q：用户看到"服务器当前请求较多，请稍后重试"？**
-这是**在途上限**（安全审查 R5）而不是用户填错了东西：服务器同时在处理的出站调用
+这是**在途上限**而不是用户填错了东西：服务器同时在处理的出站调用
 达到上限（默认全局 16、单 IP 4）就会快速失败，避免把内存/线程耗尽。默认值够用；
 如果是正常高峰想放宽，设环境变量 `CHEM_AGENT_MAX_INFLIGHT=32`（以及
 `CHEM_AGENT_MAX_INFLIGHT_PER_IP`）后重启服务。**如果日志里这个提示很频繁、
 而且来源 IP 很分散**，那多半是有人在打你，考虑上 WAF/CDN 限速。
 
 **Q：用户说图片传不上去 / 提示图片过大？**
-三道限制，按顺序看：① 单张 8MB、单次合计 16MB（解码后，安全审查 R6）——让用户
+三道限制，按顺序看：① 单张 8MB、单次合计 16MB（解码后）——让用户
 压缩或减少张数；② 反代的 `client_max_body_size`（§2.3 应设 48m，nginx 默认只有 1MB，
 小图也会被 413 拒掉，且用户看不到原因）；③ 前端也会先拦一次并给提示。
 如果报的是"图片格式不支持"，那是魔数校验：附件必须是**真图片**（png/jpg/gif/bmp/webp）。
@@ -330,7 +330,7 @@ python -m utils.latex_compile --security-check --strict   # 没拦住则以退�
 端点（DeepSeek / 智谱 / SiliconFlow / OpenRouter…）不受影响。
 
 **Q：用户看到"接口地址返回了重定向 / 本服务不跟随跳转"？**
-这是**有意的安全策略**（安全审查 R3）：出站请求一律不跟随 302/301。否则一个
+这是**有意的安全策略**：出站请求一律不跟随 302/301。否则一个
 公网域名可以先通过 SSRF 校验、再 302 跳到内网或云元数据地址，校验就白做了。
 让用户把**最终的完整地址**直接填进设置里的「接口地址」即可（例如填
 `https://…` 而不是会被 301 跳转的 `http://…`）。
