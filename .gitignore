@@ -12,9 +12,9 @@ __pycache__/
 # 内部工作文档（AI 指令）
 instructions/
 portfolio/
+AGENTS.local.md
 
 # 测试文件
-latex_tests/
 fast_test/
 fast_test.py
 
@@ -25,10 +25,11 @@ fast_test.py
 Thumbs.db
 .omo/
 
-#其他配置文件
+# 其他配置文件
 .chktexrc
 data/
 venv/
+opencode.json
 
 # 环境变量与密钥（禁止提交；.env.example 仍被跟踪）
 .env
