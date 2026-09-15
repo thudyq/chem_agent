@@ -1,12 +1,12 @@
 # 有机化学知识智能体（LLM Plus 转型版）- 依赖清单
-# Python 3.9+
+# Python 3.10+（函数签名含 PEP 604 注解 `X | None`，3.9 下 import 即报 TypeError）
 
 # === 核心化学处理 ===
 rdkit                          # SMILES 校验、分子式（utils/rdkit_utils.py）
 
 # === LLM 客户端（Day 6-7）===
 requests                       # 调用 OpenAI 兼容 API
-curl_cffi                      # PubChem 访问（浏览器 TLS 指纹，绕开 OpenSSL 指纹的 503 限流；legacy/name_resolver）
+curl_cffi                      # PubChem 访问（浏览器 TLS 指纹，绕开 OpenSSL 指纹的 503 限流；utils/name_resolver.py）
 python-dotenv                  # 读取 .env 中的 API_KEY
 
 # === 测试 ===

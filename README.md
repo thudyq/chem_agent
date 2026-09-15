@@ -1,6 +1,6 @@
 # Chem_Agent：给 LLM 装上化学的“眼睛”和“画笔”
 
-[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ---
@@ -144,7 +144,7 @@ graph LR
 
 ### 环境要求
 
-- Python 3.9+
+- Python 3.10+
 - Conda（推荐）或 pip
 - LaTeX 工具链（仅当需要 PNG 附件/图片输出时）：
   `xelatex`（Debian/Ubuntu: `texlive-xetex texlive-latex-extra texlive-lang-chinese`）+ `poppler-utils`
@@ -157,7 +157,7 @@ git clone <your-repo-url>
 cd chem_agent
 
 # 2. 创建并激活 Conda 环境
-conda create -n chem_agent python=3.9
+conda create -n chem_agent python=3.10
 conda activate chem_agent
 
 # 3. 安装依赖
