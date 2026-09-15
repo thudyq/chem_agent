@@ -244,8 +244,42 @@ def test_bad_max_tokens_falls_back():
 
 # ---------------------------------------------------------------- 视觉组
 
-def test_vision_without_override_is_env_config():
-    assert credentials.vision_config() is settings.vision
+def test_vision_without_override_is_env_config(base_cfg):
+    """基准 VISION_* 配齐时，无请求覆盖（/v1、Streamlit）直接用基准视觉配置。"""
+    base_cfg(vision=dataclasses.replace(
+        settings.vision, model_name="srv-vision",
+        base_url="https://srv.example/v1", api_key="sk-srv-vision"))
+    v = credentials.vision_config()
+    assert v.model_name == "srv-vision"
+    assert v.api_key == "sk-srv-vision"
+    assert v.base_url == "https://srv.example/v1"
+
+
+def test_vision_without_override_falls_back_to_main_model(base_cfg):
+    """★ 契约：基准 VISION_* 三项留空 = 用主模型识图（/v1 与 Streamlit 路径）。
+
+    与 BYOK 分支（test_vision_falls_back_to_main_model）是同一条规则的两半；
+    曾只实现 BYOK 一半，导致 .env 未配 VISION_* 时 /v1 图片输入被判"未配置"。
+    """
+    base_cfg(llm=dataclasses.replace(
+                 settings.llm, model_name="deepseek-flash",
+                 base_url="https://api.deepseek.com/v1", api_key="sk-main"),
+             vision=dataclasses.replace(
+                 settings.vision, model_name="", base_url="", api_key=""))
+    v = credentials.vision_config()
+    assert v.is_configured
+    assert v.model_name == "deepseek-flash"
+    assert v.api_key == "sk-main"
+    assert v.base_url == "https://api.deepseek.com/v1"
+    assert credentials.vision_is_main() is True
+
+
+def test_vision_without_override_unconfigured_when_main_also_missing(base_cfg):
+    """基准视觉留空且主模型凭证也不全 → 未配置（不臆造配置）。"""
+    base_cfg(llm=dataclasses.replace(settings.llm, api_key="", model_name=""),
+             vision=dataclasses.replace(settings.vision, model_name="",
+                                        base_url="", api_key=""))
+    assert credentials.vision_config().is_configured is False
 
 
 def test_vision_falls_back_to_main_model(base_cfg):

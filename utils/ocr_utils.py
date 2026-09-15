@@ -248,7 +248,7 @@ def describe_image(image_path: str, max_attempts: int = _VISION_MAX_ATTEMPTS) ->
     """
     config = credentials.vision_config()
     if not config.is_configured:
-        print("[ocr] 视觉模型未配置（且主模型凭证不可用）")
+        print("[ocr] 视觉模型未配置（VISION_* 留空，且主模型凭证也不可用）")
         return None
     api_key, base_url, model = config.api_key, config.base_url, config.model_name
 

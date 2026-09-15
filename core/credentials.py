@@ -309,7 +309,8 @@ def vision_config():
 
     规则——视觉是**可能完全独立**的一个模型：
 
-    1. 无请求覆盖（清小搭 / Streamlit）→ 用基准配置的 `VISION_*`；
+    1. 无请求覆盖（清小搭 / Streamlit）→ 用基准配置的 `VISION_*`；三项留空时
+       同样**回退主模型**（规则 3 的无覆盖半边，契约见 `VisionConfig` docstring）；
     2. 有请求覆盖且**用户填了视觉模型** → 用用户给的；端点/Key 未单独给时
        沿用**用户自己的**主模型端点/Key（多数 OpenAI 兼容端点同一把 Key 即可
        访问视觉模型）；
@@ -327,6 +328,14 @@ def vision_config():
     base = _BASE.vision
     creds = current()
     if not creds:
+        if base.is_configured:
+            return base
+        # 基准视觉三项留空 = 用主模型识图（规则 1 的回退半边）。
+        main = _BASE.llm
+        if main.api_key and main.base_url and main.model_name:
+            return _with_overrides(base, {"api_key": main.api_key,
+                                          "base_url": main.base_url,
+                                          "model_name": main.model_name})
         return base
 
     user_model_name = creds.get("model") or getattr(_BASE.llm, "model_name", "")
