@@ -549,7 +549,7 @@ def test_block_resonance_balance():
 def test_block_resonance_duplicate():
     """BLOCK 共振式去重——两个极限式 SMILES 逐字相同（伪共振式）→ 拦截；
     不同电子排布（凯库勒式、对称等价原子间移电荷）放行。
-    实测病例：开思考基线 Q14 第二个 BLOCK 两个极限式 SMILES 逐字相同
+    实测病例：两个标着不同 label 的共振极限式 SMILES 逐字相同
     （守恒查不出——分子式当然相同）。
     比对只用逐字串（不用 canonical SMILES）：避免按图同构误伤羧酸根
     [O-]C=O ↔ O=C[O-] 这类合法共振式；换方向书写漏检是有意的保守。"""
@@ -591,7 +591,7 @@ def test_block_resonance_duplicate():
 def test_ring_claim_label():
     """label 环系声明 ↔ RDKit 环信息比对（确定性拦截）：
     「环状卤鎓」必须是含带正电卤素的三元环；显式「N 元环」声明要求
-    分子含该尺寸的环。实测病例：开思考基线 Q2 溴鎓画成四元环。"""
+    分子含该尺寸的环。实测病例：label 声称环状溴鎓、SMILES 实为四元环。"""
     pytest.importorskip("rdkit")
     # A：病例回归——label 声称环状溴鎓，SMILES 实为 Br+3C 四元环
     _, bad = _validate("[STRUCT:[Br+]1CC(C)C1C,mode=stereo,label=环状溴鎓离子]")

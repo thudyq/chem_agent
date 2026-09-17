@@ -251,7 +251,7 @@ def _pct(a: int, b: int) -> str:
 
 def format_report(stats: dict, corpus_path: str) -> str:
     lines = [
-        "校验规则归因统计报告（P0）",
+        "校验规则归因统计报告",
         "==========================",
         f"语料: {corpus_path}（mode={stats['mode']}，{stats['questions']} 题）",
         f"标记: {stats['tags']} 个，通过 {stats['valid']}，"
@@ -298,7 +298,7 @@ def format_report(stats: dict, corpus_path: str) -> str:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="校验规则归因统计（P0）")
+    ap = argparse.ArgumentParser(description="校验规则归因统计")
     ap.add_argument("corpus", help="core.metrics --json-out 导出的 JSON 语料")
     ap.add_argument("--out", help="报告写入文件（终端同时打印）")
     args = ap.parse_args()
