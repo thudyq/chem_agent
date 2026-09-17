@@ -25,7 +25,7 @@ from core.tag_parser import parse_tags
 from core.tag_validator import (
     _RDKIT_OK, _check_chinese_label, _check_cip_label,
     _check_cistrans_label, _check_radical_charge_conflict,
-    _check_radical_label, _parse_coeff, _parse_mol,
+    _check_radical_label, _check_ring_claim_label, _parse_coeff, _parse_mol,
     autofix_balance_gap, autofix_mech_bond_endpoint, autofix_stereo_label,
     check_protonated_label, tag_name, validate_tags,
 )
@@ -81,6 +81,7 @@ _FORMAT_RULES = [
     ("block.empty", ("BLOCK 内缺少",)),
     ("block.arrow_type", ("BLOCK 内箭头类型",)),
     ("block.content", ("BLOCK 内不支持",)),
+    ("block.resonance_dup", ("BLOCK: 共振式重复",)),  # 伪共振式（结构去重）
     ("block.resonance_balance", ("BLOCK",)),  # 其余 BLOCK 失败均为守恒
 ]
 
@@ -105,6 +106,7 @@ _STRUCT_LABEL_CHECKS = [
     ("struct.chinese_label", _check_chinese_label),
     ("struct.cip_label", _check_cip_label),
     ("struct.cistrans_label", _check_cistrans_label),
+    ("struct.ring_claim", _check_ring_claim_label),
 ]
 
 

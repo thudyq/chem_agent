@@ -546,6 +546,72 @@ def test_block_resonance_balance():
     assert not bad6, [r.reason for r in bad6]
 
 
+def test_block_resonance_duplicate():
+    """BLOCK 共振式去重——两个极限式 SMILES 逐字相同（伪共振式）→ 拦截；
+    不同电子排布（凯库勒式、对称等价原子间移电荷）放行。
+    实测病例：开思考基线 Q14 第二个 BLOCK 两个极限式 SMILES 逐字相同
+    （守恒查不出——分子式当然相同）。
+    比对只用逐字串（不用 canonical SMILES）：避免按图同构误伤羧酸根
+    [O-]C=O ↔ O=C[O-] 这类合法共振式；换方向书写漏检是有意的保守。"""
+    pytest.importorskip("rdkit")
+    # A：病例回归——标着不同 label 的两个极限式逐字相同
+    _, bad = _validate(
+        "[COMPOSITE:reaction][BLOCK]"
+        "[STRUCT:COC1([H])C=CC(=[N+]([O-])[O-])C=C1,id=n1,label=环上负电荷]"
+        "[ARROW:type=resonance]"
+        "[STRUCT:COC1([H])C=CC(=[N+]([O-])[O-])C=C1,id=n2,label=硝基氧负电荷]"
+        "[/BLOCK][/COMPOSITE]")
+    assert len(bad) == 1 and "共振式重复" in bad[0].reason
+    # B：不相邻重复同样拦截（A ↔ B ↔ A）
+    _, bad2 = _validate(
+        "[COMPOSITE:row][BLOCK]"
+        "[STRUCT:C1=CC=CC=C1,id=a1][ARROW:type=resonance]"
+        "[STRUCT:C1C=CC=CC=1,id=a2][ARROW:type=resonance]"
+        "[STRUCT:C1=CC=CC=C1,id=a3][/BLOCK][/COMPOSITE]")
+    assert len(bad2) == 1 and "共振式重复" in bad2[0].reason
+    # C：不同电子排布（凯库勒式）→ 放行
+    _, bad3 = _validate(
+        "[COMPOSITE:row][BLOCK]"
+        "[STRUCT:C1=CC=CC=C1,id=b1][ARROW:type=resonance]"
+        "[STRUCT:C1C=CC=CC=1,id=b2][/BLOCK][/COMPOSITE]")
+    assert not bad3, [r.reason for r in bad3]
+    # D：对称等价原子间移电荷（羧酸根）→ 放行（canonical 同构误伤面）
+    _, bad4 = _validate(
+        "[COMPOSITE:reaction][BLOCK][STRUCT:[O-]C=O,id=r1]"
+        "[ARROW:type=resonance][STRUCT:O=C[O-],id=r2][/BLOCK][/COMPOSITE]")
+    assert not bad4, [r.reason for r in bad4]
+    # E：同一物种换方向书写（逐字不同）→ 放行（有意的保守漏检面）
+    _, bad5 = _validate(
+        "[COMPOSITE:row][BLOCK]"
+        "[STRUCT:C=C[CH2+],id=w1][ARROW:type=resonance]"
+        "[STRUCT:[CH2+]C=C,id=w2][/BLOCK][/COMPOSITE]")
+    assert not bad5, [r.reason for r in bad5]
+
+
+def test_ring_claim_label():
+    """label 环系声明 ↔ RDKit 环信息比对（确定性拦截）：
+    「环状卤鎓」必须是含带正电卤素的三元环；显式「N 元环」声明要求
+    分子含该尺寸的环。实测病例：开思考基线 Q2 溴鎓画成四元环。"""
+    pytest.importorskip("rdkit")
+    # A：病例回归——label 声称环状溴鎓，SMILES 实为 Br+3C 四元环
+    _, bad = _validate("[STRUCT:[Br+]1CC(C)C1C,mode=stereo,label=环状溴鎓离子]")
+    assert len(bad) == 1 and "三元环" in bad[0].reason
+    # B：正确的三元环溴鎓 → 放行
+    _, bad2 = _validate("[STRUCT:[Br+]1CC1,label=环状溴鎓离子]")
+    assert not bad2, [r.reason for r in bad2]
+    # C：无环状声明的鎓 label 不触发（非环状鎓离子合法存在）
+    _, bad3 = _validate("[STRUCT:[Br+]1CC1,label=溴鎓离子中间体]")
+    assert not bad3, [r.reason for r in bad3]
+    # D：「开环」等含"环"但非环状声明的措辞不触发
+    _, bad4 = _validate("[STRUCT:[OH+]1CC1,label=质子化环氧化物]")
+    assert not bad4, [r.reason for r in bad4]
+    # E：显式 N 元环声明——有该尺寸环 → 放行；无 → 拦截
+    _, bad5 = _validate("[STRUCT:C1CCCCC1,label=六元环对照]")
+    assert not bad5, [r.reason for r in bad5]
+    _, bad6 = _validate("[STRUCT:C1CCCC1,label=六元环]")
+    assert len(bad6) == 1 and "六元环" in bad6[0].reason
+
+
 def test_composite_row_without_struct_passes():
     """row 布局允许无 [STRUCT]（纯箭头/条件/连接符序列合法）——要求已删除。"""
     _, invalid = _validate("[COMPOSITE:row][PLUS][ARROW:type=single,条件][/COMPOSITE]")

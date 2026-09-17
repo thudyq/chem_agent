@@ -875,6 +875,20 @@ def _check_block_resonance_balance(block_children: list) -> str:
             total += gr()
         return total
 
+    # 伪共振式去重：两个极限式 SMILES 逐字相同 = 同一电子排布写了两遍，
+    # 不是"不同共振式"（开思考基线 Q14 实测：两个标着不同 label 的极限式
+    # SMILES 逐字相同——守恒查不出，分子式当然相同）。
+    # 只用逐字比对、不用 canonical SMILES：canonical 化会按图同构合并
+    # 羧酸根 [O-]C=O ↔ O=C[O-] 这类"负电荷换到对称等价原子"的合法共振式
+    # （误伤）；同一物种换方向书写（C=C[CH2+] vs [CH2+]C=C）则漏检——
+    # 宁漏勿拦，两者都接受。
+    smis = [_smi_of(seg) for seg in segments]
+    for i, j in itertools.combinations(range(len(segments)), 2):
+        if smis[i] and smis[i] == smis[j]:
+            return (f"共振式重复：第 {i + 1} 与第 {j + 1} 个极限式的 SMILES "
+                    f"完全相同——共振式必须是同一物种的不同电子排布；写重的"
+                    f"式子请删除，或改成真正不同的电子排布")
+
     for i in range(len(segments) - 1):
         ls, rs = _smi_of(segments[i]), _smi_of(segments[i + 1])
         if not ls or not rs:
@@ -1773,6 +1787,53 @@ def _check_cistrans_label(mol, label: str) -> str:
     return ""
 
 
+_CN_RING_SIZE = {"三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8}
+_RING_SIZE_CLAIM_RE = re.compile(r"([三四五六七八])元环")
+_ONIUM_HALO_RE = re.compile(r"([溴氯碘])鎓")
+_ONIUM_HALO_SYM = {"溴": "Br", "氯": "Cl", "碘": "I"}
+
+
+def _check_ring_claim_label(mol, label: str) -> str:
+    """label 环系声明 ↔ SMILES 环信息比对（确定性拦截两类实测病例）。
+
+    - 显式「N 元环」（三~八）：分子须含该尺寸的环；
+    - 「环状/环形 + 卤鎓」：卤鎓离子（溴鎓/氯鎓/碘鎓）在教学语境必为
+      三元环——SMILES 须存在一个包含带正电卤素原子的三元环
+      （开思考基线 Q2：label 写"环状溴鎓离子"，SMILES 实为 Br+3C 四元环，
+      全线静默通过）。氧鎓/硫鎓环尺寸多样（环氧鎓三元、吡喃鎓六元）
+      不纳入；「开环」等含"环"但非环状声明的措辞、无环状声明的鎓
+      （非环状鎓合法存在）不触发；fake mol 跳过（宁漏勿拦）。
+    返回原因串（"" = 通过/不查）。
+    """
+    if not label:
+        return ""
+    ring_info_fn = getattr(mol, "GetRingInfo", None)
+    atoms_fn = getattr(mol, "GetAtoms", None)
+    if ring_info_fn is None or atoms_fn is None:
+        return ""   # fake mol（测试 fixture）：无环信息能力，跳过
+    atom_rings = ring_info_fn().AtomRings()
+    sizes = {len(r) for r in atom_rings}
+    m = _RING_SIZE_CLAIM_RE.search(label)
+    if m:
+        want = _CN_RING_SIZE[m.group(1)]
+        if want not in sizes:
+            got = "、".join(str(s) for s in sorted(sizes)) or "无环"
+            return (f"label 声称「{m.group(1)}元环」但 SMILES 中没有 "
+                    f"{want} 元环（实际环尺寸：{got}）——请核对环闭合数字"
+                    f"与环尺寸（三元环如 [Br+]1CC1、六元环如 C1CCCCC1）")
+    om = _ONIUM_HALO_RE.search(label)
+    if om and ("环状" in label or "环形" in label):
+        sym = _ONIUM_HALO_SYM[om.group(1)]
+        halo = {a.GetIdx() for a in atoms_fn()
+                if a.GetSymbol() == sym and a.GetFormalCharge() > 0}
+        if not any(len(r) == 3 and halo & set(r) for r in atom_rings):
+            return (f"label 声称「环状{om.group(1)}鎓」但 SMILES 中没有带正电的"
+                    f" {sym} 参与成三元环——卤鎓离子是三元环状结构（溴鎓 "
+                    f"[Br+]1CC1，而非四元环 [Br+]1CC(C)C1C）；请核对环尺寸"
+                    f"与电荷（卤素须带 +1）")
+    return ""
+
+
 def autofix_stereo_label(tag) -> tuple | None:
     """立体指定确定性自动修正（模型不会做"声称构型 → @/@@ 组合"的
     反向映射，校验拦下后反复修不对）：
@@ -1920,6 +1981,11 @@ def _validate_struct_args(args: list, attrs: dict = None) -> Tuple[bool, str]:
             ct_reason = _check_cistrans_label(mol, label_text)
             if ct_reason:
                 return False, ct_reason
+            # 环系声明一致性：label 声称「N 元环 / 环状卤鎓」与 RDKit
+            # 环信息比对（溴鎓画成四元环的实测病例）
+            ring_reason = _check_ring_claim_label(mol, label_text)
+            if ring_reason:
+                return False, ring_reason
     mode = attrs.get("mode", "skeleton")
     if mode not in _STRUCT_MODES:
         return False, (f"未知 STRUCT 模式「{mode}」，支持 "
