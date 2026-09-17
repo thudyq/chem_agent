@@ -877,6 +877,12 @@ async def chat_completions(request: Request, authorization: str | None = Header(
     """
     _check_auth(authorization)
     body = await request.json()
+    # 临时探针：看清小搭的请求是否带 user / 会话标识与自定义头，用于区分
+    # 最终用户（排查重复提问来源）。不含 Authorization。确认后应删除。
+    if isinstance(body, dict):
+        print(f"[probe] body_keys={sorted(body.keys())} "
+              f"user={body.get('user')!r} "
+              f"headers={[k for k in request.headers if k.lower().startswith('x-')]}")
     # 严格按 JSON 布尔解析 stream（字符串 "false" 视为非流式）
     stream = body.get("stream", False)
     stream = stream if isinstance(stream, bool) else False
