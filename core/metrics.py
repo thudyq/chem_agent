@@ -14,6 +14,7 @@
     python -m core.metrics --questions-file questions.txt
 """
 
+import json
 import sys
 
 
@@ -343,6 +344,7 @@ if __name__ == "__main__":
     args = sys.argv[1:]
     questions = []
     detail_file = None
+    json_out = None
     report_only = False
     route_mode = False
     i = 0
@@ -355,6 +357,9 @@ if __name__ == "__main__":
             i += 2
         elif a == "--detail-file" and i + 1 < len(args):
             detail_file = args[i + 1]
+            i += 2
+        elif a == "--json-out" and i + 1 < len(args):
+            json_out = args[i + 1]
             i += 2
         elif a == "--report-only":
             report_only = True
@@ -372,6 +377,8 @@ if __name__ == "__main__":
         print("用法: python -m core.metrics \"问题1\" \"问题2\" ...")
         print("      python -m core.metrics --questions-file questions.txt")
         print("      --detail-file FILE 把每条 LLM 完整输出写入文件（终端仍打印摘要）")
+        print("      --json-out FILE 把原始统计（含 LLM 输出全文）导出 JSON，"
+              "供 core.rule_stats 规则归因统计复用")
         print("      --report-only 终端只打印统计报告，不打印逐问题详情")
         print("      --route 端到端管线评估（process_question，含修正闭环）；")
         print("              默认模式为单模型首次输出基线）")
@@ -385,6 +392,10 @@ if __name__ == "__main__":
         if detail_file:
             with open(detail_file, "w", encoding="utf-8") as f:
                 f.write(format_route_detail(stats, output_limit=1 << 30))
+        if json_out:
+            with open(json_out, "w", encoding="utf-8") as f:
+                json.dump({"mode": "route", **stats}, f,
+                          ensure_ascii=False, indent=1)
         sys.exit(0)
     stats = evaluate_compliance(questions)
     print(format_report(stats))
@@ -394,3 +405,7 @@ if __name__ == "__main__":
     if detail_file:
         with open(detail_file, "w", encoding="utf-8") as f:
             f.write(format_detail(stats, output_limit=1 << 30))  # 完整输出
+    if json_out:
+        with open(json_out, "w", encoding="utf-8") as f:
+            json.dump({"mode": "compliance", **stats}, f,
+                      ensure_ascii=False, indent=1)

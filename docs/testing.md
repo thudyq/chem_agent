@@ -90,10 +90,18 @@ python app.py "问题" | python -m core.replay -          # 管道 stdin
 ```bash
 python -m core.metrics --questions-file fast_test/questions.txt
 python -m core.metrics --questions-file fast_test/questions.txt --detail-file detail.txt
+python -m core.metrics --questions-file fast_test/questions.txt --json-out corpus.json
 ```
 
 - `fast_test/questions.txt`：基线问题集（每行一题，`#` 注释行）；每种标记类型至少
   1 题，遇到新失败模式就把对应问题追加进去固化。
+- `--json-out`：把原始统计（含 LLM 输出全文）导出 JSON，供规则归因统计复用。
+
+校验规则归因统计（哪条规则拦了多少、多少本可确定性自动修复）：
+
+```bash
+python -m core.rule_stats corpus.json --out report_rule_stats.txt
+```
 
 ---
 
