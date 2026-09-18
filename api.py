@@ -17,6 +17,7 @@ http(s) URL），经视觉模型识别为 SMILES 后并入问题文本。
 """
 
 import base64
+import hashlib
 import ipaddress
 import json
 import os
@@ -878,10 +879,13 @@ async def chat_completions(request: Request, authorization: str | None = Header(
     _check_auth(authorization)
     body = await request.json()
     # 临时探针：看清小搭的请求是否带 user / 会话标识与自定义头，用于区分
-    # 最终用户（排查重复提问来源）。不含 Authorization。确认后应删除。
+    # 最终用户（排查重复提问来源）。sessionId 只打哈希指纹（可分组、不留原值），
+    # 不含 Authorization。确认后应删除。
     if isinstance(body, dict):
+        sid = body.get("sessionId")
+        sid_fp = hashlib.sha256(str(sid).encode()).hexdigest()[:12] if sid else None
         print(f"[probe] body_keys={sorted(body.keys())} "
-              f"user={body.get('user')!r} "
+              f"user={body.get('user')!r} sessionId_fp={sid_fp} "
               f"headers={[k for k in request.headers if k.lower().startswith('x-')]}")
     # 严格按 JSON 布尔解析 stream（字符串 "false" 视为非流式）
     stream = body.get("stream", False)
