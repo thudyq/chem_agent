@@ -47,9 +47,13 @@
 
 ## 🖼️ 渲染效果示例
 
+**[COMPOSITE] 反应式**
+
 <img src="docs/assets/composite_nitration.png" alt="苯的硝化反应式（[COMPOSITE] 渲染输出）" style="height: 200px;"/>
-<img src="docs/assets/energy_profile.png" alt="三点势能面与驻点标注（[ENERGY] 渲染输出）" style="height: 400px;"/>
-<img src="docs/assets/newman_ethane.png" alt="乙烷纽曼投影（[STRUCT] mode=newman 渲染输出）" style="height: 300px;"/>
+
+| **[ENERGY] 势能面** | **[STRUCT] mode=newman 投影** |
+| :---: | :---: |
+| <img src="docs/assets/energy_profile.png" alt="三点势能面与驻点标注（[ENERGY] 渲染输出）" style="height: 300px;"/> | <img src="docs/assets/newman_ethane.png" alt="乙烷纽曼投影（[STRUCT] mode=newman 渲染输出）" style="height: 300px;"/> |
 
 ---
 
