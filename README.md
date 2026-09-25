@@ -12,6 +12,8 @@
 当前，LLM 已能流畅解答各学科的专业问题，但在化学领域存在一个核心痛点：**输出端无法精准绘制反应机理、电子转移、势能面等图示内容**。Chem_Agent 通过一套轻量级的“渲染标记语言（Tag-based Rendering Language）”，让 LLM 在输出文字回答的同时，自动生成对应的化学结构式、反应式、机理图等可视化内容，实现真正的“图文并茂”。
 
 > **核心理念**：LLM 是大脑（理解、推理、决策），Chem_Agent 是画笔（解析指令、渲染图像），也是校验尺（**生成 → 校验 → 修正 → 交付的可靠性闭环**——不让错误图示静默到达用户）。
+>
+> **English abstract**: Chem_Agent is a chemistry-visualization engine for LLMs. The model embeds lightweight rendering tags (`[STRUCT]` / `[COMPOSITE]` / `[ENERGY]` / `[REASONING]`) in its answers; a pipeline then parses the tags, validates them against chemical contracts, feeds failures back to the LLM for repair, renders TikZ figures, and injects the results — image-rich chemistry answers, with invalid figures never silently reaching the user.
 
 ---
 
@@ -26,8 +28,7 @@
 | **公开网页（BYOK）** | 任意访客填自己的 API Key 即用（`/chat`，密钥只存浏览器） | `api.py` + `web/index.html` |
 | **本地 Streamlit 界面** | 开发调试与本地使用 | `streamlit_app.py` |
 
-三种形态共用同一条管线（LLM → 标记解析 → 契约校验 → 修正 → 渲染 → 注入），
-互不影响。
+三种形态共用同一条管线（LLM → 标记解析 → 契约校验 → 修正 → 渲染 → 注入），互不影响。
 
 ---
 
@@ -41,6 +42,14 @@
 | **能量变化** | 无法绘制势能面、驻点结构 | `[ENERGY:点序列]` + energy 布局驻点挂载 |
 | **推理过程** | 黑盒输出，复杂机理直接写标记易错 | `[REASONING]...[/REASONING]` 思考规划空间：复杂图先在此规划步骤、数清原子编号（内容不进入最终回答） |
 | **可靠性** | 化学图示错了也静默通过 | 标记契约校验层（SMILES/守恒/引用）+ 失败自动回传修正 |
+
+---
+
+## 🖼️ 渲染效果示例
+
+<img src="docs/assets/composite_nitration.png" alt="苯的硝化反应式（[COMPOSITE] 渲染输出）" style="height: 200px;"/>
+<img src="docs/assets/energy_profile.png" alt="三点势能面与驻点标注（[ENERGY] 渲染输出）" style="height: 400px;"/>
+<img src="docs/assets/newman_ethane.png" alt="乙烷纽曼投影（[STRUCT] mode=newman 渲染输出）" style="height: 300px;"/>
 
 ---
 
@@ -82,9 +91,7 @@ graph LR
 
 - **契约校验层**：渲染前拦截非法 SMILES、原子/电荷不守恒、越界引用、格式错误；
 - **失败回传修正**：失败标记连同原因回传 LLM 部分修正（不重写全文），修正耗尽则友好降级（宁可不画，不画错）；
-- **单模型 + 思考档位**：整个服务只用一个模型（DeepSeek V4.1 Flash 已在性能/成本上全面超越 V4 Pro）；
-  成本与延迟由用户可见的两个正交开关控制——**思考开关**（开/关）与**思考强度**（低/中/高/最大）；
-  端点不配合（强制思考、不认某档位）时自动摘字段适配并如实告知，不静默照做。
+- **单模型 + 思考档位**：整个服务只用一个模型（经 `MODEL_NAME` 配置，但若模型不具备识图能力还需配置视觉模型 `VISION_MODEL`）；成本与延迟由用户可见的两个正交开关控制——**思考开关**（开/关）与**思考强度**（低/中/高/最大）；端点不配合（强制思考、不认某档位）时自动摘字段适配并如实告知，不静默照做。
 
 ---
 
@@ -102,6 +109,7 @@ graph LR
 │   ├── llm_client.py          # LLM API 调用封装（流式、思考档位映射与降级、字段自适应）
 │   ├── tag_parser.py          # 标记解析器
 │   ├── tag_validator.py       # 标记契约校验层
+│   ├── readback.py            # 生成-回读协议（RDKit 确定性摘要对照 + 骨架漂移检查）
 │   ├── tag_injector.py        # 标记→TikZ 注入替换
 │   ├── prompt_manager.py      # System Prompt 管理
 │   ├── electron_sim.py        # 电子流模拟器（机理箭头自洽性深层校验）
@@ -110,7 +118,8 @@ graph LR
 │   ├── web_api.py             # 公开网页后端（/api/chat、BYOK 凭证、限流、会话附件）
 │   ├── replay.py              # 离线重放工具（标记管线归因：校验 trace + 渲染状态）
 │   ├── diaglog.py             # 诊断日志（失败标记与原始输出落盘，0600 滚动）
-│   └── metrics.py             # 基线评测（标记遵循率 / 端到端管线）
+│   ├── metrics.py             # 基线评测（标记遵循率 / 端到端管线）
+│   └── rule_stats.py          # 校验规则归因统计（评测语料 + autofix 覆盖分析）
 ├── renderers/
 │   ├── registry.py            # 标记调度表
 │   ├── layout.py              # 统一坐标布局引擎
@@ -129,13 +138,18 @@ graph LR
 │   └── tempdir.py             # 临时目录探测（沙箱/只读 /tmp 环境兜底）
 ├── prompts/
 │   ├── system_prompt.txt      # 核心 System Prompt
+│   ├── mech_arrow_prompt.txt       # 机理弯箭头修正专用 System Prompt（回传修正）
+│   ├── struct_rewrite_prompt.txt   # STRUCT 重写专用 System Prompt（回传修正）
 │   └── Instruction-for-SMILES.md   # SMILES 书写规范
 ├── web/
 │   └── index.html             # 公开网页（BYOK，自包含单文件，无需构建）
 ├── deploy/                    # 部署模板（systemd 单元 + Nginx 反代）
+├── docs/                      # 项目文档（deploy.md 部署 / testing.md 测试）
 ├── tests/                     # 单元测试（700+ 项，含示例一致性审计）
 ├── legacy/                    # MVP 旧代码（存档保留）
-└── requirements.txt
+├── pytest.ini                 # pytest 配置
+├── .env.example               # 环境变量模板（复制为 .env 后填写）
+└── requirements.txt           # 依赖清单
 ```
 
 ---
@@ -173,9 +187,7 @@ cp .env.example .env
 # 可选：VISION_*（仅当主模型不支持图片识别时才需要；原生多模态模型留空即可）
 # 可选：CHEM_AGENT_TMPDIR（只读 /tmp 的容器里指定可写临时目录；见 docs/deploy.md §2.2）
 # 接入清小搭时还需设置 SERVICE_API_KEY（服务端密钥）
-# 已废弃：FALLBACK_MODEL_NAME / UPGRADE_MODEL_NAME / UPGRADE_KEYWORDS（代码不再读取）；
-#         THINKING_MODE / REASONING_EFFORT 仅作过渡期兜底——新变量未设置时才读取
-#         并打废弃告警，建议尽快改名
+# 完整变量清单与历史变量迁移说明：见 .env.example 与 docs/deploy.md
 
 # 5. 验证安装
 python -c "from utils.rdkit_utils import validate_smiles; print(validate_smiles('C'))"
@@ -191,6 +203,14 @@ streamlit run streamlit_app.py
 # 或运行清小搭接入服务（OpenAI 兼容协议）
 uvicorn api:app --host 0.0.0.0 --port 8000
 ```
+
+### 运行测试
+
+```bash
+python -m pytest tests/ -q
+```
+
+用例组织、渲染器离线 demo 与示例一致性审计等专项验证方法见 `docs/testing.md`。
 
 ### API 调用示例
 
@@ -208,38 +228,20 @@ curl -X POST http://localhost:8000/v1/chat/completions \
 
 ### 公开网页（BYOK：用户填自己的 API Key）
 
-除清小搭接入外，服务同时提供**面向任意用户的公开网页**——不需要服务器提供任何
-密钥，访问者填自己的 OpenAI 兼容凭证即可使用，由他自己的账号计费：
+除清小搭接入外，服务同时提供**面向任意用户的公开网页**——不需要服务器提供任何密钥，访问者填自己的 OpenAI 兼容凭证即可使用，由他自己的账号计费：
 
 ```bash
 uvicorn api:app --host 0.0.0.0 --port 8000
 # 浏览器打开：http://localhost:8000/chat
 ```
 
-- **界面**：自包含单页（`web/index.html`，零构建、零 CDN 依赖）——设置面板填
-  `API Key / 接口地址 / 模型` 与两个思考控件 `思考（开/关）`、`思考强度（低/中/高/最大）`，
-  可选 `最大输出`、`视觉模型`（**留空即用主模型识图**）、`视觉端点/Key/思考参数`；
-  「测试连接」会顺带**探测该端点的思考能力**（能否关闭、是否接受档位）并显示结论。
-  对话流式输出，图示以 PNG 内联显示，支持上传结构式图片、多轮追问、会话本地保留。
-- **密钥处理**：只存在浏览器 `sessionStorage`（关标签页即失效），随请求头
-  `X-Chem-*` 一次性发给服务端，**服务端不写日志、不落盘、不回显**（日志只打
-  `sk-abc…f3d2` 形式的指纹）。凭证经 `core/credentials.py` 放进请求作用域的
-  contextvar，整条管线（生成 → 校验 → 修正 → 渲染）全程只用该用户的凭证。
-- **隐私**：为了排查化学图示渲染/校验失败，服务端会把**提问原文**（带图时含模型
-  对图片的识别结果）与**模型原始输出**记入 `data/diagnostics.jsonl`（权限 0600、
-  8MB 滚动覆盖、仅运维可读）——**不含 API Key**。页面设置面板里有对应的「隐私说明」
-  告知。对话正文本身只保存在访客自己的浏览器里（IndexedDB）。
-- **安全**：用户自定义的接口地址做 SSRF 校验（拒绝内网/回环/云元数据地址）、
-  每 IP 限流（默认 20 次/分钟，客户端身份取 uvicorn 净化后的对端地址，
-  **不采信客户端自报的 `X-Forwarded-For`**）、问题长度与图片数上限；BYOK 路径
-  **绝不继承**服务器 `.env` 的模型/端点/视觉配置（不会把服务器配置静默施加到用户自己的 key）。
-  出站请求**不跟随重定向**（3xx 一律当失败）——否则 302 可以绕过上面那道 SSRF
-  校验；因此「接口地址」要填**最终的**完整地址。LaTeX 编译另有文件访问限制与
-  源码闸门，见 `docs/deploy.md` §2.6。
-- **与清小搭互不影响**：`/v1/*` 契约与鉴权一字未改，两类调用方共用同一条
-  化学渲染与契约校验管线。
-- 端点：`GET /chat`（或 `/web`）页面、`POST /api/chat`（`stream=true` 走 SSE）、
-  `GET /api/web-config`、`GET /api/session/{会话}/{uuid}.png`。
+- **界面**：自包含单页（`web/index.html`，零构建、零 CDN 依赖）——设置面板填 `API Key / 接口地址 / 模型` 与两个思考控件 `思考（开/关）`、`思考强度（低/中/高/最大）`，可选 `最大输出`、`视觉模型`（**留空即用主模型识图**）、`视觉端点/Key/思考参数`；「测试连接」会顺带**探测该端点的思考能力**（能否关闭、是否接受档位）并显示结论。对话流式输出，图示以 PNG 内联显示，支持上传结构式图片、多轮追问、会话本地保留。
+- **密钥处理**：密钥只存在浏览器 `sessionStorage`（关标签页即失效），随请求头  一次性发给服务端——**不落盘、不写日志、不回显**；整条管线全程只用该用户的凭证，且 BYOK 路径不继承服务器 `.env` 的任何模型/端点/视觉配置。
+- **隐私**：仅用于排查化学图示渲染/校验失败的**提问原文与模型原始输出**会记入服务端诊断日志（不含 API Key，滚动覆盖、仅运维可读），页面设置面板有「隐私说明」告知；对话正文只保存在访客自己的浏览器里。
+- **安全**：接口地址做 SSRF 校验（拒绝内网/回环/云元数据地址）、每 IP 限流、问题长度与图片数上限；出站请求**不跟随重定向**，因此「接口地址」要填
+  **最终的**完整地址；LaTeX 编译另有文件访问限制与源码闸门。设计依据与运维细节见 `docs/deploy.md` §2.6。
+- **与清小搭互不影响**：`/v1/*` 契约与鉴权一字未改，两类调用方共用同一条化学渲染与契约校验管线。
+- 端点：`GET /chat`（或 `/web`）页面、`POST /api/chat`（`stream=true` 走 SSE）、`GET /api/web-config`、`GET /api/session/{会话}/{uuid}.png`。
 
 部署（Nginx/HTTPS/systemd 与验收清单）见 `docs/deploy.md`。
 
@@ -269,13 +271,21 @@ uvicorn api:app --host 0.0.0.0 --port 8000
 | **Phase 3** | 标记面收敛（STRUCT 家族 + COMPOSITE）+ 可靠性工程（契约校验 / 修正闭环 / 模型路由） | ✅ 已完成 |
 | **Phase 4** | 化学正确性增强（确定性化学规则校验、LLM 复审、机理箭头样式优化） | 🚧 进行中 |
 | **Phase 5** | 开放使用形态：公开网页 BYOK（用户自带 API Key）+ 每请求凭证隔离 + 部署模板 | ✅ 已完成 |
-| **Phase 6** | 模型与思考参数重构：单模型（删 fallback/upgrade/关键词路由）+ 思考开关×强度暴露给用户 + 端点能力表与参数自适应 + 视觉组独立配置 | ✅ 已完成 |
+| **Phase 6** | 模型与思考参数重构：单模型 + 思考开关×强度暴露给用户 + 端点能力表与参数自适应 + 视觉组独立配置 | ✅ 已完成 |
+
+---
+
+## ⚠️ 已知限制
+
+- **LaTeX 工具链强依赖**：PNG 图示附件需要 `xelatex` + `poppler-utils`；未安装时回答正常返回，但图示只显示裸 TikZ 源码、无图片。
+- **标记覆盖边界**：只渲染已定义的标记类型与画法变体；超出能力边界的复杂图会被主动降级为文字描述（宁可不画，不画错），不承诺任意化学图示都能成图。
+- **名称兜底需外网**：化学名称 → SMILES 的 PubChem 兜底需要外网访问；离线环境请在提问中直接提供 SMILES。
 
 ---
 
 ## 🤝 贡献
 
-欢迎提交 Issue 和 Pull Request。如有疑问，请联系项目维护者。
+欢迎提交 Issue 和 Pull Request。使用问题请直接在 Issue 中描述（附报错与复现步骤更佳）。
 
 ---
 

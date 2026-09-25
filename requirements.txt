@@ -1,5 +1,5 @@
-# 有机化学知识智能体（LLM Plus 转型版）- 依赖清单
-# Python 3.10+（函数签名含 PEP 604 注解 `X | None`，3.9 下 import 即报 TypeError）
+# Chem_Agent - 依赖清单
+# Python 3.10+
 
 # === 核心化学处理 ===
 rdkit                          # SMILES 校验、分子式（utils/rdkit_utils.py）
