@@ -281,6 +281,12 @@ def test_format_chem_text():
     assert format_chem_text("ω-3") == "$\\omega$-3"
     assert format_chem_text("ΔH") == "$\\Delta$H"
     assert format_chem_text("AΑB") == "AΑB"      # 无命令大写不转换
+    # `~` 是 LaTeX 活动字符（排版为不换行空格，图上不可见）、`≈` 文本字体
+    # 缺字形——均转数学模式；已含 $ 的手工排版文本原样返回（~ 不转）
+    assert format_chem_text("~75℃回流") == "$\\sim$75℃回流"
+    assert format_chem_text("~") == "$\\sim$"
+    assert format_chem_text("ΔH ≈ -20") == "$\\Delta$H $\\approx$ -20"
+    assert format_chem_text("~50℃ $\\Delta$") == "~50℃ $\\Delta$"
 
 
 def test_row_layout_multi_step():

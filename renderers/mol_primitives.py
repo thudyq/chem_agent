@@ -1561,11 +1561,14 @@ def format_chem_text(text: str) -> str:
      Ψ Ω 等）→ $\\alpha$ / $\\Delta$ 等——lmroman 文本字体缺希腊字形
      （渲染为空白），数学模式两引擎（xelatex/pdflatex）均可靠（与
      energy.py 的 Ea/ΔH 标注约定一致）。
+     `~` 是 LaTeX 活动字符（排版为不换行空格，图上不可见）→ $\\sim$；
+     `≈`（U+2248）lmroman 文本字体缺字形 → $\\approx$——同理转数学模式。
 
     示例：H2SO4 → H$_2$SO$_4$；CH3Cl → CH$_3$Cl；OH- → OH$^{-}$；
     NH4+ → NH$_4$$^{+}$；SO42- → SO$_4$$^{2-}$；
     H₂SO₄ → H$_{2}$SO$_{4}$；H⁺ → H$^{+}$；Ca²⁺ → Ca$^{2+}$；
-    CuO, △ → CuO, $\\triangle$；hν → h$\\nu$；α-碳 → $\\alpha$-碳。
+    CuO, △ → CuO, $\\triangle$；hν → h$\\nu$；α-碳 → $\\alpha$-碳；
+    ~75℃回流 → $\\sim$75℃回流；ΔH ≈ -20 → $\\Delta$H $\\approx$ -20。
     """
     if not text or "$" in text:
         return text
@@ -1582,6 +1585,9 @@ def format_chem_text(text: str) -> str:
     out = _SUBSCRIPT_RE.sub(r"\1$_\2$", text) + charge
     # 必须最后替换：提前插入 $ 会使尾部电荷正则 _CHARGE_TAIL_RE 失效
     out = out.replace("△", r"$\triangle$").replace("Δ", r"$\Delta$")
+    # `~` 在 LaTeX 是活动字符（排版为不换行空格，图上不可见）、`≈` 在
+    # lmroman 文本字体缺字形——均转数学模式（与 △/Δ 同理，两引擎可靠）
+    out = out.replace("~", r"$\sim$").replace("≈", r"$\approx$")
     return _GREEK_RE.sub(lambda m: f"${_GREEK_TO_MATH[m.group(0)]}$", out)
 
 
