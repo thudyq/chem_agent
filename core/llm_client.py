@@ -54,7 +54,7 @@ MAX_TOKENS_MAIN = 32768      # 主生成：思考 5k~15k + 回答 1k~3k，留足
 MAX_TOKENS_REWRITE = 4096    # 箭头/结构重写：要吐一个 COMPOSITE 块
 MAX_TOKENS_FIX = 2048        # 常规修正：只输出修正后的标记
 MAX_TOKENS_TINY = 64         # 翻译 / 会话标题
-MAX_TOKENS_VISION = 8192     # 视觉识别：复杂机理图描述长 + 思考可能占一部分
+MAX_TOKENS_VISION = 8192     # 视觉识别（关思考）：复杂机理图描述长；开思考用 MAX_TOKENS_MAIN（额度共享）
 
 # 内容完整性校验：行尾残留的半截渲染标记（如 "[STRUCT:c1ccc" 无闭合 ]）
 _TRUNC_MARK_RE = re.compile(

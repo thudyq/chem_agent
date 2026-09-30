@@ -199,7 +199,7 @@ class VisionConfig:
     model_name: str = field(default_factory=lambda: _get_str("VISION_MODEL"))
     # 视觉的思考参数（VISION_THINKING / VISION_EFFORT）：
     # **留空 = 自动** —— 视觉与主模型是同一个（host+model+key 全同）时复用主模型设置，
-    # 否则用 off（识图要快、要省，不需要长思考）。
+    # 否则用 off。
     thinking: str = field(default_factory=lambda: _get_str("VISION_THINKING"))
     effort: str = field(default_factory=lambda: _get_str("VISION_EFFORT"))
 

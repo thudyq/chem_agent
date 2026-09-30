@@ -311,7 +311,7 @@ def test_vision_independent_model(base_cfg):
     assert v.model_name == "glm-5.3-flash"
     assert v.api_key == "sk-user"
     assert v.base_url == "https://api.moonshot.cn/v1"
-    assert v.thinking == "off"      # 独立模型默认关思考（识图要快要省）
+    assert v.thinking == "off"      # 独立模型默认关思考
 
 
 def test_vision_independent_endpoint_and_key(base_cfg):

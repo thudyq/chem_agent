@@ -323,7 +323,7 @@ def vision_config():
 
     思考参数（VISION_THINKING / VISION_EFFORT）：
     * 留空 = 自动：视觉与主模型是同一个（host+model+key 全同）时**复用主模型**
-      设置；否则默认 `off`（识图要快、要省，不需要长思考）。
+      设置；否则默认 `off`。
     """
     base = _BASE.vision
     creds = current()

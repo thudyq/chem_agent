@@ -10,6 +10,7 @@ import pytest
 import requests
 
 import utils.ocr_utils as ocr
+from core.llm_client import MAX_TOKENS_MAIN, MAX_TOKENS_VISION
 
 
 def _fake_response(content: str, status: int = 200):
@@ -45,6 +46,7 @@ def fake_vision(monkeypatch):
     state = {"content": "类型：结构式\n内容：苯环，SMILES: c1ccccc1", "status": 200}
 
     def fake_post(url, **kw):   # 真身是 requests.post：用 **kw 免得新增参数（如 R3 的 allow_redirects）就炸
+        state["payload"] = kw.get("json") or {}
         return _fake_response(state["content"], state["status"])
 
     monkeypatch.setattr(ocr.requests, "post", fake_post)
@@ -56,6 +58,24 @@ def test_describe_well_formed(fake_vision):
     desc = ocr.describe_image(img)
     assert desc["type"] == "结构式"
     assert "c1ccccc1" in desc["content"]
+
+
+def test_describe_max_tokens_thinking_on_uses_main_budget(fake_vision, monkeypatch):
+    """开思考：视觉额度对齐主生成——思考与回答共享 max_tokens 额度，
+    8192 会被思考吃满（content 空判失败，重试同配置必然同败）。"""
+    state, img = fake_vision
+    monkeypatch.setattr(ocr.credentials, "vision_config",
+                        lambda: _vision_stub(thinking="on"))
+    ocr.describe_image(img)
+    assert state["payload"]["max_tokens"] == MAX_TOKENS_MAIN
+    assert state["payload"]["thinking"] == {"type": "enabled"}
+
+
+def test_describe_max_tokens_thinking_off_kept_vision_budget(fake_vision):
+    """关思考：维持 MAX_TOKENS_VISION 防失控上限（无思考消耗，8192 足够）。"""
+    state, img = fake_vision
+    ocr.describe_image(img)
+    assert state["payload"]["max_tokens"] == MAX_TOKENS_VISION
 
 
 def test_describe_malformed_falls_back(fake_vision):

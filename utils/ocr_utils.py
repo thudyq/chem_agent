@@ -264,10 +264,10 @@ def describe_image(image_path: str, max_attempts: int = _VISION_MAX_ATTEMPTS) ->
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
     # ---- 视觉自己的思考参数 ----
-    # 与主生成**解耦**：视觉常是另一家的模型，且识图不需要长思考。
+    # 与主生成**解耦**：视觉常是另一家的模型，思考参数独立配置。
     # `config.thinking` 为空 = "与主模型相同 → 复用主模型设置"（由调用方
     # credentials.vision_is_main() 判定后写入空值）；否则默认关思考。
-    from core.llm_client import MAX_TOKENS_VISION
+    from core.llm_client import MAX_TOKENS_MAIN, MAX_TOKENS_VISION
     v_on, v_effort = _vision_thinking(config)
 
     payload = {
@@ -279,9 +279,11 @@ def describe_image(image_path: str, max_attempts: int = _VISION_MAX_ATTEMPTS) ->
                 {"type": "image_url", "image_url": {"url": data_url}},
             ],
         }],
-        # 视觉输出上限：复杂机理图描述长，且强制思考端点还要吃掉
-        # 一部分预算——设小会导致 content 被截断（缺陷 E）。
-        "max_tokens": MAX_TOKENS_VISION,
+        # 视觉输出上限：思考与回答**共享该额度**——开思考沿用主生成同款
+        # 上限（同一模型同一思考配置，主生成即 MAX_TOKENS_MAIN；max_tokens
+        # 是上限不是预留，放大无成本），否则思考即可吃满 8192，content 为空
+        # 或截断，且重试同配置必然同败。关思考维持 MAX_TOKENS_VISION 防失控。
+        "max_tokens": MAX_TOKENS_MAIN if v_on else MAX_TOKENS_VISION,
     }
     if v_on:
         payload["thinking"] = {"type": "enabled"}
@@ -335,7 +337,7 @@ def _vision_thinking(config) -> tuple:
 
     * `config.thinking` 显式给了 `on`/`off` → 用它；
     * 为空且**视觉就是主模型** → 复用主模型的思考设置（同一个模型）；
-    * 为空且视觉是独立模型 → 默认关思考（识图要快、要省）。
+    * 为空且视觉是独立模型 → 默认关思考。
     """
     from core.config import normalize_effort, normalize_thinking
     raw = (getattr(config, "thinking", "") or "").strip()
