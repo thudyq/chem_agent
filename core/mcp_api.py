@@ -445,11 +445,35 @@ def _transport_security() -> "TransportSecuritySettings":
     if extra:
         hosts |= {h.strip() for h in extra.split(",") if h.strip()}
     hosts.discard("")
+    # SDK 的 Host 校验按原始头（含端口）精确匹配：为每个主机名补一条
+    # "host:*" 通配端口形态（本地 :8123 调试、非常规端口部署都能过）；
+    # rebinding 防护不受影响——攻击者仍须精确持有白名单内的主机名。
+    wildcard = {h + ":*" for h in hosts}
     # allowed_origins=[]：无 Origin 头的服务端调用（ChatGPT）照常放行；
     # 带跨源 Origin 的浏览器请求一律 403（DNS rebinding 防护的一部分）
     return TransportSecuritySettings(enable_dns_rebinding_protection=True,
-                                     allowed_hosts=sorted(hosts),
+                                     allowed_hosts=sorted(hosts | wildcard),
                                      allowed_origins=[])
+
+
+class _MCPSlashMiddleware:
+    """裸 `/mcp`（无尾斜杠）重写为 `/mcp/` 再进路由。
+
+    为什么必须：Starlette 的 `Mount("/mcp")` 不匹配无尾斜杠的精确路径，
+    Router 兜底 307 → `/mcp/`；而 curl `-s`、部分 HTTP 客户端不跟随重定向
+    （307 对 POST 虽然语义是"保留方法"，但跟随与否由客户端决定）——表现为
+    "请求无输出"。服务端直接消除 307，不依赖任何客户端的重定向策略。
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope.get("path") == "/mcp":
+            scope = dict(scope, path="/mcp/")
+            if scope.get("raw_path"):
+                scope["raw_path"] = b"/mcp/"
+        await self.app(scope, receive, send)
 
 
 def mount_mcp(app) -> bool:
@@ -471,6 +495,8 @@ def mount_mcp(app) -> bool:
         transport_security=_transport_security())
     sub.add_middleware(_BearerMiddleware)   # 必须在子应用启动前注册
     app.mount("/mcp", sub)
+    # 裸 /mcp 兜底：必须在主 app 启动前 add_middleware（api.py 导入期调用满足）
+    app.add_middleware(_MCPSlashMiddleware)
     auth_desc = "Bearer(MCP_API_KEY)" if _api_key() else \
         "无——仅限内测，上线前设置 MCP_API_KEY"
     print(f"[startup] MCP：/mcp 已挂载（Streamable HTTP·stateless·JSON·"
