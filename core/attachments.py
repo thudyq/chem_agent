@@ -112,7 +112,8 @@ def _within_quota(total: int, count: int, max_bytes: int, max_files: int) -> boo
 def build_attachments(answer: str, public_base: str,
                       dir_path: Path | None = None,
                       max_bytes: int | None = None,
-                      max_files: int | None = None) -> list:
+                      max_files: int | None = None,
+                      url_prefix: str = "/files") -> list:
     """编译回答中的 TikZ 代码为 PNG，返回行内图片引用所需的 url 列表。
 
     参数:
@@ -123,6 +124,9 @@ def build_attachments(answer: str, public_base: str,
             attachment_max_bytes）；0/负数=不限。
         max_files: 目录最多文件数，超出删最旧（默认 attachment_max_files）；
             0/负数=不限。
+        url_prefix: fileUrl 的路径前缀，必须与 dir_path 的下载路由一致
+            （默认 /files ↔ attachment_dir；独立目录的调用方需成对给出，
+            否则 URL 指向别的路由 → 必 404）。
 
     返回:
         与正文代码块**一一对应**的列表（长度 == 块数，含按原始顺序的
@@ -173,7 +177,7 @@ def build_attachments(answer: str, public_base: str,
         (dir_path / name).write_bytes(png)
         written.append(name)
         attachments[i] = {
-            "fileUrl": f"{base}/files/{name}",
+            "fileUrl": f"{base}{url_prefix}/{name}",
             "fileName": f"化学图示-{i + 1}.png",
             "fileType": _FILE_TYPE_IMAGE,
             "mimeType": _MIME_PNG,

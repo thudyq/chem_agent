@@ -20,6 +20,9 @@ fastapi                         # HTTP 服务框架
 uvicorn[standard]               # ASGI 服务器
 httpx                           # fastapi TestClient 依赖（测试用）
 
+# === ChatGPT（MCP）工具层（core/mcp_api.py，可选：未安装则 /mcp 不启用）===
+mcp>=2.0                        # MCP 官方 SDK（Streamable HTTP；MCPServer v2 API）
+
 # === LaTeX 编译链（TikZ → PNG 图片附件；缺此则回答只显示裸 TikZ、无图片）===
 # ★★ 必装系统依赖（pip 装不了）：LaTeX 引擎 + PDF→PNG 转换器
 #   服务器（Debian/Ubuntu 阿里云）：

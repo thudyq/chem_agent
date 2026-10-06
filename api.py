@@ -90,7 +90,9 @@ async def _lifespan(_app: FastAPI):
     # 放守护线程里预热；结论只打一行，避免"编译有没有被限制"变成不可见状态。
     threading.Thread(target=_latex_hardening_warmup, daemon=True,
                      name="latex-hardening-probe").start()
-    yield
+    from core.mcp_api import mcp_session
+    async with mcp_session():       # MCP session manager；未挂载时 no-op
+        yield
 
 
 def _latex_hardening_warmup() -> None:
@@ -114,6 +116,12 @@ app = FastAPI(title="Chem_Agent", version="1.0.0", lifespan=_lifespan)
 from core.web_api import router as web_router  # noqa: E402  （需先建 app）
 
 app.include_router(web_router)
+
+# ChatGPT（MCP）工具层：无 LLM 的化学渲染能力暴露为 MCP 只读工具，挂 /mcp
+# （工具定义与鉴权见 core/mcp_api.py）。mcp 包未安装时自动跳过，/v1 与网页不受影响。
+from core.mcp_api import mount_mcp  # noqa: E402  （需先建 app）
+
+mount_mcp(app)
 
 
 def _web_session_janitor() -> None:

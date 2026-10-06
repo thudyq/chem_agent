@@ -232,6 +232,57 @@ chmod 600 /var/www/chem_agent/.env        # 只有服务属主可读
 > 服务启动时会打一行 `[startup] LaTeX 加固：...`，把当前生效的加固选项写进日志；
 > 引擎不支持文件访问限制时还会额外警告一次。
 
+### 2.7 ChatGPT（MCP）工具层（可选）
+
+把**无 LLM 的化学渲染能力**暴露为 MCP 只读工具，供 ChatGPT（大脑）按需调用：
+分工是 ChatGPT 负责理解/推理/组织回答，本服务负责 SMILES 验证、名称→SMILES、
+标记渲染出图。端点 `/mcp`（Streamable HTTP，**stateless + JSON 响应**——不开
+SSE 流，不受 §2.3 `proxy_buffering` 影响）。工具 4 个、全部 `readOnlyHint`：
+`validate_smiles` / `resolve_chemical_name` / `render_chemistry` / `get_tag_syntax`。
+实现见 `core/mcp_api.py`；`mcp` 包未安装时自动跳过，**/v1 与网页不受影响**。
+
+启用三步：
+
+```bash
+pip install mcp                       # requirements.txt 已含
+# .env 设置（不设置 = 无鉴权，仅限内测；上线前务必设置）：
+#   MCP_API_KEY=sk-mcp-your-key
+sudo systemctl restart chem_agent     # 启动横幅应出现 [startup] MCP：/mcp 已挂载
+```
+
+ChatGPT 侧接入（手动，账号需支持 Developer mode）：**设置 → 应用与连接器 →
+高级设置 → 开启 Developer mode → 创建**，服务器 URL 填 `https://你的域名/mcp`、
+鉴权选 API key（填 `MCP_API_KEY`）→ 创建后自动扫描工具。工具清单在连接时捕获，
+**改动工具定义后要在连接器设置里点「刷新」**。
+
+安全与配额：
+
+* 鉴权走 `Authorization: Bearer <MCP_API_KEY>`（常量时间比较）；另有 DNS
+  rebinding 防护（Host 白名单 = 回环 + `PUBLIC_BASE_URL` 主机名 +
+  `MCP_ALLOWED_HOSTS` 补充）。
+* 附件落 `data/mcp_attachments/`（**独立配额** 2GB / 50000，与 /v1、网页互不
+  挤占），经 `/mcp/files/{name}.png` 下载——同一道 Bearer 闸门。图片 URL 由
+  `PUBLIC_BASE_URL`（或请求 Host）推导。
+* 防滥用靠**输入上限**（文本 8000 字符、单次 12 个标记）与附件配额；**不要**
+  把网页的每 IP 限流套到 /mcp 上——ChatGPT 出口 IP 少而固定，按 IP 限流会把
+  所有 ChatGPT 用户算成一个人。
+* 不写 `data/diagnostics.jsonl`（那是 BYOK/清小搭真人提问的隐私边界，§4）；
+  MCP 的校验/渲染错误直接结构化回传 ChatGPT。
+
+连通性验证（JSON-RPC over HTTP）：
+
+```bash
+KEY=<MCP_API_KEY> ; BASE=https://你的域名
+# 设了密钥时：无 Authorization 头应 401
+curl -s -o /dev/null -w '%{http_code}\n' $BASE/mcp \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+# 工具清单（预期 4 个只读工具）
+curl -s $BASE/mcp -H "Authorization: Bearer $KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
+
 ---
 
 ## 3. 验收清单（部署后逐项确认）
@@ -266,6 +317,11 @@ python -m utils.latex_compile --security-check
 #    file_read_restricted: true  → 引擎已拦住越界读文件
 #    file_read_restricted: false → 这台机器拦不住（如 MiKTeX），必须做 §2.6 的隔离
 python -m utils.latex_compile --security-check --strict   # 没拦住则以退出码 1 结束
+
+# ⑦ MCP 工具层（若已启用）：设了 MCP_API_KEY 时无头应 401、对头 200（§2.7）
+curl -s -o /dev/null -w '%{http_code}\n' $BASE/mcp \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 ```
 
 浏览器侧逐项检查：
@@ -298,6 +354,7 @@ python -m utils.latex_compile --security-check --strict   # 没拦住则以退�
 | 浏览器来源（CORS） | 默认只放行本机调试地址 + `.env` 的 `PUBLIC_BASE_URL`（网页与接口同源，同源请求不需要 CORS）。把页面托管到**别的域名**时（§2.5），用 `CORS_ALLOW_ORIGINS=https://a.com,https://b.com` 显式列出 |
 | 安全响应头 | 所有响应带 `X-Frame-Options: DENY`、CSP `frame-ancestors 'none'`、`nosniff`、`Referrer-Policy: no-referrer`（防 iframe 套框/点击劫持） |
 | 用户密钥去向 | 只在请求内存；journald 日志只打指纹（`sk-abc…f3d2`）；**不含密钥** |
+| MCP 工具层 | `/mcp`（Streamable HTTP·stateless·JSON）；密钥 `MCP_API_KEY`；附件 `data/mcp_attachments/`（2GB / 50000）；ChatGPT 侧改工具定义后需点「刷新」（§2.7） |
 | 诊断日志（★ 含真人提问） | `data/diagnostics.jsonl`（权限 **0600**）：清小搭与网页**共用**这一个文件，靠 `cid` 前缀区分（`chatcmpl-*` / `web-*`）；每行含**提问原文**与模型原始输出，只有凭证是指纹。超 8MB 轮转为 `.1.jsonl`（磁盘最多约 16MB）。Streamlit 用**独立**的 `data/streamlit_diagnostics.jsonl`。要清空：`sudo truncate -s 0 data/diagnostics.jsonl` |
 
 ### 常见问题

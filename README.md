@@ -26,6 +26,7 @@
 | :--- | :--- | :--- |
 | **HTTP 服务（OpenAI 兼容）** | 接入清小搭等 AI 平台（`/v1/*`，Bearer 鉴权，SSE 流式，图片附件） | `api.py` |
 | **公开网页（BYOK）** | 任意访客填自己的 API Key 即用（`/chat`，密钥只存浏览器） | `api.py` + `web/index.html` |
+| **ChatGPT（MCP 应用）** | ChatGPT 当大脑，按需调用验证/渲染工具（`/mcp`，Streamable HTTP，只读工具集） | `api.py` + `core/mcp_api.py` |
 | **本地 Streamlit 界面** | 开发调试与本地使用 | `streamlit_app.py` |
 
 三种形态共用同一条管线（LLM → 标记解析 → 契约校验 → 修正 → 渲染 → 注入），互不影响。
@@ -120,6 +121,7 @@ graph LR
 │   ├── attachments.py         # TikZ→PNG 附件构建（编译、托管、超配额回收）
 │   ├── answer_cache.py        # 多轮对话标记恢复（渲染后文本 → 原始标记）
 │   ├── web_api.py             # 公开网页后端（/api/chat、BYOK 凭证、限流、会话附件）
+│   ├── mcp_api.py             # ChatGPT（MCP）工具层：无 LLM 的渲染能力即 MCP 只读工具（/mcp）
 │   ├── replay.py              # 离线重放工具（标记管线归因：校验 trace + 渲染状态）
 │   ├── diaglog.py             # 诊断日志（失败标记与原始输出落盘，0600 滚动）
 │   ├── metrics.py             # 基线评测（标记遵循率 / 端到端管线）
@@ -257,6 +259,7 @@ uvicorn api:app --host 0.0.0.0 --port 8000
 | :- | :--- |
 | `rdkit` | 化学信息学核心（SMILES 解析验证、分子几何计算） |
 | `fastapi` + `uvicorn` | HTTP 服务（清小搭接入） |
+| `mcp`（可选） | MCP 官方 SDK（ChatGPT 工具层 `/mcp`；未安装则该末端不启用） |
 | `streamlit` | 本地 Web 界面（调试用） |
 | `requests` | LLM API 调用（OpenAI 兼容，SSE 流式） |
 | `python-dotenv` | 环境变量管理 |
