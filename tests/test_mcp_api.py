@@ -23,8 +23,13 @@ _HEADERS = {"MCP-Protocol-Version": "2025-06-18"}
 
 @pytest.fixture(autouse=True)
 def isolate_mcp_api_key(monkeypatch):
-    """默认关闭本地 .env 鉴权，避免测试依赖开发机密钥状态。"""
+    """默认隔离本地 .env 的 MCP 运行配置（密钥 + B′/压缩/图像块开关），
+    避免测试依赖开发机配置状态。需要真实值的用例自行 monkeypatch.setenv 覆盖。"""
     monkeypatch.setenv("MCP_API_KEY", "")
+    monkeypatch.setenv("MCP_PUBLIC_BASE_URL", "")
+    monkeypatch.setenv("MCP_AUTO_OPEN", "")
+    monkeypatch.setenv("MCP_IMAGE_MAX_KB", "")
+    monkeypatch.setenv("MCP_IMAGE_BLOCK_KB", "")
 
 
 @contextlib.contextmanager
@@ -80,7 +85,7 @@ def test_initialize_and_tools_listed(monkeypatch, tmp_path):
         tools = _rpc(client, "tools/list").json()["result"]["tools"]
         names = {t["name"] for t in tools}
         assert names == {"validate_smiles", "resolve_chemical_name",
-                         "render_chemistry", "get_tag_syntax"}
+                         "render_chemistry", "get_tag_syntax", "test_image"}
         for t in tools:
             assert t["annotations"]["readOnlyHint"] is True
             assert t["inputSchema"]["type"] == "object"
@@ -136,9 +141,10 @@ def test_resolve_chemical_name(monkeypatch, tmp_path):
 
 
 def test_render_valid_tag(monkeypatch, tmp_path):
-    """合法标记 → 图 URL + 注入文本；LaTeX 编译 mock 成固定 PNG 字节。"""
-    monkeypatch.setattr("core.attachments.compile_tikz_to_png",
-                        lambda code, **kw: b"fake-png-bytes")
+    """合法标记 → widget 交付（data URI 内嵌）+ 元数据；编译 mock 成固定 PNG。"""
+    png = b"\x89PNG\r\n\x1a\n" + b"fake-png-body"
+    monkeypatch.setattr("utils.latex_compile.compile_tikz_to_png",
+                        lambda code, title="", **kw: png)
     with _mount(monkeypatch, tmp_path) as client:
         _init(client)
         out = _call(client, "render_chemistry",
@@ -149,16 +155,120 @@ def test_render_valid_tag(monkeypatch, tmp_path):
         fig = sc["figures"][0]
         assert fig["kind"] == "STRUCT"
         assert fig["label"] == "苯"
-        assert "/mcp/files/" in fig["url"] and fig["url"].endswith(".png")
-        assert "![化学图示-1](" in sc["injected_text"]
+        assert fig["size_bytes"] == len(png)
+        assert fig["url"] is None                # 默认（隧道模式）不返回 URL
+        assert sc["widget_uri"].startswith("ui://chem-agent/render/")
+        assert "（图 1）" in sc["injected_text"]   # 无 URL → 占位而非图链
+        assert "![化学图示-1](" not in sc["injected_text"]
         assert sc["tikz_sources"] == []          # 默认不带源码
-        # 附件真的落在（被改指的）独立目录里
-        assert (tmp_path / "mcp_attachments").is_dir()
+        # 结果级 _meta 携带本次渲染的组件地址（wire 别名 _meta/meta 兼容）
+        meta = out.get("_meta") or out.get("meta") or {}
+        assert meta["ui"]["resourceUri"] == sc["widget_uri"]
+        assert meta["openai"]["outputTemplate"] == sc["widget_uri"]
+        # 图示落盘（运维可检查 data/mcp_attachments）——widget 模式也必须写
+        files = list((tmp_path / "mcp_attachments").glob("*.png"))
+        assert len(files) == 1 and files[0].stat().st_size == len(png)
+
+        # widget HTML 经 resources/read 取回：data URI 内嵌且字节完整
+        rr = _rpc(client, "resources/read",
+                  {"uri": sc["widget_uri"]}, id_=77).json()["result"]
+        html_doc = rr["contents"][0]["text"]
+        assert 'src="data:image/png;base64,' in html_doc
+        import base64 as _b64
+        embedded = _b64.b64decode(
+            html_doc.split("base64,", 1)[1].split('"', 1)[0])
+        assert embedded == png
+        assert html_doc == mcp_api._widgets[sc["widget_uri"].rsplit("/", 1)[-1]
+                                            .removesuffix(".html")]
+        assert "bridge诊断 diag-v2" in html_doc   # A 实验：桥接诊断条在位
+        # A′：图像 content block 随结果返回（2026-09 成功报告形态）
+        import base64 as _b64
+        blocks = [c for c in out["content"] if c.get("type") == "image"]
+        assert len(blocks) == 1
+        assert blocks[0]["mimeType"] == "image/png"
+        assert _b64.b64decode(blocks[0]["data"]) == png
+
+
+def test_render_widget_uri_is_content_addressed(monkeypatch, tmp_path):
+    """同输入 → 同 widget URI（缓存命中）；PNG 不同 → 不同 URI。"""
+    monkeypatch.setattr("utils.latex_compile.compile_tikz_to_png",
+                        lambda code, title="", **kw:
+                        b"\x89PNG\r\n\x1a\n" + code.encode())
+    with _mount(monkeypatch, tmp_path) as client:
+        _init(client)
+        a = _call(client, "render_chemistry", {"text": "[STRUCT:c1ccccc1]"})
+        b = _call(client, "render_chemistry", {"text": "[STRUCT:c1ccccc1]"},
+                  id_=2)
+        c = _call(client, "render_chemistry", {"text": "[STRUCT:CCO]"}, id_=3)
+        ua = a["structuredContent"]["widget_uri"]
+        assert b["structuredContent"]["widget_uri"] == ua   # 同图同址
+        assert c["structuredContent"]["widget_uri"] != ua   # 异图异址
+
+
+def test_tools_list_render_meta(monkeypatch, tmp_path):
+    """工具定义级 meta 声明静态兜底 widget（ChatGPT 只认 tools/list 的场景）。"""
+    with _mount(monkeypatch, tmp_path) as client:
+        _init(client)
+        tools = _rpc(client, "tools/list").json()["result"]["tools"]
+        render = next(t for t in tools if t["name"] == "render_chemistry")
+        meta = render.get("_meta") or render.get("meta") or {}
+        assert meta["ui"]["resourceUri"] == mcp_api.WIDGET_FALLBACK_URI
+        assert meta["openai"]["outputTemplate"] == mcp_api.WIDGET_FALLBACK_URI
+
+
+def test_render_url_mode(monkeypatch, tmp_path):
+    """MCP_PUBLIC_BASE_URL 配置时：额外返回 /mcp/files 下载 URL + markdown 图链。"""
+    png = b"\x89PNG\r\n\x1a\n" + b"fake-png-body"
+    monkeypatch.setattr("utils.latex_compile.compile_tikz_to_png",
+                        lambda code, title="", **kw: png)
+    monkeypatch.setenv("MCP_PUBLIC_BASE_URL", "https://pub.example")
+    with _mount(monkeypatch, tmp_path) as client:
+        _init(client)
+        out = _call(client, "render_chemistry", {"text": "[STRUCT:c1ccccc1]"})
+        sc = out["structuredContent"]
+        fig = sc["figures"][0]
+        assert fig["url"] is not None
+        assert fig["url"].startswith("https://pub.example/mcp/files/")
+        assert fig["url"].endswith(".png")
+        assert "![化学图示-1](" in sc["injected_text"]
+        # B′：content 文本显式给出可点击链接（ChatGPT 原样写进回答）
+        text = next(c["text"] for c in out["content"] if c.get("type") == "text")
+        assert f"图示链接[图 1]: {fig['url']}" in text
+
+
+def test_render_auto_open(monkeypatch, tmp_path):
+    """MCP_AUTO_OPEN=1：渲染完成自动弹出本机 PNG（B′：提问即见图）。"""
+    opened = []
+    monkeypatch.setattr(mcp_api, "_startfile",
+                        lambda path: opened.append(path))
+    monkeypatch.setattr("utils.latex_compile.compile_tikz_to_png",
+                        lambda code, title="", **kw: b"\x89PNG\r\n\x1a\n" + b"z")
+    monkeypatch.setenv("MCP_AUTO_OPEN", "1")
+    with _mount(monkeypatch, tmp_path) as client:
+        _init(client)
+        out = _call(client, "render_chemistry", {"text": "[STRUCT:c1ccccc1]"})
+        assert out["structuredContent"]["errors"] == []
+        assert len(opened) == 1
+        assert opened[0].startswith(str(tmp_path / "mcp_attachments"))
+        assert opened[0].endswith(".png")
+
+
+def test_render_auto_open_off_by_default(monkeypatch, tmp_path):
+    """未配置 MCP_AUTO_OPEN → 不弹窗（默认关闭，避免云端部署误弹）。"""
+    opened = []
+    monkeypatch.setattr(mcp_api, "_startfile",
+                        lambda path: opened.append(path))
+    monkeypatch.setattr("utils.latex_compile.compile_tikz_to_png",
+                        lambda code, title="", **kw: b"\x89PNG\r\n\x1a\n" + b"z")
+    with _mount(monkeypatch, tmp_path) as client:
+        _init(client)
+        _call(client, "render_chemistry", {"text": "[STRUCT:c1ccccc1]"})
+        assert opened == []
 
 
 def test_render_include_tikz(monkeypatch, tmp_path):
-    monkeypatch.setattr("core.attachments.compile_tikz_to_png",
-                        lambda code, **kw: b"fake-png-bytes")
+    monkeypatch.setattr("utils.latex_compile.compile_tikz_to_png",
+                        lambda code, title="", **kw: b"\x89PNG\r\n\x1a\n" + b"fake")
     with _mount(monkeypatch, tmp_path) as client:
         _init(client)
         out = _call(client, "render_chemistry",
@@ -166,6 +276,110 @@ def test_render_include_tikz(monkeypatch, tmp_path):
         sc = out["structuredContent"]
         assert len(sc["tikz_sources"]) == 1
         assert "\\begin{tikzpicture}" in sc["tikz_sources"][0]
+
+
+def test_adaptive_dpi_ladder(monkeypatch):
+    """compile_tikz_to_png_adaptive：超阈值按阶梯降 DPI，取第一个达标者。"""
+    import utils.latex_compile as lc
+
+    by_dpi = {300: b"A" * 5000, 200: b"A" * 3000, 150: b"A" * 1500,
+              100: b"A" * 800, 75: b"A" * 400}
+    monkeypatch.setattr(lc, "_find_latex_engine", lambda: "xelatex")
+    monkeypatch.setattr(lc, "_run_latex",
+                        lambda engine, tex, flags: tex + ".pdf")
+    monkeypatch.setattr(lc, "_pdf_to_png_pymupdf",
+                        lambda pdf, dpi: by_dpi.get(dpi))
+    code = "\\begin{tikzpicture}\\end{tikzpicture}"
+    assert lc.compile_tikz_to_png_adaptive(code, max_kb=1) == by_dpi[100]
+    # 无阈值：300dpi 快路径（零行为变化）
+    monkeypatch.setattr(lc, "compile_tikz_to_png",
+                        lambda c, title="", **kw: by_dpi[300])
+    assert lc.compile_tikz_to_png_adaptive(code) == by_dpi[300]
+
+
+def test_adaptive_dpi_floor(monkeypatch):
+    """阶梯耗尽仍超限 → 返回最小（最低 DPI）PNG，宁降清晰度保显示。"""
+    import utils.latex_compile as lc
+
+    by_dpi = {300: b"A" * 5000, 200: b"A" * 4000, 150: b"A" * 3000,
+              100: b"A" * 2000, 75: b"A" * 1500}
+    monkeypatch.setattr(lc, "_find_latex_engine", lambda: "xelatex")
+    monkeypatch.setattr(lc, "_run_latex",
+                        lambda engine, tex, flags: tex + ".pdf")
+    monkeypatch.setattr(lc, "_pdf_to_png_pymupdf",
+                        lambda pdf, dpi: by_dpi.get(dpi))
+    out = lc.compile_tikz_to_png_adaptive(
+        "\\begin{tikzpicture}\\end{tikzpicture}", max_kb=1)   # 全部 > 1KB
+    assert out == by_dpi[75]
+
+
+def test_render_image_budget(monkeypatch, tmp_path):
+    """MCP_IMAGE_MAX_KB 保险压缩：widget 交付降 DPI 后的图，字节随之变小。"""
+    import base64 as _b64
+    import utils.latex_compile as lc
+
+    by_dpi = {300: b"A" * 5000, 200: b"A" * 3000, 150: b"A" * 1500,
+              100: b"A" * 800, 75: b"A" * 400}
+    monkeypatch.setattr(lc, "_find_latex_engine", lambda: "xelatex")
+    monkeypatch.setattr(lc, "_run_latex",
+                        lambda engine, tex, flags: tex + ".pdf")
+    monkeypatch.setattr(lc, "_pdf_to_png_pymupdf",
+                        lambda pdf, dpi: by_dpi.get(dpi))
+    monkeypatch.setenv("MCP_IMAGE_MAX_KB", "1")
+    with _mount(monkeypatch, tmp_path) as client:
+        _init(client)
+        out = _call(client, "render_chemistry", {"text": "[STRUCT:c1ccccc1]"})
+        fig = out["structuredContent"]["figures"][0]
+        assert fig["size_bytes"] == len(by_dpi[100])
+        uri = out["structuredContent"]["widget_uri"]
+        rr = _rpc(client, "resources/read",
+                  {"uri": uri}, id_=9).json()["result"]
+        embedded = _b64.b64decode(
+            rr["contents"][0]["text"].split("base64,", 1)[1].split('"', 1)[0])
+        assert embedded == by_dpi[100]
+
+
+def test_test_image(monkeypatch, tmp_path):
+    """A′ 补充实验：纯 image block 工具（无 structuredContent）——排除
+    "structuredContent 存在时宿主丢弃 content[]" 的混淆变量。"""
+    png = b"\x89PNG\r\n\x1a\n" + b"t" * 32
+    (tmp_path / "mcp_attachments").mkdir(parents=True)
+    (tmp_path / "mcp_attachments" / "test.png").write_bytes(png)
+    with _mount(monkeypatch, tmp_path) as client:
+        _init(client)
+        out = _call(client, "test_image", {})
+        # 纯 image 交付：无 structuredContent、无 meta
+        assert out.get("structuredContent") in (None, {})
+        assert not (out.get("_meta") or out.get("meta"))
+        blocks = [c for c in out["content"] if c.get("type") == "image"]
+        assert len(blocks) == 1
+        assert blocks[0]["mimeType"] == "image/png"
+        import base64 as _b64
+        assert _b64.b64decode(blocks[0]["data"]) == png
+
+
+def test_test_image_fallback(monkeypatch, tmp_path):
+    """test.png 缺失 → 内嵌生成的兜底图（工具永不失败）。"""
+    with _mount(monkeypatch, tmp_path) as client:
+        _init(client)
+        out = _call(client, "test_image", {}, id_=2)
+        blocks = [c for c in out["content"] if c.get("type") == "image"]
+        assert len(blocks) == 1
+        import base64 as _b64
+        assert _b64.b64decode(blocks[0]["data"]).startswith(b"\x89PNG")
+
+
+def test_render_image_block_cap(monkeypatch, tmp_path):
+    """MCP_IMAGE_BLOCK_KB：超阈值图不附 image block（防响应预算截断）。"""
+    big = b"\x89PNG\r\n\x1a\n" + b"B" * (128 * 1024)          # 128KB > 64KB
+    monkeypatch.setattr("utils.latex_compile.compile_tikz_to_png",
+                        lambda code, title="", **kw: big)
+    with _mount(monkeypatch, tmp_path) as client:
+        _init(client)
+        out = _call(client, "render_chemistry", {"text": "[STRUCT:c1ccccc1]"})
+        assert out["structuredContent"]["figures"][0]["size_bytes"] == len(big)
+        assert not [c for c in out["content"] if c.get("type") == "image"]
+        assert any(c.get("type") == "text" for c in out["content"])
 
 
 def test_render_invalid_smiles_reports_error(monkeypatch, tmp_path):
@@ -184,8 +398,8 @@ def test_render_invalid_smiles_reports_error(monkeypatch, tmp_path):
 
 def test_render_compile_failure_reported(monkeypatch, tmp_path):
     """LaTeX 缺失（编译返回 None）→ 记入 errors，不静默吞掉。"""
-    monkeypatch.setattr("core.attachments.compile_tikz_to_png",
-                        lambda code, **kw: None)
+    monkeypatch.setattr("utils.latex_compile.compile_tikz_to_png",
+                        lambda code, title="", **kw: None)
     with _mount(monkeypatch, tmp_path) as client:
         _init(client)
         out = _call(client, "render_chemistry", {"text": "[STRUCT:c1ccccc1]"})

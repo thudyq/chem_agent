@@ -551,6 +551,70 @@ def compile_tikz_to_png(code: str, title: str = "", dpi: int = 300) -> Optional[
     return None
 
 
+def compile_tikz_to_png_adaptive(code: str, title: str = "",
+                                 max_kb: int | None = None,
+                                 dpi_ladder: tuple = (300, 200, 150, 100, 75),
+                                 ) -> Optional[bytes]:
+    """编译 TikZ 为 PNG，可选按 DPI 阶梯降采样控制载荷大小。
+
+    max_kb=None：等价 compile_tikz_to_png(code, title, dpi=dpi_ladder[0])，
+    零行为变化（不控制尺寸的调用方走这条快路径）。
+
+    max_kb 给定：编译一次 PDF（CJK → 非 CJK 两级重试，与
+    compile_tikz_to_png 同策略），再按阶梯从高到低渲染，返回**第一个**
+    不超过 max_kb 的 PNG；阶梯耗尽仍超限 → 返回其中最小的 PNG
+    （宁降清晰度保显示）。编译失败返回 None（同 compile_tikz_to_png 契约）。
+
+    背景：MCP widget 载荷预算（ChatGPT 侧实测 3KB OK / 3MiB 失败）——大图
+    需要保险压缩；对矢量线稿，降 DPI 重渲染比有损压缩更合适（无伪影，
+    文字标签仍可读）。PDF 只编译一次，多 DPI 渲染是 PyMuPDF 重采样，
+    成本近零。
+    """
+    if not code or not code.strip():
+        return None
+    bad = forbidden_token(code) or forbidden_token(title)
+    if bad:
+        print(f"[latex] 拒绝编译：图代码/标题含被禁止的文件 I/O 命令 \\{bad}"
+              f"（安全审查 R1；已降级为 LaTeX 源码显示）")
+        return None
+    engine = _find_latex_engine()
+    if not engine:
+        return None
+    if max_kb is None:
+        return compile_tikz_to_png(code, title, dpi=dpi_ladder[0])
+    flags = hardening_flags(engine)
+    body = (f"\\textbf{{{title}}}\\par\n" if title else "") + code
+    uses_chemfig = "\\chemfig" in code or "\\schemestart" in code
+    with work_dir(prefix="chemtex_") as work:
+        tex_path = os.path.join(work, "fig.tex")
+        pdf = None
+        for cjk in (True, False):
+            try:
+                with open(tex_path, "w", encoding="utf-8") as f:
+                    f.write(_preamble(cjk, uses_chemfig) + body + _POSTAMBLE)
+            except OSError as e:
+                print(f"[latex] 临时目录不可写，跳过编译"
+                      f"（可设 CHEM_AGENT_TMPDIR）: {e}")
+                return None
+            pdf = _run_latex(engine, tex_path, flags)
+            if pdf:
+                break
+        if not pdf:
+            return None
+        smallest: Optional[bytes] = None
+        for dpi in dpi_ladder:
+            png = _pdf_to_png_pymupdf(pdf, dpi)
+            if not png:
+                continue
+            if smallest is None or len(png) < len(smallest):
+                smallest = png
+            if len(png) <= max_kb * 1024:
+                return png
+        # PyMuPDF 不可用（全程 None）→ 兜底旧路径（pdftoppm 或单档编译）
+        return smallest or compile_tikz_to_png(code, title,
+                                               dpi=dpi_ladder[0])
+
+
 if __name__ == "__main__":
     # 自检：探测后端 + 编译一个苯环 + CJK 能量图
     # `--security-check` 只跑安全自检（部署后用它确认加固到底有没有生效）：

@@ -260,9 +260,25 @@ ChatGPT 侧接入（手动，账号需支持 Developer mode）：**设置 → �
 * 鉴权走 `Authorization: Bearer <MCP_API_KEY>`（常量时间比较）；另有 DNS
   rebinding 防护（Host 白名单 = 回环 + `PUBLIC_BASE_URL` 主机名 +
   `MCP_ALLOWED_HOSTS` 补充）。
-* 附件落 `data/mcp_attachments/`（**独立配额** 2GB / 50000，与 /v1、网页互不
-  挤占），经 `/mcp/files/{name}.png` 下载——同一道 Bearer 闸门。图片 URL 由
-  `PUBLIC_BASE_URL`（或请求 Host）推导。
+* **图示交付（MCP Apps widget）**：`render_chemistry` 的图以 data URI 内嵌
+  进 HTML 组件，经 `resources/read`（JSON-RPC，**穿隧道**）交付，在 ChatGPT
+  的沙箱 iframe 里渲染（规范默认 CSP 允许 `img-src data:`）——**不需要任何
+  公网地址**。字节不进 `structuredContent`（模型可见文本），模型理解图靠
+  结构化元数据。图片文件仍落盘 `data/mcp_attachments/` 供运维检查。
+  * 组件地址按**内容哈希**寻址（同图同址命中缓存），结果级 `_meta` 与
+    `structuredContent.widget_uri` 双写；
+  * ChatGPT 侧载荷预算未公布（实测 3KB OK / 3MiB 失败）——保险压缩开关
+    `MCP_IMAGE_MAX_KB`：单图超阈值按 300→200→150→100→75 DPI 阶梯重渲染
+    （矢量重采样无伪影，编译一次 PDF 后多 DPI 渲染成本近零）；
+  * **实测（2026-10）：自定义连接器下 ChatGPT 不渲染组件 iframe**（结果级
+    `_meta`、定义级 meta、image content block 三形态均试过，组件从不出现；
+    数据本身完整到达模型上下文）。图示的可靠查看方式转为 **B′ 本机回环
+    交付**：配置 `MCP_PUBLIC_BASE_URL=http://127.0.0.1:8000`（用户浏览器与
+    服务同机，回环地址 100% 可达），工具返回 `/mcp/files` 下载链接并显式
+    写进 content 文本（`图示链接[图 N]: …`），ChatGPT 把链接写进回答，用户
+    点击即看。`MCP_AUTO_OPEN=1` 可选：渲染完成自动用系统图片查看器弹出
+    PNG（仅 Windows 服务生效）。服务跑在公网机器上时把地址设为该机器的
+    公网地址即可供远程用户点击；**不要**指向隧道地址（隧道不转发 GET）。
 * 防滥用靠**输入上限**（文本 8000 字符、单次 12 个标记）与附件配额；**不要**
   把网页的每 IP 限流套到 /mcp 上——ChatGPT 出口 IP 少而固定，按 IP 限流会把
   所有 ChatGPT 用户算成一个人。

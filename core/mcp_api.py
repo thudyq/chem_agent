@@ -26,9 +26,14 @@
   的主机名 + MCP_ALLOWED_HOSTS（逗号分隔补充）。
 """
 
+import base64
+import hashlib
 import hmac
+import html
 import os
 import re
+import uuid
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from typing import TypedDict
 from urllib.parse import urlparse
@@ -37,8 +42,7 @@ from starlette.responses import JSONResponse
 
 from app import (_RENDER_ERROR_PREFIX,
                  _partial_render_composite_without_mecharrows)
-from core.attachments import (build_attachments, extract_code_blocks,
-                              replace_code_blocks_with_images)
+from core.attachments import _prune_attachments, extract_code_blocks
 from core.config import settings
 from core.tag_injector import inject_tags_into_text
 from core.tag_parser import parse_tags
@@ -50,7 +54,8 @@ from renderers.registry import render_tag
 try:                                    # mcp 是可选依赖：未安装时 /v1 与网页照常
     from mcp.server import MCPServer
     from mcp.server.transport_security import TransportSecuritySettings
-    from mcp.types import ToolAnnotations
+    from mcp.types import (CallToolResult, ImageContent, TextContent,
+                           ToolAnnotations)
     _MCP_AVAILABLE = True
 except ImportError:                     # pragma: no cover - 环境差异路径
     _MCP_AVAILABLE = False
@@ -59,6 +64,23 @@ _MCP_DIR = settings.project_root / "data" / "mcp_attachments"
 # 与 /v1、网页同口径的独立配额（docs/deploy.md §4 附件目录三条目）
 MCP_ATTACHMENT_MAX_BYTES = 2 * 1024 * 1024 * 1024      # 2GB
 MCP_ATTACHMENT_MAX_FILES = 50000
+
+# ---------------------------------------------------------------- Widget
+# 图以 data URI 内嵌进 widget HTML，经 resources/read（JSON-RPC，走隧道）
+# 交付给 ChatGPT 的 MCP Apps iframe；字节**不进** structuredContent（那是
+# 模型可见文本，base64 会撑爆上下文）。iframe 默认 CSP 为 MCP Apps 规范的
+# restrictive default（img-src 'self' data:），内嵌图默认可渲染，无需声明
+# 外部域——也正因 iframe 在 oaiusercontent 沙箱源上，本地/隧道地址永远
+# 不可达，data URI 是零托管下唯一取图方式。
+# OpenAI 官方 Python 示例（kitchen_sink_server_python）的组件 MIME 口径；
+# MCP Apps 规范的 text/html;profile=mcp-app 与之并存，ChatGPT 宿主按
+# 此标记识别"这是一个 app 组件"。
+_WIDGET_MIME = "text/html+skybridge"
+WIDGET_URI_TEMPLATE = "ui://chem-agent/render/{render_id}.html"
+WIDGET_FALLBACK_URI = "ui://chem-agent/render.html"   # 工具定义级静态兜底
+_WIDGET_KEEP = 128                     # 内存 widget 上限（FIFO，超配额淘汰）
+_widgets: dict[str, str] = {}
+_widget_order: list[str] = []
 
 # 输入上限（防滥用；与 web_api 的口径对齐）
 _MAX_TEXT_CHARS = 8000
@@ -79,8 +101,9 @@ _mcp = None                             # MCPServer 实例（mount_mcp 成功后
 class FigureInfo(TypedDict):
     index: int                          # 第几张图（1 起，与 injected_text 中编号一致）
     kind: str                           # STRUCT / COMPOSITE / ENERGY
-    url: str                            # 公网可下载的 PNG 地址
     label: str                          # 结构标注（STRUCT 的 label；可为空串）
+    size_bytes: int                     # PNG 字节数（仅元数据，字节本体走 widget）
+    url: str | None                     # 公网 PNG 地址；仅配置 MCP_PUBLIC_BASE_URL 时非空
 
 
 class TagError(TypedDict):
@@ -92,9 +115,10 @@ class TagError(TypedDict):
 
 class RenderResult(TypedDict):
     figures: list                        # list[FigureInfo]
-    injected_text: str                   # 标记已替换为 markdown 图片/降级说明的文本
+    injected_text: str                   # 标记已替换为图片引用/（图 N）/降级说明的文本
     errors: list                         # list[TagError]
     tikz_sources: list                   # list[str]；include_tikz=True 时为全部 TikZ 源码
+    widget_uri: str | None               # 图示组件地址（ui://…，与结果 _meta.resourceUri 一致）
     note: str                            # 补充说明（如"未发现标记"），可为空串
 
 
@@ -124,6 +148,130 @@ def _name_to_smiles(name: str) -> str | None:
     """间接层：便于测试 monkeypatch（PubChem 是外网依赖）。"""
     from utils.name_resolver import name_to_smiles
     return name_to_smiles(name)
+
+
+def _mcp_public_base() -> str:
+    """MCP 专用公网前缀（动态读取，便于测试）。
+
+    与 PUBLIC_BASE_URL 分离：隧道模式下 PUBLIC_BASE_URL 指向的地址对
+    ChatGPT/用户皆不可达，拼出来的 URL 是死链——**不配置本变量就不返回
+    URL**，图一律走 widget；仅当服务自身跑在公网机器上（如云服务器部署）
+    时才配置它。
+    """
+    return (os.environ.get("MCP_PUBLIC_BASE_URL") or "").strip().rstrip("/")
+
+
+def _image_max_kb() -> int | None:
+    """保险压缩阈值（动态读取）：None = 不控制尺寸（300dpi 原样）。"""
+    raw = (os.environ.get("MCP_IMAGE_MAX_KB") or "").strip()
+    if not raw:
+        return None
+    try:
+        val = int(raw)
+    except ValueError:
+        return None
+    return val if val > 0 else None
+
+
+def _image_block_kb() -> int | None:
+    """图像块阈值（动态读取）：单图 PNG ≤ 此值（KB）才随结果附 image
+    content block（A′：复刻 2026-09 社区成功报告的形态——当时图以 image
+    block 进 content[]，连接器为其渲染了 widget）。超过阈值的图不附
+    （base64 全量进结果有触发"工具响应预算"截断的风险）。0 = 关闭。"""
+    raw = (os.environ.get("MCP_IMAGE_BLOCK_KB") or "64").strip()
+    try:
+        val = int(raw)
+    except ValueError:
+        return 64
+    return val if val > 0 else None
+
+
+def _auto_open() -> bool:
+    """渲染完成后是否自动用系统默认程序弹出 PNG（B′：本机即时看图）。"""
+    return (os.environ.get("MCP_AUTO_OPEN") or "").strip().lower() in (
+        "1", "true", "yes")
+
+
+def _startfile(path: str) -> None:
+    """系统默认程序打开文件。os.startfile 仅 Windows 存在；其它平台跳过
+    （云服务器部署下本就没有桌面会话，静默跳过是正确语义）。"""
+    opener = getattr(os, "startfile", None)
+    if opener is None:
+        print(f"[mcp] 自动打开跳过（非 Windows 平台）: {path}")
+        return
+    try:
+        opener(path)
+    except OSError as e:
+        print(f"[mcp] 自动打开失败: {e}")
+
+
+def _store_widget(render_id: str, html_doc: str) -> None:
+    _widgets[render_id] = html_doc
+    _widget_order.append(render_id)
+    while len(_widget_order) > _WIDGET_KEEP:
+        old = _widget_order.pop(0)
+        _widgets.pop(old, None)
+
+
+def _widget_uri(render_id: str) -> str:
+    return WIDGET_URI_TEMPLATE.format(render_id=render_id)
+
+
+def _widget_html(items: list[tuple[str, str]]) -> str:
+    """图项 [(b64, caption)] → 单页 widget HTML（全部图内嵌 data URI）。
+
+    不声明 _meta.ui.csp：MCP Apps 规范的 restrictive default 已含
+    img-src 'self' data:，正是本组件所需；显式声明反而易画蛇添足。
+    尾部附 bridge 诊断条（A 实验：探测宿主桥接能力，结果以文字显示在
+    组件内——用户截图后经视觉链路读回，精确定位断点）。
+    """
+    figs = []
+    for i, (b64, label) in enumerate(items, 1):
+        cap = html.escape(label) if label else f"化学图示-{i}"
+        figs.append(
+            f'<figure><img src="data:image/png;base64,{b64}" '
+            f'alt="{cap}"><figcaption>{cap}</figcaption></figure>')
+    return ("<!doctype html><html><head><meta charset='utf-8'>"
+            "<style>body{margin:0;padding:8px;display:flex;flex-direction:"
+            "column;gap:10px;align-items:center;background:#fff}"
+            "figure{margin:0;max-width:100%}"
+            "img{max-width:100%;height:auto;border:1px solid #eee}"
+            "figcaption{font-size:12px;color:#666;text-align:center}"
+            "#bridgeDiag{font:11px/1.5 monospace;color:#999;align-self:"
+            "flex-start;white-space:pre-wrap}</style></head><body>"
+            + "".join(figs)
+            + "<div id='bridgeDiag'>bridge诊断 diag-v2</div>"
+            + _BRIDGE_PROBE_JS
+            + "</body></html>")
+
+
+# 桥接探针（A 实验）：探测 window.openai（ChatGPT 原生桥）、宿主源、
+# MCP Apps 标准 postMessage 握手（ui/initialize）与宿主消息；结果逐行
+# 写入 #bridgeDiag。纯探测不改状态，实验期临时存在。
+_BRIDGE_PROBE_JS = (
+    "<script>(function(){"
+    "var out=document.getElementById('bridgeDiag');"
+    "var lines=['bridge诊断 diag-v2'];"
+    "function line(t){lines.push(t);out.textContent=lines.join('\\n');}"
+    "try{line('openai API: '+(typeof window.openai!=='undefined'?"
+    "'存在['+Object.keys(window.openai).slice(0,10).join(',')+']':'无'));"
+    "}catch(e){line('openai 探测异常: '+e.message);}"
+    "try{var ao=window.location.ancestorOrigins;"
+    "line('宿主源: '+(ao&&ao.length?Array.prototype.join.call(ao,' '):'未知'));"
+    "}catch(e){}"
+    "var got=false;"
+    "window.addEventListener('message',function(ev){"
+    "try{var d=typeof ev.data==='string'?JSON.parse(ev.data):ev.data;"
+    "var m=d&&(d.method||(d.result!==undefined?'响应:id'+d.id:''));"
+    "if(m){got=true;line('宿主消息: '+m);}}catch(e){}});"
+    "try{window.parent.postMessage(JSON.stringify({jsonrpc:'2.0',id:1,"
+    "method:'ui/initialize',params:{protocolVersion:'1.0',"
+    "appInfo:{name:'chem-agent',version:'1.0.0'},capabilities:{}}}),'*');"
+    "line('ui/initialize 已发送');"
+    "}catch(e){line('postMessage 失败: '+e.message);}"
+    "setTimeout(function(){if(!got)line('8s 无宿主消息');},8000);"
+    "})();</script>"
+)
 
 
 def tool_validate_smiles(smiles: str) -> ValidateSmilesResult:
@@ -185,18 +333,18 @@ def tool_render_chemistry(text: str, include_tikz: bool = False) -> RenderResult
     text = text or ""
     if not text.strip():
         return {"figures": [], "injected_text": "", "errors": [],
-                "tikz_sources": [], "note": "输入为空"}
+                "tikz_sources": [], "widget_uri": None, "note": "输入为空"}
     if len(text) > _MAX_TEXT_CHARS:
         return {"figures": [], "injected_text": "",
                 "errors": [{"tag": "", "kind": "INPUT",
                             "reason": f"文本超长（>{_MAX_TEXT_CHARS} 字符）",
                             "hint": "请缩短后重试"}],
-                "tikz_sources": [], "note": ""}
+                "tikz_sources": [], "widget_uri": None, "note": ""}
 
     tags = parse_tags(text)
     if not tags:
         return {"figures": [], "injected_text": text, "errors": [],
-                "tikz_sources": [],
+                "tikz_sources": [], "widget_uri": None,
                 "note": "未发现渲染标记：请先用 get_tag_syntax 学习标记语法，"
                         "把结构/反应/势能面写成 [STRUCT]/[COMPOSITE]/[ENERGY] "
                         "标记后再调用本工具"}
@@ -205,7 +353,7 @@ def tool_render_chemistry(text: str, include_tikz: bool = False) -> RenderResult
                 "errors": [{"tag": "", "kind": "INPUT",
                             "reason": f"标记数超上限（{len(tags)} > {_MAX_TAGS}）",
                             "hint": "请拆分为多次调用"}],
-                "tikz_sources": [], "note": ""}
+                "tikz_sources": [], "widget_uri": None, "note": ""}
 
     # 契约校验 + 一轮确定性自动修复（与 app.py::_generate_inner 同款三级
     # autofix：机理箭头端点 → 立体标注枚举 → 守恒缺口；均不经 LLM）
@@ -272,47 +420,190 @@ def tool_render_chemistry(text: str, include_tikz: bool = False) -> RenderResult
         errors.append({"tag": tag.raw[:120], "kind": tag.type,
                        "reason": err, "hint": err})
 
-    # TikZ 代码块 → PNG（独立附件池，配额互不挤占）
+    # TikZ 代码块 → PNG（独立附件池，配额互不挤占）。交付形态：
+    #   * 默认（隧道模式）：图以 data URI 进 widget（resources/read 穿隧道），
+    #     **不返回 URL**——PUBLIC_BASE_URL 指向的地址在隧道模式下无人可达，
+    #     返回它只会制造死链（实测踩到）；
+    #   * 显式配置 MCP_PUBLIC_BASE_URL（服务本身跑在公网机器上）：额外返回
+    #     /mcp/files 下载 URL，模型可写进回答。
+    # 两种模式都落盘 data/mcp_attachments，便于运维检查与手动取用。
     blocks = extract_code_blocks(injected)
     figures: list = []
+    widget_items: list[tuple[str, str]] = []
+    written: list[str] = []
+    base = _mcp_public_base()
     if blocks:
-        base = (settings.service.public_base_url or "").rstrip("/")
-        attachments = build_attachments(
-            injected, base, dir_path=_MCP_DIR,
-            max_bytes=MCP_ATTACHMENT_MAX_BYTES,
-            max_files=MCP_ATTACHMENT_MAX_FILES,
-            url_prefix="/mcp/files")     # 与上方 custom_route 成对
         # 块归属：按解析顺序，替换文本含代码块的标记依次对应各块
         owners = []
         for tag in tags:
             rep = final_map.get(tag.raw)
             if rep:
-                for _ in extract_code_blocks(rep):
+                for code in extract_code_blocks(rep):
                     label = tag.args[1] if (
                             tag.type == "STRUCT" and len(tag.args) > 1
                             and isinstance(tag.args[1], str)) else ""
-                    owners.append((tag.type, label))
-        for i, att in enumerate(attachments):
-            kind, label = owners[i] if i < len(owners) else ("FIGURE", "")
-            if att and att.get("fileUrl"):
-                figures.append({"index": i + 1, "kind": kind,
-                                "url": att["fileUrl"], "label": label})
-            else:
+                    owners.append((tag.type, label, code))
+
+        max_kb = _image_max_kb()
+        from utils.latex_compile import compile_tikz_to_png_adaptive
+        pngs: list = [None] * len(owners)
+        if len(owners) > 1:
+            with ThreadPoolExecutor(max_workers=min(len(owners), 3)) as ex:
+                futs = {i: ex.submit(compile_tikz_to_png_adaptive, code, "",
+                                     max_kb)
+                        for i, (_, _, code) in enumerate(owners)}
+                for i, fut in futs.items():
+                    try:
+                        pngs[i] = fut.result()
+                    except Exception as e:  # 单块编译异常不拖垮整轮
+                        print(f"[mcp] 图 {i + 1} 编译异常，作失败块: {e}")
+        elif owners:
+            try:
+                pngs[0] = compile_tikz_to_png_adaptive(owners[0][2], "",
+                                                       max_kb)
+            except Exception as e:
+                print(f"[mcp] 图 1 编译异常，作失败块: {e}")
+
+        _MCP_DIR.mkdir(parents=True, exist_ok=True)
+        urls: list = [None] * len(blocks)
+        for i, (kind, label, _code) in enumerate(owners):
+            png = pngs[i]
+            if not png:
                 errors.append({"tag": (blocks[i][:80] if i < len(blocks) else ""),
                                "kind": kind,
                                "reason": "LaTeX 编译失败（服务器缺 xelatex/"
                                          "poppler-utils，或源码闸门拦截）",
                                "hint": "（图示未能渲染）"})
-        injected = replace_code_blocks_with_images(
-            injected, [a["fileUrl"] if a else None for a in attachments])
+                continue
+            widget_items.append((base64.b64encode(png).decode("ascii"), label))
+            figures.append({"index": i + 1, "kind": kind, "label": label,
+                            "size_bytes": len(png), "url": None})
+            # 两种模式都落盘（运维检查/手动取用）——widget 模式只是不拼 URL
+            name = f"{uuid.uuid4().hex}.png"
+            (_MCP_DIR / name).write_bytes(png)
+            written.append(name)
+            if base:
+                urls[i] = f"{base}/mcp/files/{name}"
+                figures[-1]["url"] = urls[i]
+        if written:
+            _prune_attachments(_MCP_DIR, MCP_ATTACHMENT_MAX_BYTES,
+                               MCP_ATTACHMENT_MAX_FILES,
+                               keep=frozenset(written))
+        if _auto_open():
+            for name in written:
+                _startfile(str(_MCP_DIR / name))
+
+        # 注入文本替换：URL 模式 → 行内 markdown 图（模型可直接引用）；
+        # widget 模式 → （图 N）占位（真正的图由 widget 组件显示）
+        for i, code in enumerate(blocks):
+            repl = (f"![化学图示-{i + 1}]({urls[i]})" if urls[i]
+                    else f"（图 {i + 1}）")
+            injected = injected.replace(code, repl, 1)
+
+    # widget：全部图内嵌 data URI，按内容哈希寻址（同输入同 URI → 缓存命中）
+    widget_uri = None
+    if widget_items:
+        html_doc = _widget_html(widget_items)
+        render_id = hashlib.sha256(html_doc.encode("utf-8")).hexdigest()[:16]
+        _store_widget(render_id, html_doc)
+        widget_uri = _widget_uri(render_id)
+
+    # 模型可读摘要（content 文本）：官方 workaround——除 structuredContent
+    # 外同时返回简短文本，规避连接器对纯 structuredContent 的消化问题
+    lines = [f"已渲染 {len(figures)} 张化学图示。"]
+    for e in errors[:5]:
+        lines.append(f"未通过[{e['kind']}]: {str(e['reason'])[:100]}")
+    if len(errors) > 5:
+        lines.append(f"…共 {len(errors)} 个未通过项（详见 structuredContent）")
+    if widget_uri:
+        lines.append(f"图示组件: {widget_uri}")
+    if base:
+        # B′：显式给出可点击链接（本机/局域网可达），ChatGPT 稳定写进回答
+        for fig in figures:
+            if fig.get("url"):
+                lines.append(f"图示链接[图 {fig['index']}]: {fig['url']}")
+
+    # A′：image content block 随结果返回（2026-09 社区成功报告的形态——
+    # 图像块经桥推给 iframe 显示，宿主不应将其计入模型上下文；阈值防
+    # 超大图触发响应预算截断）
+    content: list = [TextContent(type="text", text="\n".join(lines))]
+    block_cap = _image_block_kb()
+    if block_cap:
+        for b64, _label in widget_items:
+            if len(b64) * 3 // 4 <= block_cap * 1024:
+                content.append(ImageContent(type="image", data=b64,
+                                            mime_type="image/png"))
 
     result: RenderResult = {"figures": figures, "injected_text": injected,
                             "errors": errors, "tikz_sources": [],
-                            "note": ""}
+                            "widget_uri": widget_uri, "note": ""}
     if include_tikz:
-        # 从**替换前**的注入文本取源码（替换后已是图片引用）；供 Overleaf 编译
+        # 从**替换前**的注入文本取源码（替换后已是图片引用/占位）；供 Overleaf 编译
         result["tikz_sources"] = list(blocks)
-    return result
+
+    # 结果级 _meta = 官方 kitchen_sink Python 示例的精确字段集
+    # （openai/outputTemplate + widgetAccessible + toolInvocation 文案），
+    # 附加 ui.resourceUri（MCP Apps 规范字段，无害）。A″ 实验：此前缺失
+    # widgetAccessible 与 invoking/invoked 文案，宿主可能据此不渲染。
+    result_meta = None
+    if widget_uri:
+        result_meta = {
+            "openai/outputTemplate": widget_uri,
+            "openai/toolInvocation/invoking": "正在渲染化学图示…",
+            "openai/toolInvocation/invoked": "图示已生成",
+            "openai/widgetAccessible": True,
+            "ui": {"resourceUri": widget_uri},
+        }
+
+    return CallToolResult(
+        content=content,
+        structured_content=dict(result),
+        meta=result_meta)
+
+
+def tool_test_image() -> CallToolResult:
+    """A′ 补充实验：纯 image content block（**无 structuredContent**）。
+
+    背景：render_chemistry 的 image block 与 structuredContent 同结果返回，
+    而 OpenAI Codex 有"structuredContent 存在时丢弃 content[]"的确认行为
+    （issue #10334）——ChatGPT 是否同款未知。本工具把 image block 单独
+    摘出来测：能显示 → 丢弃行为在，render_chemistry 接入需改结构；
+    仍不显示 → ImageContent 通道在 ChatGPT 连接器彻底判死。
+    固定读 data/mcp_attachments/test.png（运维可自行替换图片）；缺失时
+    用内嵌生成的兜底图，工具永不失败。
+    """
+    path = _MCP_DIR / "test.png"
+    png = path.read_bytes() if path.is_file() else None
+    if not png:
+        png = _fallback_test_png()
+    return CallToolResult(
+        content=[ImageContent(type="image",
+                              data=base64.b64encode(png).decode("ascii"),
+                              mime_type="image/png")],
+        structured_content=None,
+        meta=None)
+
+
+def _fallback_test_png() -> bytes:
+    """生成肉眼可见的兜底测试图（红框黄底 + 文字）；PyMuPDF 不可用时
+    退回 1x1 PNG（工具不失败，但可能不显眼）。"""
+    try:
+        import fitz
+        doc = fitz.open()
+        page = doc.new_page(width=220, height=160)
+        page.draw_rect(fitz.Rect(10, 10, 210, 150),
+                       color=(0.85, 0.1, 0.1), fill=(0.95, 0.9, 0.3),
+                       width=2)
+        page.insert_text((30, 90), "Chem_Agent test image",
+                         fontname="helv", fontsize=13)
+        pix = page.get_pixmap(dpi=72)
+        doc.close()
+        return pix.tobytes("png")
+    except Exception as e:
+        print(f"[mcp] 兜底测试图生成失败，退回 1x1: {e}")
+        return base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
+            "AAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
 
 
 def tool_get_tag_syntax(include_examples: bool = False) -> SyntaxResult:
@@ -334,11 +625,12 @@ def tool_get_tag_syntax(include_examples: bool = False) -> SyntaxResult:
 
 _INSTRUCTIONS = (
     "Chem_Agent 化学渲染工具集。分工：你负责化学推理与组织回答；本服务负责"
-    "把化学图示**画**出来（SMILES 验证、反应式/机理图/势能面渲染为 PNG）。"
+    "把化学图示**画**出来（SMILES 验证、反应式/机理图/势能面渲染）。"
     "典型流程：① 写标记前可先 validate_smiles 核对 SMILES、"
     "resolve_chemical_name 由名称取 SMILES；② 不确定标记语法时调用 "
     "get_tag_syntax（含原子编号推导规则）；③ 把嵌入 [STRUCT]/[COMPOSITE]/"
-    "[ENERGY] 标记的文本交给 render_chemistry，得到 PNG 图 URL 与校验结果。"
+    "[ENERGY] 标记的文本交给 render_chemistry——图示画面由返回结果中的 "
+    "ui:// 组件地址（图示组件）内联展示，结构化数据供你组织回答。"
     "若返回 errors，请按 reason 修正标记后重试——校验失败不会静默出图。"
 )
 
@@ -370,12 +662,18 @@ def _build_server() -> "MCPServer":
         return tool_resolve_chemical_name(name)
 
     @mcp.tool(name="render_chemistry",
-              description="渲染含 Chem_Agent 标记的化学文本为 PNG 图示。输入是"
-                          "嵌入 [STRUCT]/[COMPOSITE]/[ENERGY] 等标记的文本（语法"
-                          "先用 get_tag_syntax 获取），返回每张图的公网 PNG URL、"
-                          "标记替换后的文本，以及校验/渲染失败的结构化错误——"
+              description="渲染含 Chem_Agent 标记的化学文本为化学图示组件"
+                          "（结构式/反应式/机理图/势能面）。输入是嵌入 "
+                          "[STRUCT]/[COMPOSITE]/[ENERGY] 等标记的文本（语法"
+                          "先用 get_tag_syntax 获取），返回图示元数据、标记"
+                          "替换后的文本，以及校验/渲染失败的结构化错误。"
+                          "figures[].url 配置了公网/本机地址时为可点击下载"
+                          "链接（请原样写进回答供用户点击查看）；为 null "
+                          "表示图示由 ui:// 组件与随结果返回的图像块承载。"
                           "有 errors 时请按 reason 修正标记后重新调用。",
-              annotations=_TOOL_ANNOTATIONS)
+              annotations=_TOOL_ANNOTATIONS,
+              meta={"ui": {"resourceUri": WIDGET_FALLBACK_URI},
+                    "openai": {"outputTemplate": WIDGET_FALLBACK_URI}})
     def render_chemistry(text: str, include_tikz: bool = False) -> RenderResult:
         return tool_render_chemistry(text, include_tikz)
 
@@ -387,6 +685,14 @@ def _build_server() -> "MCPServer":
               annotations=_TOOL_ANNOTATIONS)
     def get_tag_syntax(include_examples: bool = False) -> SyntaxResult:
         return tool_get_tag_syntax(include_examples)
+
+    @mcp.tool(name="test_image",
+              description="诊断工具：返回一张固定测试图（纯 MCP image 内容块，"
+                          "无 structuredContent）。用于验证宿主是否显示 MCP "
+                          "原生图片内容。",
+              annotations=_TOOL_ANNOTATIONS)
+    def test_image():
+        return tool_test_image()
 
     # /mcp/files/{name}：MCP 附件下载。挂在 MCP 子应用内 → 自动吃到同一道
     # Bearer 闸门；白名单正则防路径穿越（与 web_api 同式）。
@@ -400,6 +706,67 @@ def _build_server() -> "MCPServer":
             return JSONResponse({"error": "not found"}, status_code=404)
         from starlette.responses import FileResponse
         return FileResponse(path, media_type="image/png", filename=name)
+
+    # MCP Apps 图示组件：每次 render_chemistry 按内容哈希生成新
+    # ui://…/render-<id>.html（缓存键），经 resources/read（JSON-RPC，
+    # 走隧道）取回 HTML，内嵌 data URI 图片在 ChatGPT 沙箱 iframe 渲染。
+    @mcp.resource(WIDGET_URI_TEMPLATE,
+                  mime_type=_WIDGET_MIME,
+                  description="Chem_Agent 图示组件（本次渲染的图，内嵌 data URI）")
+    def _render_widget(render_id: str) -> str:
+        print(f"[mcp] 宿主读取图示组件: render_id={render_id}"
+              f"（{'命中' if render_id in _widgets else '未命中内存'}）")
+        html_doc = _widgets.get(render_id)
+        if html_doc is None:
+            from mcp.server.mcpserver.exceptions import ResourceNotFoundError
+            raise ResourceNotFoundError(
+                f"图示组件不存在或已被回收: {render_id}（请重新调用 "
+                f"render_chemistry 生成）")
+        return html_doc
+
+    # 工具定义级 resourceUri 的静态兜底：若宿主只认 tools/list 里的地址，
+    # 也能渲染出一个说明页（真实图示仍以结果级 _meta 的动态地址为准）。
+    # A 实验版 = 完整桥接诊断页：iframe 是否被渲染、宿主桥有哪些能力，
+    # 全部以文字显示在组件内，供截图回读定位断点。
+    @mcp.resource(WIDGET_FALLBACK_URI,
+                  mime_type=_WIDGET_MIME,
+                  description="Chem_Agent 图示组件占位页")
+    def _render_widget_fallback() -> str:
+        print("[mcp] 宿主读取静态兜底组件（定义级 resourceUri 被消费）")
+        return ("<!doctype html><html><head><meta charset='utf-8'>"
+                "<style>body{font-family:monospace;font-size:13px;line-height:"
+                "1.6;padding:12px;background:#111;color:#7f7;margin:0}"
+                "h3{color:#fff;margin:0 0 8px;font-size:14px}</style></head>"
+                "<body><h3>Chem_Agent bridge 诊断 diag-v2</h3>"
+                "<div id='diag'>初始化…</div>"
+                "<script>(function(){"
+                "var out=document.getElementById('diag');"
+                "var lines=[];"
+                "function line(t){lines.push(t);out.textContent=lines.join('\\n');}"
+                "line('① iframe 已渲染 ' + new Date().toLocaleTimeString());"
+                "line('② 处于 iframe 内: ' + (window.parent !== window));"
+                "try{line('③ openai API: '+(typeof window.openai!=='undefined'?"
+                "'存在['+Object.keys(window.openai).slice(0,12).join(',')+']':'无'));"
+                "}catch(e){line('③ openai 探测异常: '+e.message);}"
+                "try{line('③ chatgpt API: '+(typeof window.chatgpt!=='undefined'?"
+                "'存在':'无'));}catch(e){}"
+                "try{var ao=window.location.ancestorOrigins;"
+                "line('④ 宿主源: '+(ao&&ao.length?"
+                "Array.prototype.join.call(ao,' '):'未知'));}catch(e){}"
+                "var got=false;"
+                "window.addEventListener('message',function(ev){"
+                "try{var d=typeof ev.data==='string'?JSON.parse(ev.data):ev.data;"
+                "var m=d&&(d.method||(d.result!==undefined?'响应:id'+d.id:''));"
+                "if(m){got=true;line('⑤ 宿主消息: '+m);}}catch(e){}});"
+                "try{window.parent.postMessage(JSON.stringify({jsonrpc:'2.0',id:1,"
+                "method:'ui/initialize',params:{protocolVersion:'1.0',"
+                "appInfo:{name:'chem-agent',version:'1.0.0'},"
+                "capabilities:{}}}),'*');"
+                "line('⑤ ui/initialize 已发送（等待宿主响应…）');"
+                "}catch(e){line('⑤ postMessage 失败: '+e.message);}"
+                "setTimeout(function(){if(!got)"
+                "line('⏳ 8s 内无宿主消息——宿主未参与桥接');},8000);"
+                "})();</script></body></html>")
 
     return mcp
 
