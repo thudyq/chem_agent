@@ -192,7 +192,7 @@ def test_http_download_uses_streaming(tmp_path, monkeypatch):
 # ---------------------------------------------------------------- 4. 端点接线（真的会 400）
 
 @pytest.fixture
-def web(tmp_path, monkeypatch):
+def web(tmp_path, monkeypatch, public_dns):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 

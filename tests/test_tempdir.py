@@ -11,6 +11,7 @@
 
 import os
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 
@@ -54,6 +55,9 @@ def test_temp_parent_uses_env_when_set(clean_env, tmp_path, monkeypatch):
     assert target.is_dir()          # 会自动创建
 
 
+@pytest.mark.skipif(sys.platform != "win32",
+                    reason="Z:\\ 盘符路径在 Linux 上是合法文件名，"
+                           "本用例验证的是 Windows 语义下的回退")
 def test_temp_parent_falls_back_when_path_unusable(clean_env, monkeypatch):
     """配了一个建不出来的路径 → 退回系统默认，而不是让整个服务起不来。"""
     monkeypatch.setenv(tempdir.ENV_VAR, "Z:\\definitely\\not\\here\\chem")

@@ -386,7 +386,9 @@ def test_client_host_allowed_blocks(url):
     "https://open.bigmodel.cn/api/paas/v4",
     "",
 ])
-def test_client_host_allowed_accepts_public(url):
+def test_client_host_allowed_accepts_public(url, public_dns):
+    """域名端点走 public_dns 固定解析：本用例验证"解析到公网 → 放行"这一
+    分类分支，不应依赖本机真实 DNS（代理 fake-ip 会把公网域名污染）。"""
     ok, reason = credentials.client_host_allowed(url)
     assert ok is True, f"{url} 应被放行（原因：{reason}）"
 

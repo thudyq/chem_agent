@@ -21,6 +21,12 @@ INIT_PARAMS = {
 _HEADERS = {"MCP-Protocol-Version": "2025-06-18"}
 
 
+@pytest.fixture(autouse=True)
+def isolate_mcp_api_key(monkeypatch):
+    """默认关闭本地 .env 鉴权，避免测试依赖开发机密钥状态。"""
+    monkeypatch.setenv("MCP_API_KEY", "")
+
+
 @contextlib.contextmanager
 def _mount(monkeypatch, tmp_path):
     """独立 app + MCP 挂载 + 附件目录指向 tmp（不动真实 data/）。"""

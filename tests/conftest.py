@@ -19,6 +19,35 @@ import pytest
 import core.tag_validator as tv
 from renderers import registry
 
+# ---------------------------------------------------------------- DNS 免疫
+# 背景：开发机常见代理（Clash/Surge 等）开 fake-ip DNS——**所有域名**都
+# 解析到 198.18.0.0/15（RFC 2544 基准段）。SSRF 校验
+# （credentials.client_host_allowed）如实把它判为非公网地址，于是凡带
+# 真实域名端点的用例在代理环境下全部 400"端点地址不可用"。单元测试的
+# 职责是验证分类逻辑而非本机 DNS：需要放行域名的用例启用本 fixture——
+# 域名一律解析到固定公网 IP，**字面 IP 原样透传**（拒绝类用例的
+# 169.254.x/10.x 等字面地址不受影响，闸门的安全语义不变）。
+
+_PUBLIC_PROXY_IP = "93.184.216.34"      # 固定公网示例 IP（仅走分类，不真正连接）
+
+
+@pytest.fixture
+def public_dns(monkeypatch):
+    import ipaddress
+    import socket
+
+    real_getaddrinfo = socket.getaddrinfo
+
+    def _fake(host, port=0, *args, **kwargs):
+        try:
+            ipaddress.ip_address(host)
+        except ValueError:
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "",
+                     (_PUBLIC_PROXY_IP, port or 0))]
+        return real_getaddrinfo(host, port, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", _fake)
+
 # ---------------------------------------------------------------- 临时目录
 # 背景：pytest 内置 tmp_path 走系统 temp。受限环境（容器 / CI / DSH 沙箱）
 # 禁止写系统 temp，用例会以 WinError 5 / PermissionError 失败，看起来像

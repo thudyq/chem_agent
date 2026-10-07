@@ -28,7 +28,7 @@ KEY_HEADERS = {"X-Chem-Api-Key": "sk-test-key-123456",
 
 
 @pytest.fixture
-def web(tmp_path, monkeypatch):
+def web(tmp_path, monkeypatch, public_dns):
     """独立 app（只装 web router）+ mock 管线 + 会话目录指向 tmp_path。"""
     app = FastAPI()
     app.include_router(web_api.router)
@@ -67,6 +67,15 @@ def answered(monkeypatch):
     monkeypatch.setattr(web_api, "process_question", fake_pq)
     monkeypatch.setattr(web_api, "diaglog", type("D", (), {
         "log_request": staticmethod(lambda *a, **k: None)})())
+
+    # LaTeX 编译打桩在 compile_tikz_to_png 层（而非 build_attachments）：
+    # fake_pq 的固定文本含 tikzpicture，若走真编译，慢环境里一编就是
+    # 分钟级 × 全文件几十个请求 = 套件假死。打在这一层让**真实**
+    # build_attachments（提取/落盘/配额）照常运行，行为与真编译一致；
+    # 专项用例（session_image_url 等）后打的同名桩自然覆盖本桩。
+    png = b"\x89PNG\r\n\x1a\n" + b"0" * 32
+    monkeypatch.setattr("core.attachments.compile_tikz_to_png",
+                        lambda code, **kw: png)
     seen["answer_cache"] = answer_cache
     return seen
 

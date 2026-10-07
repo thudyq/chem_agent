@@ -30,7 +30,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture
-def web(tmp_path, monkeypatch):
+def web(tmp_path, monkeypatch, public_dns):
     """独立 app（只装 web router）+ mock 管线 + 会话目录指向 tmp_path。"""
     from fastapi import FastAPI
     from fastapi.testclient import TestClient

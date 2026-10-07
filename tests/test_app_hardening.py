@@ -51,7 +51,7 @@ def answered(monkeypatch):
 
 
 @pytest.fixture
-def web(tmp_path, monkeypatch, answered):
+def web(tmp_path, monkeypatch, answered, public_dns):
     """独立 app（只装 web router），会话目录落 tmp_path。"""
     app = FastAPI()
     app.include_router(web_api.router)

@@ -230,7 +230,7 @@ def test_friendly_error_explains_busy():
     assert "不是你的设置问题" in msg, "限流/限满不是用户配置错了，别让他去改设置"
 
 
-def test_json_path_returns_503_when_busy(monkeypatch, tmp_path):
+def test_json_path_returns_503_when_busy(monkeypatch, tmp_path, public_dns):
     """非流式路径：限满时给 503 + 可操作文案，而不是 500。"""
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
