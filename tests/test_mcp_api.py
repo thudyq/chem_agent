@@ -161,10 +161,12 @@ def test_render_valid_tag(monkeypatch, tmp_path):
         assert "（图 1）" in sc["injected_text"]   # 无 URL → 占位而非图链
         assert "![化学图示-1](" not in sc["injected_text"]
         assert sc["tikz_sources"] == []          # 默认不带源码
-        # 结果级 _meta 携带本次渲染的组件地址（wire 别名 _meta/meta 兼容）
+        # 结果级 _meta 携带本次渲染的组件地址（官方 kitchen_sink 扁平键格式）
         meta = out.get("_meta") or out.get("meta") or {}
+        assert meta["openai/outputTemplate"] == sc["widget_uri"]
+        assert meta["openai/widgetAccessible"] is True
+        assert meta["openai/toolInvocation/invoked"] == "图示已生成"
         assert meta["ui"]["resourceUri"] == sc["widget_uri"]
-        assert meta["openai"]["outputTemplate"] == sc["widget_uri"]
         # 图示落盘（运维可检查 data/mcp_attachments）——widget 模式也必须写
         files = list((tmp_path / "mcp_attachments").glob("*.png"))
         assert len(files) == 1 and files[0].stat().st_size == len(png)
@@ -206,14 +208,12 @@ def test_render_widget_uri_is_content_addressed(monkeypatch, tmp_path):
 
 
 def test_tools_list_render_meta(monkeypatch, tmp_path):
-    """工具定义级 meta 声明静态兜底 widget（ChatGPT 只认 tools/list 的场景）。"""
+    """A″ 对齐官方示例：工具定义级**无** meta（组件绑定在结果级 _meta）。"""
     with _mount(monkeypatch, tmp_path) as client:
         _init(client)
         tools = _rpc(client, "tools/list").json()["result"]["tools"]
         render = next(t for t in tools if t["name"] == "render_chemistry")
-        meta = render.get("_meta") or render.get("meta") or {}
-        assert meta["ui"]["resourceUri"] == mcp_api.WIDGET_FALLBACK_URI
-        assert meta["openai"]["outputTemplate"] == mcp_api.WIDGET_FALLBACK_URI
+        assert not (render.get("_meta") or render.get("meta"))
 
 
 def test_render_url_mode(monkeypatch, tmp_path):

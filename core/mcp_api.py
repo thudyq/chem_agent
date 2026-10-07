@@ -671,9 +671,7 @@ def _build_server() -> "MCPServer":
                           "链接（请原样写进回答供用户点击查看）；为 null "
                           "表示图示由 ui:// 组件与随结果返回的图像块承载。"
                           "有 errors 时请按 reason 修正标记后重新调用。",
-              annotations=_TOOL_ANNOTATIONS,
-              meta={"ui": {"resourceUri": WIDGET_FALLBACK_URI},
-                    "openai": {"outputTemplate": WIDGET_FALLBACK_URI}})
+              annotations=_TOOL_ANNOTATIONS)
     def render_chemistry(text: str, include_tikz: bool = False) -> RenderResult:
         return tool_render_chemistry(text, include_tikz)
 
