@@ -17,6 +17,7 @@ AGENTS.local.md
 # 测试文件
 fast_test/
 fast_test.py
+experiments/
 
 # 其他常见的临时文件
 *.tmp
