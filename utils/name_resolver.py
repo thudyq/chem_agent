@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """utils/name_resolver.py — 化学名称 → SMILES 解析（PubChem 主路径）。
 
-从 legacy/name_resolver.py 提升并现代化：PubChem REST 查询 + RDKit 校验 +
+PubChem REST 查询 + RDKit 校验 +
 curl_cffi 浏览器 TLS 指纹绕限流。作为 LLM 输出的兜底：当 LLM 的 SMILES
 不可靠或用户输入为化学名称时，用 PubChem 反查权威 SMILES。
 

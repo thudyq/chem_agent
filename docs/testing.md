@@ -1,9 +1,8 @@
 # Chem_Agent 测试指南
 
-本地聊天图文混排与离线核心复用实验见
-[`Chem_Agent_Work_Test/README.md`](../Chem_Agent_Work_Test/README.md)。
-适配器与机理样例回归：
-`python -m pytest tests/test_work_rendering_cli.py tests/test_examples_audit.py -q`。
+Work 本地入口和机理样例见 [work.md](work.md)。
+CLI、共享编译器与示例回归：
+`python -m pytest tests/test_work_rendering_cli.py tests/test_latex_compile.py tests/test_examples_audit.py -q`。
 
 > 公开版测试入口汇总。覆盖：环境准备、单元测试、渲染器离线 demo、归因工具、
 > 基线评测与端到端自测。全部命令在项目根目录执行。
@@ -14,7 +13,7 @@
 
 ```bash
 pip install -r requirements.txt
-cp .env.example .env     # 编辑填入 API_KEY / BASE_URL / MODEL_NAME
+cp .env.example .env     # 仅运行外部模型问答时配置；本地 CLI 和单元测试不需要
 ```
 
 `.env` 核心三件套（完整模板见 `.env.example`）：
@@ -41,7 +40,7 @@ LaTeX 工具链（仅当需要 PNG 附件/图片输出时）：
 ## 2. 单元测试
 
 ```bash
-python -m pytest tests/ -v                    # 全部（900+ 项）
+python -m pytest tests/ -v                    # 全部回归
 python -m pytest tests/test_parsing.py -v     # 单文件
 python -m pytest tests/ -k validator -v       # 按关键词筛选
 ```
@@ -92,20 +91,22 @@ python app.py "问题" | python -m core.replay -          # 管道 stdin
 
 ## 4. 基线评测（`core/metrics.py`）
 
+以下命令会调用真实模型，产生费用。题库随仓库提供；输出写入被忽略的 data/。
+
 ```bash
-python -m core.metrics --questions-file fast_test/questions.txt
-python -m core.metrics --questions-file fast_test/questions.txt --detail-file detail.txt
-python -m core.metrics --questions-file fast_test/questions.txt --json-out corpus.json
+python -m core.metrics --questions-file benchmarks/questions.txt
+python -m core.metrics --questions-file benchmarks/questions.txt --detail-file data/metrics-detail.txt
+python -m core.metrics --questions-file benchmarks/questions.txt --json-out data/metrics.json
 ```
 
-- `fast_test/questions.txt`：基线问题集（每行一题，`#` 注释行）；每种标记类型至少
-  1 题，遇到新失败模式就把对应问题追加进去固化。
+- `benchmarks/questions.txt` 为日常问题，`benchmarks/difficults.txt` 为较复杂的有机化学题。
+  每行一题，`#` 注释行不参与评测。题库不包含标准答案，结果需人工检查化学正确性。
 - `--json-out`：把原始统计（含 LLM 输出全文）导出 JSON，供规则归因统计复用。
 
 校验规则归因统计（哪条规则拦了多少、多少本可确定性自动修复）：
 
 ```bash
-python -m core.rule_stats corpus.json --out report_rule_stats.txt
+python -m core.rule_stats data/metrics.json --out data/rule-stats.txt
 ```
 
 ---
@@ -159,3 +160,14 @@ python -m pytest tests/test_examples_audit.py -v
 挂了优先修示例本身；若被挂的是**格式占位说明**或**故意错误示例**（反面教材），
 扩充测试文件中的占位符正则 `_PLACEHOLDER_RE` 或上下文关键词 `_SKIP_CTX_RE`
 豁免——过滤原则是"宁可漏报、不可误报"。
+
+## 7. 本地 PNG 验证
+
+```powershell
+python -m cli.render --input examples/work/attack.json --output data/work/attack.png
+python -m cli.render --input examples/work/rearomatization.json --output data/work/rearomatization.png
+```
+
+核对 PNG 可打开、结构与机理箭头正确、中文与电荷未裁切，并在目标聊天中确认
+图片可见及顺序正确。调试时添加 `--debug` 查看同名 TikZ 源码。命令接口和简化
+机理样例的适用范围见 [work.md](work.md)。

@@ -7,7 +7,7 @@
     python -m core.replay -            # 从 stdin 读
     python -m core.replay --full ...   # 附完整 TikZ 输出
 
-用途（归因方法论，Drawbacks §16.4）：测试中发现错误时快速定位"哪条规则
+用途（离线归因）：测试中发现错误时快速定位"哪条规则
 开枪、判断对不对"——逐标记显示校验判定与原因；COMPOSITE 附语义规则
 逐项 trace（质子转移配对 / SN2 位点 / EAS σ 脱质子 / 消除成 π 键 /
 reaction 守恒）；STRUCT 附标签检查逐项 trace（质子化 / 自由基 /

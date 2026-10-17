@@ -1,7 +1,6 @@
 """Render one existing Chem_Agent tag from JSON without starting a server."""
 
 import argparse
-import hashlib
 import io
 import json
 import sys
@@ -15,7 +14,12 @@ from renderers.registry import RENDERER_REGISTRY, render_tag
 from utils.latex_compile import compile_tikz_to_png
 
 
-def render_case(source: Path, output: Path) -> dict:
+def render_case(source: Path, output: Path, *, debug: bool = False) -> Path:
+    if output.suffix.lower() != ".png":
+        raise ValueError("Output must have a .png extension")
+    outputs = [output, output.with_suffix(".tikz")] if debug else [output]
+    if source.resolve() in [path.resolve() for path in outputs]:
+        raise ValueError("Output paths must not overwrite the input case")
     case = json.loads(source.read_text(encoding="utf-8"))
     if not isinstance(case, dict) or set(case) != {"tag"}:
         raise ValueError('Input must be an object containing only a "tag" string')
@@ -41,40 +45,25 @@ def render_case(source: Path, output: Path) -> dict:
         image.load()
         if image.format != "PNG":
             raise ValueError("Compiler output is not a PNG")
-        size = list(image.size)
-    if output.suffix.lower() != ".png":
-        raise ValueError("Output must have a .png extension")
-    outputs = [output, output.with_suffix(".tikz"), output.with_suffix(".json")]
-    if source.resolve() in [path.resolve() for path in outputs]:
-        raise ValueError("Output paths must not overwrite the input case")
-    report = {
-        "tag": text,
-        "pipeline": ["core.tag_parser.parse_tags", "core.tag_validator.validate_tag",
-                     "renderers.registry.render_tag", "utils.latex_compile.compile_tikz_to_png"],
-        "size": size,
-        "sha256": hashlib.sha256(png).hexdigest(),
-        "tikz_sha256": hashlib.sha256(code.encode("utf-8")).hexdigest(),
-    }
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_bytes(png)
-    output.with_suffix(".tikz").write_text(code, encoding="utf-8", newline="\n")
-    output.with_suffix(".json").write_text(
-        json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
-    )
-    return report
+    if debug:
+        output.with_suffix(".tikz").write_text(code, encoding="utf-8", newline="\n")
+    return output.resolve()
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--debug", action="store_true", help="Also save the generated TikZ source")
     args = parser.parse_args()
     try:
-        report = render_case(args.input, args.output)
+        output = render_case(args.input, args.output, debug=args.debug)
     except (ValueError, RuntimeError, OSError) as error:
         print(f"Render failed: {error}", file=sys.stderr)
         return 1
-    print(json.dumps(report, ensure_ascii=False, indent=2))
+    print(output)
     return 0
 
 

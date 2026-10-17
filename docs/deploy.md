@@ -46,11 +46,8 @@ python -m uvicorn api:app --host 127.0.0.1 --port 8000
 
 #    ─────────────── ⚠️ 下面这个开关只给"本地连自己电脑上的模型"用 ───────────────
 #    WEB_ALLOW_PRIVATE_BASE_URL=1 会让服务端的"内网/本机端点"拦截**整体失效**
-#    。它同时关掉两道防护：
-#      · R2 —— 视觉端点的 SSRF 校验
-#      · R3 —— 出站请求"不跟随跳转"
-#    也就是说：**线上开着它 = 把服务器变成任意内网地址的请求跳板**，
-#    而且不会有任何日志提醒你。所以它**绝不能写进线上的 `.env` 或 systemd 单元**。
+#    。这个开关放宽端点地址检查；出站请求仍不跟随重定向。
+#    公开部署开启它会允许访问内网，因此不能写进线上 .env 或 systemd 单元。
 #
 #    只在需要连本机模型时**临时**带一次（用完即弃，不要落盘）：
 #      Windows PowerShell: $env:WEB_ALLOW_PRIVATE_BASE_URL="1"; python -m uvicorn api:app --host 127.0.0.1 --port 8000
@@ -80,9 +77,9 @@ curl -s https://你的域名/api/web-config | grep -o '"allow_private_base_url":
 python -m pytest tests/test_credentials.py tests/test_web_api.py -v
 ```
 
-真实链路联调（不需要清小搭，也不需要浏览器）：见
-`instructions/Test-Method.md` §20「公开网页（BYOK）验证」——里面有一个
-mock LLM 端点 + 端到端脚本，可以确认"用户 Key 确实被用到了上游"。
+真实链路联调（不调用付费模型）：
+`python -m pytest tests/test_byok_end_to_end.py -v` 使用本地 mock LLM 验证
+用户凭证确实传到上游，且不继承服务器凭证。
 
 ---
 
@@ -207,7 +204,10 @@ sudo systemctl daemon-reload && sudo systemctl restart chem_agent
 
 图示是靠**编译 LaTeX** 画出来的，而 `.tex` 内容来自大模型 —— 也就是**可以被用户
 提问影响**。TeX 的 `\input`/`\openin`/`\read` 能读服务器上任意可读文件，并把内容
-排版进图片**回传给访客**（实测见 `instructions/Security-Review.md` R1）。
+排版进图片**回传给访客**。
+
+所有入口都必须复用 `utils/latex_compile.py` 的源码检查和安全编译流程；
+本地 CLI 也不接受直接提交 LaTeX。
 
 代码里已经加了两层（源码闸门 + 引擎级加固），但**引擎级限制只有 TeX Live/kpathsea
 认**（`--cnf-line=openin_any=p`），MiKTeX 不认。所以最后一道必须由部署形态保证：
@@ -218,8 +218,8 @@ python -m utils.latex_compile --security-check
 #    file_read_restricted: true  → 引擎已拦住越界读文件
 #    file_read_restricted: false → 拦不住，必须靠下面的隔离
 
-# ② 无论结果如何，都让编译进程读不到密钥文件
-chmod 600 /var/www/chem_agent/.env        # 只有服务属主可读
+# ② 收紧密钥文件权限，并配合下方的独立编译身份或容器隔离
+chmod 600 /var/www/chem_agent/.env
 ```
 
 * **最省**：给编译单独开一个系统用户，`.env` 归另一个用户所有。
@@ -229,79 +229,24 @@ chmod 600 /var/www/chem_agent/.env        # 只有服务属主可读
 * 用了 `ProtectSystem`/`PrivateTmp` 之类的沙箱时，记得给 LaTeX 留一个可写的临时
   目录（配合 `CHEM_AGENT_TMPDIR`，见 §2.2），否则图示会全部渲染失败。
 
+同一属主运行服务和编译器时，单独设置 `chmod 600` 不能阻止编译器读取密钥；
+必须核验编译进程实际的文件访问范围。
+
 > 服务启动时会打一行 `[startup] LaTeX 加固：...`，把当前生效的加固选项写进日志；
 > 引擎不支持文件访问限制时还会额外警告一次。
 
-### 2.7 ChatGPT（MCP）工具层（可选）
-
-把**无 LLM 的化学渲染能力**暴露为 MCP 只读工具，供 ChatGPT（大脑）按需调用：
-分工是 ChatGPT 负责理解/推理/组织回答，本服务负责 SMILES 验证、名称→SMILES、
-标记渲染出图。端点 `/mcp`（Streamable HTTP，**stateless + JSON 响应**——不开
-SSE 流，不受 §2.3 `proxy_buffering` 影响）。工具 4 个、全部 `readOnlyHint`：
-`validate_smiles` / `resolve_chemical_name` / `render_chemistry` / `get_tag_syntax`。
-实现见 `core/mcp_api.py`；`mcp` 包未安装时自动跳过，**/v1 与网页不受影响**。
-
-启用三步：
-
-```bash
-pip install mcp                       # requirements.txt 已含
-# .env 设置（不设置 = 无鉴权，仅限内测；上线前务必设置）：
-#   MCP_API_KEY=sk-mcp-your-key
-sudo systemctl restart chem_agent     # 启动横幅应出现 [startup] MCP：/mcp 已挂载
-```
-
-ChatGPT 侧接入（手动，账号需支持 Developer mode）：**设置 → 应用与连接器 →
-高级设置 → 开启 Developer mode → 创建**，服务器 URL 填 `https://你的域名/mcp`、
-鉴权选 API key（填 `MCP_API_KEY`）→ 创建后自动扫描工具。工具清单在连接时捕获，
-**改动工具定义后要在连接器设置里点「刷新」**。
-
-安全与配额：
-
-* 鉴权走 `Authorization: Bearer <MCP_API_KEY>`（常量时间比较）；另有 DNS
-  rebinding 防护（Host 白名单 = 回环 + `PUBLIC_BASE_URL` 主机名 +
-  `MCP_ALLOWED_HOSTS` 补充）。
-* **图示交付（MCP Apps widget）**：`render_chemistry` 的图以 data URI 内嵌
-  进 HTML 组件，经 `resources/read`（JSON-RPC，**穿隧道**）交付，在 ChatGPT
-  的沙箱 iframe 里渲染（规范默认 CSP 允许 `img-src data:`）——**不需要任何
-  公网地址**。字节不进 `structuredContent`（模型可见文本），模型理解图靠
-  结构化元数据。图片文件仍落盘 `data/mcp_attachments/` 供运维检查。
-  * 组件地址按**内容哈希**寻址（同图同址命中缓存），结果级 `_meta` 与
-    `structuredContent.widget_uri` 双写；
-  * ChatGPT 侧载荷预算未公布（实测 3KB OK / 3MiB 失败）——保险压缩开关
-    `MCP_IMAGE_MAX_KB`：单图超阈值按 300→200→150→100→75 DPI 阶梯重渲染
-    （矢量重采样无伪影，编译一次 PDF 后多 DPI 渲染成本近零）；
-  * **实测（2026-10）：自定义连接器下 ChatGPT 不渲染组件 iframe**（结果级
-    `_meta`、定义级 meta、image content block 三形态均试过，组件从不出现；
-    数据本身完整到达模型上下文）。图示的可靠查看方式转为 **B′ 本机回环
-    交付**：配置 `MCP_PUBLIC_BASE_URL=http://127.0.0.1:8000`（用户浏览器与
-    服务同机，回环地址 100% 可达），工具返回 `/mcp/files` 下载链接并显式
-    写进 content 文本（`图示链接[图 N]: …`），ChatGPT 把链接写进回答，用户
-    点击即看。`MCP_AUTO_OPEN=1` 可选：渲染完成自动用系统图片查看器弹出
-    PNG（仅 Windows 服务生效）。服务跑在公网机器上时把地址设为该机器的
-    公网地址即可供远程用户点击；**不要**指向隧道地址（隧道不转发 GET）。
-* 防滥用靠**输入上限**（文本 8000 字符、单次 12 个标记）与附件配额；**不要**
-  把网页的每 IP 限流套到 /mcp 上——ChatGPT 出口 IP 少而固定，按 IP 限流会把
-  所有 ChatGPT 用户算成一个人。
-* 不写 `data/diagnostics.jsonl`（那是 BYOK/清小搭真人提问的隐私边界，§4）；
-  MCP 的校验/渲染错误直接结构化回传 ChatGPT。
-
-连通性验证（JSON-RPC over HTTP）：
-
-```bash
-KEY=<MCP_API_KEY> ; BASE=https://你的域名
-# 设了密钥时：无 Authorization 头应 401
-curl -s -o /dev/null -w '%{http_code}\n' $BASE/mcp \
-  -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
-# 工具清单（预期 4 个只读工具）
-curl -s $BASE/mcp -H "Authorization: Bearer $KEY" \
-  -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
-```
 
 ---
 
 ## 3. 验收清单（部署后逐项确认）
+
+以下测试验证 BYOK 凭证隔离、SSRF、出站不跳转、限流、上传上限和 LaTeX
+安全闸门；目标机器的进程身份、权限与反向代理还需实际核验：
+
+```bash
+python -m pytest tests/test_credentials.py tests/test_byok_end_to_end.py tests/test_outbound_redirects.py tests/test_rate_limit_identity.py tests/test_inflight_cap.py tests/test_upload_limits.py tests/test_latex_security.py -q
+```
+
 
 ```bash
 KEY=<你的 SERVICE_API_KEY>          # 清小搭密钥；网页路径不需要它
@@ -334,10 +279,6 @@ python -m utils.latex_compile --security-check
 #    file_read_restricted: false → 这台机器拦不住（如 MiKTeX），必须做 §2.6 的隔离
 python -m utils.latex_compile --security-check --strict   # 没拦住则以退出码 1 结束
 
-# ⑦ MCP 工具层（若已启用）：设了 MCP_API_KEY 时无头应 401、对头 200（§2.7）
-curl -s -o /dev/null -w '%{http_code}\n' $BASE/mcp \
-  -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 ```
 
 浏览器侧逐项检查：
@@ -370,7 +311,6 @@ curl -s -o /dev/null -w '%{http_code}\n' $BASE/mcp \
 | 浏览器来源（CORS） | 默认只放行本机调试地址 + `.env` 的 `PUBLIC_BASE_URL`（网页与接口同源，同源请求不需要 CORS）。把页面托管到**别的域名**时（§2.5），用 `CORS_ALLOW_ORIGINS=https://a.com,https://b.com` 显式列出 |
 | 安全响应头 | 所有响应带 `X-Frame-Options: DENY`、CSP `frame-ancestors 'none'`、`nosniff`、`Referrer-Policy: no-referrer`（防 iframe 套框/点击劫持） |
 | 用户密钥去向 | 只在请求内存；journald 日志只打指纹（`sk-abc…f3d2`）；**不含密钥** |
-| MCP 工具层 | `/mcp`（Streamable HTTP·stateless·JSON）；密钥 `MCP_API_KEY`；附件 `data/mcp_attachments/`（2GB / 50000）；ChatGPT 侧改工具定义后需点「刷新」（§2.7） |
 | 诊断日志（★ 含真人提问） | `data/diagnostics.jsonl`（权限 **0600**）：清小搭与网页**共用**这一个文件，靠 `cid` 前缀区分（`chatcmpl-*` / `web-*`）；每行含**提问原文**与模型原始输出，只有凭证是指纹。超 8MB 轮转为 `.1.jsonl`（磁盘最多约 16MB）。Streamlit 用**独立**的 `data/streamlit_diagnostics.jsonl`。要清空：`sudo truncate -s 0 data/diagnostics.jsonl` |
 
 ### 常见问题
@@ -389,7 +329,7 @@ curl -s -o /dev/null -w '%{http_code}\n' $BASE/mcp \
 
 **Q：用户说图片传不上去 / 提示图片过大？**
 三道限制，按顺序看：① 单张 8MB、单次合计 16MB（解码后）——让用户
-压缩或减少张数；② 反代的 `client_max_body_size`（§2.3 应设 48m，nginx 默认只有 1MB，
+压缩或减少张数；② 反代的 `client_max_body_size`（§2.3 应设 24m，nginx 默认只有 1MB，
 小图也会被 413 拒掉，且用户看不到原因）；③ 前端也会先拦一次并给提示。
 如果报的是"图片格式不支持"，那是魔数校验：附件必须是**真图片**（png/jpg/gif/bmp/webp）。
 

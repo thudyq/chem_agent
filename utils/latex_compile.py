@@ -29,7 +29,7 @@
 
 ★ 唯一完整的解法是**操作系统级隔离**（独立用户 / 容器 / 只读挂载，让编译进程
 读不到 ``.env``）——那是部署要求，代码里做不到。详见
-``instructions/Security-Review.md`` R1。
+``docs/deploy.md`` §2.6。
 
 公共 API：``compile_tikz_to_png(code, title="", dpi=300) -> bytes | None``
 """
@@ -565,10 +565,8 @@ def compile_tikz_to_png_adaptive(code: str, title: str = "",
     不超过 max_kb 的 PNG；阶梯耗尽仍超限 → 返回其中最小的 PNG
     （宁降清晰度保显示）。编译失败返回 None（同 compile_tikz_to_png 契约）。
 
-    背景：MCP widget 载荷预算（ChatGPT 侧实测 3KB OK / 3MiB 失败）——大图
-    需要保险压缩；对矢量线稿，降 DPI 重渲染比有损压缩更合适（无伪影，
-    文字标签仍可读）。PDF 只编译一次，多 DPI 渲染是 PyMuPDF 重采样，
-    成本近零。
+    对有图片载荷上限的交付端，通过重新采样矢量 PDF 控制尺寸，避免有损
+    压缩线稿和文字。PDF 只编译一次，多 DPI 渲染复用编译结果。
     """
     if not code or not code.strip():
         return None

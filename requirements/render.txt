@@ -1,0 +1,5 @@
+# 本地标记 → 校验 → TikZ → PNG；不依赖服务或模型 SDK。
+rdkit
+Pillow
+PyMuPDF
+# 另需本机 LaTeX 引擎与 tikz/amsmath/ctex，见 docs/work.md。

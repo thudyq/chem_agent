@@ -20,16 +20,16 @@
 ## 🎯 项目目标
 
 项目本体是一条**化学问答管线**：用户输入化学问题（可含文字、结构式图片），
-系统返回**逻辑清晰、图文并茂**的回答。管线末端可接多种形态，当前实现三种：
+系统返回**逻辑清晰、图文并茂**的回答。管线末端可接多种形态，当前保留四种入口：
 
 | 末端 | 形态 | 入口 |
 | :--- | :--- | :--- |
 | **HTTP 服务（OpenAI 兼容）** | 接入清小搭等 AI 平台（`/v1/*`，Bearer 鉴权，SSE 流式，图片附件） | `api.py` |
 | **公开网页（BYOK）** | 任意访客填自己的 API Key 即用（`/chat`，密钥只存浏览器） | `api.py` + `web/index.html` |
-| **ChatGPT（MCP 应用）** | ChatGPT 当大脑，按需调用验证/渲染工具（`/mcp`，Streamable HTTP，只读工具集） | `api.py` + `core/mcp_api.py` |
+| **ChatGPT Work（本地）** | 本地代理生成既有标记，命令行校验并渲染 PNG，再穿插到回答中 | `python -m cli.render` |
 | **本地 Streamlit 界面** | 开发调试与本地使用 | `streamlit_app.py` |
 
-三种形态共用同一条管线（LLM → 标记解析 → 契约校验 → 修正 → 渲染 → 注入），互不影响。
+各入口复用解析、校验和渲染核心。HTTP、网页与 Streamlit 使用项目的 LLM 问答管线；Work 由宿主代理负责推理与修正，调用本地渲染入口，无需额外模型 Key 或 MCP。
 
 ---
 
@@ -114,14 +114,12 @@ graph LR
 │   ├── llm_client.py          # LLM API 调用封装（流式、思考档位映射与降级、字段自适应）
 │   ├── tag_parser.py          # 标记解析器
 │   ├── tag_validator.py       # 标记契约校验层
-│   ├── readback.py            # 生成-回读协议（RDKit 确定性摘要对照 + 骨架漂移检查）
 │   ├── tag_injector.py        # 标记→TikZ 注入替换
 │   ├── prompt_manager.py      # System Prompt 管理
 │   ├── electron_sim.py        # 电子流模拟器（机理箭头自洽性深层校验）
 │   ├── attachments.py         # TikZ→PNG 附件构建（编译、托管、超配额回收）
 │   ├── answer_cache.py        # 多轮对话标记恢复（渲染后文本 → 原始标记）
 │   ├── web_api.py             # 公开网页后端（/api/chat、BYOK 凭证、限流、会话附件）
-│   ├── mcp_api.py             # ChatGPT（MCP）工具层：无 LLM 的渲染能力即 MCP 只读工具（/mcp）
 │   ├── replay.py              # 离线重放工具（标记管线归因：校验 trace + 渲染状态）
 │   ├── diaglog.py             # 诊断日志（失败标记与原始输出落盘，0600 滚动）
 │   ├── metrics.py             # 基线评测（标记遵循率 / 端到端管线）
@@ -134,7 +132,6 @@ graph LR
 │   ├── structure.py           # [STRUCT] 渲染器（分子家族 mode 分派）
 │   ├── lewis.py / stereo.py / chair.py / newman.py   # 画法变体
 │   ├── energy.py              # [ENERGY] 势能面渲染器
-│   ├── hbond.py               # 氢键渲染器
 │   └── collide.py             # 占据注册表（布局避让）
 ├── utils/
 │   ├── rdkit_utils.py         # RDKit 验证工具
@@ -151,12 +148,28 @@ graph LR
 │   └── index.html             # 公开网页（BYOK，自包含单文件，无需构建）
 ├── deploy/                    # 部署模板（systemd 单元 + Nginx 反代）
 ├── docs/                      # 项目文档（deploy.md 部署 / testing.md 测试）
-├── tests/                     # 单元测试（700+ 项，含示例一致性审计）
-├── legacy/                    # MVP 旧代码（存档保留）
+├── tests/                     # 回归测试（含示例一致性审计）
+├── cli/render.py              # Work 本地单标记渲染入口
+├── examples/work/             # 两个机理输入样例与一张预览图
+├── benchmarks/                # 随仓库提供的评测问题集
+├── requirements/              # 最小本地渲染依赖
 ├── pytest.ini                 # pytest 配置
 ├── .env.example               # 环境变量模板（复制为 .env 后填写）
 └── requirements.txt           # 依赖清单
 ```
+
+---
+
+## Work 本地接入
+
+```powershell
+python -m pip install -r requirements/render.txt
+python -m cli.render --input examples/work/attack.json --output data/work/attack.png
+```
+
+需要本地 LaTeX 工具链，不需要启动 HTTP 服务或配置模型 API Key。代理将生成
+PNG 的绝对路径插入回答；当前命令处理单个标记，多图位置由代理安排。
+输入格式、输出和样例见 [Work 指南](docs/work.md)。
 
 ---
 
@@ -251,6 +264,7 @@ uvicorn api:app --host 0.0.0.0 --port 8000
 
 部署（Nginx/HTTPS/systemd 与验收清单）见 `docs/deploy.md`。
 
+
 ---
 
 ## 📦 核心依赖
@@ -259,7 +273,6 @@ uvicorn api:app --host 0.0.0.0 --port 8000
 | :- | :--- |
 | `rdkit` | 化学信息学核心（SMILES 解析验证、分子几何计算） |
 | `fastapi` + `uvicorn` | HTTP 服务（清小搭接入） |
-| `mcp`（可选） | MCP 官方 SDK（ChatGPT 工具层 `/mcp`；未安装则该末端不启用） |
 | `streamlit` | 本地 Web 界面（调试用） |
 | `requests` | LLM API 调用（OpenAI 兼容，SSE 流式） |
 | `python-dotenv` | 环境变量管理 |
@@ -275,16 +288,17 @@ uvicorn api:app --host 0.0.0.0 --port 8000
 | **MVP** | 名称→SMILES→TikZ 结构式渲染 | ✅ 已完成 |
 | **Phase 1** | 转型为 LLM 驱动 + 标记解析器 | ✅ 已完成 |
 | **Phase 2** | FastAPI 适配 + 清小搭接入 | ✅ 已完成 |
-| **Phase 3** | 标记面收敛（STRUCT 家族 + COMPOSITE）+ 可靠性工程（契约校验 / 修正闭环 / 模型路由） | ✅ 已完成 |
+| **Phase 3** | 标记面收敛（STRUCT 家族 + COMPOSITE）+ 可靠性工程（契约校验 / 修正闭环） | ✅ 已完成 |
 | **Phase 4** | 化学正确性增强（确定性化学规则校验、LLM 复审、机理箭头样式优化） | 🚧 进行中 |
 | **Phase 5** | 开放使用形态：公开网页 BYOK（用户自带 API Key）+ 每请求凭证隔离 + 部署模板 | ✅ 已完成 |
 | **Phase 6** | 模型与思考参数重构：单模型 + 思考开关×强度暴露给用户 + 端点能力表与参数自适应 + 视觉组独立配置 | ✅ 已完成 |
+| **Work 本地入口** | 单标记 CLI 与本地图文混排样例；不使用 MCP | ✅ 最小样例通过，通用场景继续验证 |
 
 ---
 
 ## ⚠️ 已知限制
 
-- **LaTeX 工具链强依赖**：PNG 图示附件需要 `xelatex` + `poppler-utils`；未安装时回答正常返回，但图示只显示裸 TikZ 源码、无图片。
+- **LaTeX 工具链强依赖**：PNG 需要兼容的 LaTeX 引擎及 PyMuPDF（或外部 pdftoppm）。服务可降级为文字/源码；本地 CLI 编译失败返回非零退出码。
 - **标记覆盖边界**：只渲染已定义的标记类型与画法变体；超出能力边界的复杂图会被主动降级为文字描述（宁可不画，不画错），不承诺任意化学图示都能成图。
 - **名称兜底需外网**：化学名称 → SMILES 的 PubChem 兜底需要外网访问；离线环境请在提问中直接提供 SMILES。
 

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """tests/test_latex_security.py — LaTeX 编译的文件访问加固（安全审查 R1）。
 
-背景（实测，见 instructions/Security-Review.md R1）：编译的是**模型生成**的
+背景（实测，见 docs/deploy.md §2.6）：编译的是**模型生成**的
 片段，而 TeX 的 ``\\input`` / ``\\openin`` / ``\\read`` 能读**任意可读文件**，
 内容会排版进图里随图片回传给访客——项目根目录的 ``.env`` 正是最值钱的目标。
 

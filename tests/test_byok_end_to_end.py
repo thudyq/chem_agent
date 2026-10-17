@@ -152,6 +152,8 @@ def client(tmp_path, monkeypatch):
     """完整 app（`/api/chat` + `/v1/*`），会话目录落 tmp_path，不写诊断日志。"""
     import api
 
+    # 鉴权契约由固定测试密钥驱动，不能依赖开发机 .env 恰好配置了服务密钥。
+    monkeypatch.setattr(api, "SERVICE_KEY", "sk-service-test")
     monkeypatch.setattr(web_api, "_SESSIONS_DIR", tmp_path / "web_sessions")
     monkeypatch.setattr(web_api, "RATE_LIMIT_PER_MINUTE", 0)
     web_api._reset_rate_limit_for_tests()

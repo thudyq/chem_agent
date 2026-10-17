@@ -90,9 +90,7 @@ async def _lifespan(_app: FastAPI):
     # 放守护线程里预热；结论只打一行，避免"编译有没有被限制"变成不可见状态。
     threading.Thread(target=_latex_hardening_warmup, daemon=True,
                      name="latex-hardening-probe").start()
-    from core.mcp_api import mcp_session
-    async with mcp_session():       # MCP session manager；未挂载时 no-op
-        yield
+    yield
 
 
 def _latex_hardening_warmup() -> None:
@@ -104,7 +102,7 @@ def _latex_hardening_warmup() -> None:
         print(f"[startup] LaTeX 加固：{flags} —— {st.get('note')}")
         if not st.get("flags"):
             print("[startup] 警告：引擎不支持任何加固选项，"
-                  "文件读取限制只能靠独立用户/容器（见 Security-Review.md R1）")
+                  "文件读取限制只能靠独立用户/容器（见 docs/deploy.md §2.6）")
     except Exception as e:      # 探测失败绝不能拖垮服务启动
         print(f"[startup] LaTeX 加固探测失败（不影响服务）: {e}")
 
@@ -116,12 +114,6 @@ app = FastAPI(title="Chem_Agent", version="1.0.0", lifespan=_lifespan)
 from core.web_api import router as web_router  # noqa: E402  （需先建 app）
 
 app.include_router(web_router)
-
-# ChatGPT（MCP）工具层：无 LLM 的化学渲染能力暴露为 MCP 只读工具，挂 /mcp
-# （工具定义与鉴权见 core/mcp_api.py）。mcp 包未安装时自动跳过，/v1 与网页不受影响。
-from core.mcp_api import mount_mcp  # noqa: E402  （需先建 app）
-
-mount_mcp(app)
 
 
 def _web_session_janitor() -> None:
@@ -886,15 +878,6 @@ async def chat_completions(request: Request, authorization: str | None = Header(
     """
     _check_auth(authorization)
     body = await request.json()
-    # 临时探针：看清小搭的请求是否带 user / 会话标识与自定义头，用于区分
-    # 最终用户（排查重复提问来源）。sessionId 只打哈希指纹（可分组、不留原值），
-    # 不含 Authorization。确认后应删除。
-    if isinstance(body, dict):
-        sid = body.get("sessionId")
-        sid_fp = hashlib.sha256(str(sid).encode()).hexdigest()[:12] if sid else None
-        print(f"[probe] body_keys={sorted(body.keys())} "
-              f"user={body.get('user')!r} sessionId_fp={sid_fp} "
-              f"headers={[k for k in request.headers if k.lower().startswith('x-')]}")
     # 严格按 JSON 布尔解析 stream（字符串 "false" 视为非流式）
     stream = body.get("stream", False)
     stream = stream if isinstance(stream, bool) else False
