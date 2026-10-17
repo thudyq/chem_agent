@@ -1,0 +1,3 @@
+{
+  "tag": "[COMPOSITE:reaction]\n[STRUCT:O=[N+]([O-])C([H])1C=CC=C[CH+]1,label=σ 络合物,id=sigma]\n[ARROW:type=single]\n[STRUCT:O=[N+]([O-])C1=CC=CC=C1,label=硝基苯][PLUS][STRUCT:[H+],label=H+]\n[MECHARROW:sigma:3-4>sigma:3-9]\n[/COMPOSITE]"
+}

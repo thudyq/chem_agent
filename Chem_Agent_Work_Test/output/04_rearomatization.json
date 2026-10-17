@@ -1,0 +1,15 @@
+{
+  "tag": "[COMPOSITE:reaction]\n[STRUCT:O=[N+]([O-])C([H])1C=CC=C[CH+]1,label=σ 络合物,id=sigma]\n[ARROW:type=single]\n[STRUCT:O=[N+]([O-])C1=CC=CC=C1,label=硝基苯][PLUS][STRUCT:[H+],label=H+]\n[MECHARROW:sigma:3-4>sigma:3-9]\n[/COMPOSITE]",
+  "pipeline": [
+    "core.tag_parser.parse_tags",
+    "core.tag_validator.validate_tag",
+    "renderers.registry.render_tag",
+    "utils.latex_compile.compile_tikz_to_png"
+  ],
+  "size": [
+    1744,
+    655
+  ],
+  "sha256": "139b3982e3e039dff4ce1394cc69e0f51dc1743d9f7825145b2b0c5e704dd2a1",
+  "tikz_sha256": "0391e4254360bfcba27246e8b1d9c281fa38f24d8a7ccefd8be9ea91a485bd87"
+}

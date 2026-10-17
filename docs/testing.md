@@ -1,5 +1,10 @@
 # Chem_Agent 测试指南
 
+本地聊天图文混排与离线核心复用实验见
+[`Chem_Agent_Work_Test/README.md`](../Chem_Agent_Work_Test/README.md)。
+适配器与机理样例回归：
+`python -m pytest tests/test_work_rendering_cli.py tests/test_examples_audit.py -q`。
+
 > 公开版测试入口汇总。覆盖：环境准备、单元测试、渲染器离线 demo、归因工具、
 > 基线评测与端到端自测。全部命令在项目根目录执行。
 
