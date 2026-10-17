@@ -35,6 +35,7 @@ import re
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import TypedDict
 from urllib.parse import urlparse
 
@@ -691,6 +692,16 @@ def _build_server() -> "MCPServer":
               annotations=_TOOL_ANNOTATIONS)
     def test_image():
         return tool_test_image()
+
+    @mcp.tool(name="test_image_content",
+              description="实验工具：直接返回固定苯环 PNG 的标准 MCP ImageContent"
+                          "（Base64 图片字节），用于测试连接器是否显示图片。",
+              annotations=_TOOL_ANNOTATIONS)
+    def test_image_content():
+        png = Path(__file__).with_name("test_image.png").read_bytes()
+        return CallToolResult(content=[ImageContent(
+            type="image", mime_type="image/png",
+            data=base64.b64encode(png).decode("ascii"))])
 
     # /mcp/files/{name}：MCP 附件下载。挂在 MCP 子应用内 → 自动吃到同一道
     # Bearer 闸门；白名单正则防路径穿越（与 web_api 同式）。

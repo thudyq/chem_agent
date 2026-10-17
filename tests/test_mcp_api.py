@@ -85,7 +85,8 @@ def test_initialize_and_tools_listed(monkeypatch, tmp_path):
         tools = _rpc(client, "tools/list").json()["result"]["tools"]
         names = {t["name"] for t in tools}
         assert names == {"validate_smiles", "resolve_chemical_name",
-                         "render_chemistry", "get_tag_syntax", "test_image"}
+                         "render_chemistry", "get_tag_syntax", "test_image",
+                         "test_image_content"}
         for t in tools:
             assert t["annotations"]["readOnlyHint"] is True
             assert t["inputSchema"]["type"] == "object"
@@ -356,6 +357,39 @@ def test_test_image(monkeypatch, tmp_path):
         assert blocks[0]["mimeType"] == "image/png"
         import base64 as _b64
         assert _b64.b64decode(blocks[0]["data"]) == png
+
+
+def test_test_image_content(monkeypatch, tmp_path):
+    """实际 PNG 经 MCP 序列化后仍完整，且不夹带 URL、组件或结构化内容。"""
+    import base64
+    import io
+    from pathlib import Path
+
+    from PIL import Image
+
+    with _mount(monkeypatch, tmp_path) as client:
+        _init(client)
+        tools = _rpc(client, "tools/list").json()["result"]["tools"]
+        tool = next(t for t in tools if t["name"] == "test_image_content")
+        assert not tool.get("outputSchema")
+        assert not tool.get("_meta")
+        out = _call(client, "test_image_content", {})
+        assert not out.get("isError")
+        assert out.get("structuredContent") is None
+        assert not out.get("_meta")
+        assert len(out["content"]) == 1
+        block = out["content"][0]
+        assert block["type"] == "image"
+        assert block["mimeType"] == "image/png"
+        png = base64.b64decode(block["data"], validate=True)
+        assert png == Path(mcp_api.__file__).with_name("test_image.png").read_bytes()
+        assert png.startswith(b"\x89PNG\r\n\x1a\n")
+        assert len(png) < 100 * 1024
+        with Image.open(io.BytesIO(png)) as image:
+            assert image.format == "PNG"
+            assert image.mode in ("RGB", "RGBA")
+            assert min(image.size) > 1
+            image.load()
 
 
 def test_test_image_fallback(monkeypatch, tmp_path):
