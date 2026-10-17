@@ -169,7 +169,7 @@ python -m cli.render --input examples/work/attack.json --output data/work/attack
 
 需要本地 LaTeX 工具链，不需要启动 HTTP 服务或配置模型 API Key。代理将生成
 PNG 的绝对路径插入回答；当前命令处理单个标记，多图位置由代理安排。
-输入格式、输出和样例见 [Work 指南](docs/work.md)。
+首次安装、逐步操作、给 Codex 的执行指令及常见问题见 [Work 指南](docs/work.md)。
 
 ---
 
