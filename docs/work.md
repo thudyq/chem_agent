@@ -139,17 +139,21 @@ ChatGPT 的项目分两种：一种在建立时未选择本地文件夹，另一
 对于后者，可以在本地文件夹（不是该项目文件夹）建立 `AGENTS.md` 把下面这段话复制进去。
 
 ```text
-请使用本项目的 Chem_Agent 生成化学图示。
+需要化学图示时，使用本地 Chem_Agent。
 
-读取 docs/work.md，并参考 prompts/system_prompt.txt 中的标记语法和示例。
-每张图保存成 data/work/ 下单独的 JSON，JSON 只包含 tag 字符串字段，值为一个
-完整的 STRUCT、COMPOSITE 或 ENERGY 标记。不要把整篇回答或 REASONING 当成图示输入。
+安装目录：<替换为你的 chem_agent 文件夹完整路径>
 
-在项目根目录，用已确认的项目 Python 执行 python -m cli.render，生成 PNG。
-校验失败时依据错误信息修改标记并重试；不要绕过校验或直接提交 LaTeX。
-生成成功后，用 PNG 的绝对路径将图片穿插进文字回答。图片不能显示时请明确说明。
+按需读取安装目录下的 docs/work.md，以及 prompts/system_prompt.txt 中的标记语法和示例。
 
-先用现有 attack.json 和 rearomatization.json 样例验证显示，再回答我的新问题。
+每张图写成单独的 JSON，仅包含 tag 字符串字段，值为一个完整的 STRUCT、COMPOSITE 或 ENERGY 标记，不包含回答正文或 REASONING。输入和图片保存在当前学习工作区，使用不同文件名。
+
+在 chem_agent 根目录，用已确认的项目 Python 执行 python -m cli.render，通过绝对路径指定输入 JSON 和输出 PNG。
+
+标记校验失败时依据报错修正，最多重试两次；权限或编译环境错误按使用指南处理，不绕过校验、不直接提交 LaTeX，不修改项目源码。
+
+确认 PNG 成功生成且可打开后，用绝对路径将图片插入对应讲解段落。无法生成或展示时如实说明，不用占位符冒充图片。
+
+不需要图示的问题直接回答。
 ```
 
 确认样例显示正常后，就可以提出实际问题，例如：“请用 Chem_Agent 讲解苯的
